@@ -63,6 +63,15 @@ export function useRules(id: string) {
   return { add, remove };
 }
 
+export function useNotes(id: string) {
+  const inv = useInvalidateAccount(id);
+  return useMutation({
+    mutationFn: (note_id: string) =>
+      unwrap(api.DELETE("/api/accounts/{account_id}/notes/{note_id}", { params: { path: { account_id: id, note_id } } })),
+    onSuccess: inv,
+  });
+}
+
 export const useTopics = (id: string) =>
   useQuery({
     queryKey: ["topics", id],

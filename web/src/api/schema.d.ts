@@ -75,6 +75,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/notes/{note_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Note */
+        delete: operations["remove_note_api_accounts__account_id__notes__note_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/topics": {
         parameters: {
             query?: never;
@@ -510,6 +527,11 @@ export interface components {
             updated_at: string;
             /** Rules */
             rules: components["schemas"]["RuleOut"][];
+            /**
+             * Notes
+             * @default []
+             */
+            notes: components["schemas"]["NoteOut"][];
         };
         /** AccountIn */
         AccountIn: {
@@ -855,6 +877,20 @@ export interface components {
             rules: string[];
             /** Summary */
             summary: string;
+        };
+        /** NoteOut */
+        NoteOut: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** QrOut */
         QrOut: {
@@ -1249,6 +1285,36 @@ export interface operations {
             header?: never;
             path: {
                 rule_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_note_api_accounts__account_id__notes__note_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                note_id: string;
                 account_id: string;
             };
             cookie?: never;

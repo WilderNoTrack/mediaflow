@@ -1,7 +1,7 @@
 import { Bot, Lightbulb, MessageCircle, Play, Save, Send, Settings, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Account, S } from "../api/client";
-import { useChat, useRules, useSendChat, useUpdateAccount, useWrite } from "../api/hooks";
+import { useChat, useNotes, useRules, useSendChat, useUpdateAccount, useWrite } from "../api/hooks";
 import { cn, FREQ_LABEL, timeAgo } from "../lib/utils";
 import { Badge, Button, ErrorText, Input, Label, Logo, Spinner, Switch, Textarea } from "./ui";
 
@@ -13,7 +13,34 @@ const TOOL_META: Record<string, { icon: string; label: string }> = {
   find_topics: { icon: "🔍", label: "搜索热点选题" },
   write_post: { icon: "🚀", label: "执行内容创作" },
   set_auto: { icon: "⏰", label: "设置自动运营" },
+  research_search: { icon: "🌐", label: "搜各平台内容" },
+  research_creators: { icon: "👤", label: "搜博主" },
+  research_creator_posts: { icon: "📚", label: "看博主作品" },
+  research_post: { icon: "📄", label: "看作品详情" },
+  save_note: { icon: "📝", label: "存运营笔记" },
+  remove_note: { icon: "🗑", label: "删运营笔记" },
 };
+
+const PLATFORM_LABEL: Record<string, string> = {
+  xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站", weibo: "微博", wechat: "公众号", zhihu: "知乎", baidu: "百度",
+};
+
+/** 工具记录的一行摘要：调研类显示查了什么（参数），出错显示错误，其余显示结果 JSON。 */
+function toolSummary(m: { tool_name: string; content: string; payload: Record<string, unknown> }) {
+  const args = (m.payload?.args ?? {}) as Record<string, string>;
+  const result = (m.payload?.result ?? {}) as Record<string, unknown>;
+  if (result.ok === false) return `失败：${String(result.error ?? "")}`;
+  if (m.tool_name.startsWith("research_")) {
+    const what = [PLATFORM_LABEL[args.platform] ?? args.platform, args.keyword ?? args.name, args.creator_ref ?? args.post_ref]
+      .filter(Boolean).join(" · ");
+    const n = Array.isArray(result.items) ? result.items.length : Array.isArray(result.creators) ? result.creators.length
+      : Array.isArray(result.posts) ? result.posts.length : 0;
+    const title = typeof result.title === "string" ? `「${result.title}」` : "";
+    return `${what}${n ? `（${n} 条）` : ""}${title}`;
+  }
+  if (m.tool_name === "save_note") return String(args.title ?? "");
+  return m.content;
+}
 
 export function ConfigPanel({ account, busy }: { account: Account; busy: boolean }) {
   return (
@@ -46,7 +73,7 @@ function ChatBox({ account }: { account: Account }) {
     send.mutate(v, { onSettled: () => setPending(null) });
   };
 
-  const welcome = `你好！我是小媒 🌀 「${account.name}」的账号管家。\n\n直接跟我聊就行——比如「我想做一个职场新人理财账号」，我会边聊边帮你把定位配置好；配置差不多了说一句「写一篇试试」，我就直接帮你创作。\n\n这个账号想做什么方向？`;
+  const welcome = `你好！我是小媒 🌀 「${account.name}」的账号管家。\n\n直接跟我聊就行——比如「我想做一个职场新人理财账号」，我会边聊边帮你把定位配置好；配置差不多了说一句「写一篇试试」，我就直接帮你创作。\n\n想找对标也可以问我，比如「帮我分析一下小红书博主程十安」，我会去看 TA 的爆款和评论区。\n\n这个账号想做什么方向？`;
 
   return (
     <div className="flex flex-col">
@@ -63,7 +90,7 @@ function ChatBox({ account }: { account: Account }) {
               <div key={m.id} className="ml-10 flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50/60 px-2.5 py-1.5 text-xs text-indigo-700">
                 <span>{TOOL_META[m.tool_name]?.icon ?? "🔧"}</span>
                 <span className="font-medium">{TOOL_META[m.tool_name]?.label ?? m.tool_name}</span>
-                <span className="truncate text-indigo-500/80">{m.content}</span>
+                <span className="truncate text-indigo-500/80">{toolSummary(m)}</span>
               </div>
             ) : <Bubble key={m.id} role={m.role} text={m.content} />,
           )}
@@ -119,6 +146,7 @@ const RULE_SOURCE = { user: "手写", chat: "对话", learned: "学到的" } as 
 function ProfileForm({ account }: { account: Account }) {
   const update = useUpdateAccount(account.id);
   const { add, remove } = useRules(account.id);
+  const removeNote = useNotes(account.id);
   const [form, setForm] = useState<Record<string, string>>({});
   const [keywords, setKeywords] = useState("");
   const [rule, setRule] = useState("");
@@ -177,6 +205,32 @@ function ProfileForm({ account }: { account: Account }) {
               <Button type="submit" variant="outline" loading={add.isPending}>添加</Button>
             </form>
           </div>
+        </div>
+
+        <div className="pt-3">
+          <Label hint="小媒调研后存下的结论，写稿和出选题时参考最近 5 条">运营笔记</Label>
+          {account.notes.length === 0 ? (
+            <p className="text-xs text-muted-foreground">还没有。跟小媒说「帮我分析一下某某博主」，分析完会自动存一份要点。</p>
+          ) : (
+            <div className="space-y-1.5">
+              {account.notes.map((n) => (
+                <details key={n.id} className="group rounded-md bg-input-background px-3 py-2 text-sm">
+                  <summary className="flex cursor-pointer list-none items-center gap-2">
+                    <span className="flex-1 font-medium">{n.title}</span>
+                    <span className="text-xs text-muted-foreground">{timeAgo(n.created_at)}</span>
+                    <button
+                      onClick={(e) => { e.preventDefault(); removeNote.mutate(n.id); }}
+                      className="cursor-pointer text-muted-foreground opacity-0 hover:text-red-600 group-hover:opacity-100"
+                      aria-label="删除笔记"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </summary>
+                  <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{n.content}</p>
+                </details>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
