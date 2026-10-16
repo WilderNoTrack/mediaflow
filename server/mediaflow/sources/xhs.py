@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import time
 
 import httpx
@@ -15,10 +17,11 @@ import httpx
 from mediaflow import credentials
 from mediaflow.sources.base import DESKTOP_UA, TrendItem
 
+logger = logging.getLogger(__name__)
 EDITH = "https://edith.xiaohongshu.com"
 _HEADERS = {"User-Agent": DESKTOP_UA, "Origin": "https://www.xiaohongshu.com",
             "Referer": "https://www.xiaohongshu.com/", "Accept": "application/json, text/plain, */*"}
-_KEEP = ("a1", "webId", "web_session", "gid", "acw_tc", "websectiga", "sec_poison_id", "xsecappid")
+_KEEP = ("a1", "webId", "web_session", "web_session_sec", "gid", "acw_tc", "websectiga", "sec_poison_id", "xsecappid")
 _pending: dict[str, dict] = {}  # qr_id -> {code, cookies, ts}；扫码过程中的游客会话
 _POLL = {0: "waiting", 1: "scanned", 2: "ok", 3: "expired"}
 
@@ -36,10 +39,12 @@ def _signer():
     return Xhshow()
 
 
-async def _post(c: httpx.AsyncClient, path: str, payload: dict, cookies: dict, *, x_rap: bool = False):
+async def _post(c: httpx.AsyncClient, path: str, payload: dict, cookies: dict, *, x_rap: bool = False,
+                extra: dict | None = None):
     x = _signer()
     h = x.sign_headers_post(uri=EDITH + path, cookies=cookies, payload=payload, x_rap=x_rap)
     h["Content-Type"] = "application/json;charset=UTF-8"
+    h.update(extra or {})
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
     h["Cookie"] = _cookie_header(cookies)
     r = await c.post(EDITH + path, content=body, headers=h)
@@ -53,6 +58,13 @@ async def _get(c: httpx.AsyncClient, path: str, params: dict, cookies: dict):
     r = await c.get(EDITH + path, params=params, headers=h)
     cookies.update({k: v for k, v in r.cookies.items()})
     return r
+
+
+async def _me(c: httpx.AsyncClient, cookies: dict) -> dict:
+    try:
+        return (await _get(c, "/api/sns/web/v2/user/me", {}, cookies)).json().get("data") or {}
+    except ValueError:
+        return {}
 
 
 async def qr_create() -> dict:
@@ -75,25 +87,49 @@ async def qr_create() -> dict:
 
 
 async def qr_poll(key: str) -> dict:
-    """返回 {status: waiting|scanned|expired|ok|error, message}；ok 时已把 Cookie 存好。"""
+    """返回 {status: waiting|scanned|expired|ok|error, message}；ok 时已把 Cookie 存好。
+
+    流程参考 jackwener/xiaohongshu-cli：先用 /api/qrcode/userinfo 轮询扫码状态（codeStatus），
+    确认后再调 login/qrcode/status 换出登录 session（可能要重试几次），最后用 user/me 核对。
+    """
     st = _pending.get(key)
     if not st:
         return {"status": "expired", "message": "二维码已过期，请刷新"}
     cookies = st["cookies"]
     async with httpx.AsyncClient(timeout=10, headers=_HEADERS) as c:
-        r = await _get(c, "/api/sns/web/v1/login/qrcode/status", {"qr_id": key, "code": st["code"]}, cookies)
-    body = r.json()
-    d = body.get("data") or {}
-    status = _POLL.get(d.get("code_status"), "error") if body.get("success") else "error"
-    if status == "ok":
-        info = d.get("login_info") or {}
-        if info.get("session"):
-            cookies["web_session"] = info["session"]
-        credentials.update({"xhs_cookie": "; ".join(f"{k}={v}" for k, v in cookies.items() if k in _KEEP)})
-        _pending.pop(key, None)
-    elif status == "expired":
-        _pending.pop(key, None)
-    return {"status": status, "message": "" if status != "error" else str(body.get("msg") or "")}
+        r = await _post(c, "/api/qrcode/userinfo", {"qrId": key, "code": st["code"]}, cookies,
+                        extra={"service-tag": "webcn"})
+        body = r.json()
+        d = body.get("data") or {}
+        if not body.get("success"):
+            logger.warning("小红书扫码状态查询失败：%s", str(body)[:300])
+            return {"status": "error", "message": str(body.get("msg") or body.get("code") or "")}
+        try:
+            code = int(d.get("codeStatus", d.get("code_status", -1)))
+        except (TypeError, ValueError):
+            code = -1
+        status = _POLL.get(code, "waiting")
+        if status != "ok":
+            if status == "expired":
+                _pending.pop(key, None)
+            return {"status": status, "message": ""}
+
+        want = str(d.get("userId") or "")
+        for _ in range(5):
+            done = await _get(c, "/api/sns/web/v1/login/qrcode/status", {"qr_id": key, "code": st["code"]}, cookies)
+            info = ((done.json().get("data") or {}).get("login_info") or {}) if done.content else {}
+            if info.get("session"):
+                cookies["web_session"] = info["session"]
+            if info.get("secure_session"):
+                cookies["web_session_sec"] = info["secure_session"]
+            me = await _me(c, cookies)
+            if me.get("user_id") and not me.get("guest") and (not want or me["user_id"] == want):
+                credentials.update({"xhs_cookie": "; ".join(f"{k}={v}" for k, v in cookies.items() if k in _KEEP)})
+                _pending.pop(key, None)
+                return {"status": "ok", "message": ""}
+            await asyncio.sleep(1)
+    _pending.pop(key, None)
+    return {"status": "error", "message": "手机上已确认，但没换到登录态，请刷新二维码重试"}
 
 
 async def search(keyword: str, limit: int, cookie: str, timeout: float = 10) -> list[TrendItem]:

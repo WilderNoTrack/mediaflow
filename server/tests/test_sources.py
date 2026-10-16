@@ -117,9 +117,12 @@ async def test_xhs_qr_login_saves_cookie(mock_http, creds):
     routes["https://edith.xiaohongshu.com/api/sns/web/v1/login/activate"] = {"success": True, "data": {}}
     routes["https://edith.xiaohongshu.com/api/sns/web/v1/login/qrcode/create"] = {
         "success": True, "data": {"qr_id": "q1", "code": "c1", "url": "https://www.xiaohongshu.com/mobile/login?qrId=q1"}}
-    states = iter([{"code_status": 1}, {"code_status": 2, "login_info": {"session": "sess9"}}])
-    routes["https://edith.xiaohongshu.com/api/sns/web/v1/login/qrcode/status"] = lambda req: {
-        "success": True, "data": next(states)}
+    states = iter([{"codeStatus": 1}, {"codeStatus": 2, "userId": "u9"}])
+    routes["https://edith.xiaohongshu.com/api/qrcode/userinfo"] = lambda req: {"success": True, "data": next(states)}
+    routes["https://edith.xiaohongshu.com/api/sns/web/v1/login/qrcode/status"] = {
+        "success": True, "data": {"login_info": {"session": "sess9", "user_id": "u9"}}}
+    routes["https://edith.xiaohongshu.com/api/sns/web/v2/user/me"] = lambda req: {"success": True, "data": (
+        {"user_id": "u9", "guest": False} if "web_session=sess9" in req.headers["cookie"] else {"guest": True})}
     qr = await xhs.qr_create()
     assert qr["key"] == "q1"
     assert (await xhs.qr_poll("q1"))["status"] == "scanned"
