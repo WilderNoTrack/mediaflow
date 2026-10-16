@@ -115,3 +115,11 @@ async def test_duplicate_topics_are_skipped(session, llm, account):
     llm.push("writer", post()).push("eval", evaluation(8))
     d, _ = await run(session, llm, account)
     assert session.get(Topic, d.topic_id).title == "宿舍衣柜收纳术"
+
+
+async def test_hint_becomes_topic_when_nothing_new(session, llm, account):
+    llm.push("topic", {"topics": []})
+    llm.push("writer", post()).push("eval", evaluation(8))
+    d, _ = await run(session, llm, account, hint="早八快速出门妆")
+    t = session.get(Topic, d.topic_id)
+    assert t.title == "早八快速出门妆" and t.source == "user"

@@ -5,7 +5,7 @@ import { useTopicActions, useTopics, useWrite } from "../api/hooks";
 import { cn, PLATFORMS } from "../lib/utils";
 import { Badge, Button, Card, CardBody, CardHead, Empty, ErrorText, Input, Spinner } from "./ui";
 
-const SOURCES = ["weibo", "baidu", "bilibili", "douyin"];
+const SOURCES = ["weibo", "baidu", "bilibili", "douyin", "toutiao"];
 
 export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; busy: boolean; onGoConfig: () => void }) {
   const { data: topics = [], isLoading } = useTopics(account.id);

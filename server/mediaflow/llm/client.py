@@ -32,6 +32,7 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any]
+    error: str = ""  # 模型给的参数不是合法 JSON 时记下原因，交给模型自己改
 
 
 @dataclass
@@ -134,11 +135,14 @@ class DeepSeekLLM:
         msg = r.choices[0].message
         calls = []
         for tc in msg.tool_calls or []:
+            err = ""
             try:
                 args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+                if not isinstance(args, dict):
+                    args, err = {}, "参数必须是 JSON 对象"
+            except json.JSONDecodeError as e:
+                args, err = {}, f"参数不是合法 JSON（{e.msg}），原文：{(tc.function.arguments or '')[:200]}"
+            calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args, error=err))
         usage = r.usage.model_dump() if r.usage else {}
         return LLMResponse(content=msg.content or "", tool_calls=calls, usage=usage)
 

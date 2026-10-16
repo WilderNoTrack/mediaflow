@@ -64,3 +64,20 @@ async def test_llm_failure_keeps_user_message(session, llm, account):
     llm.push("manager", fail("timeout"))
     msgs = await chat(session, llm, account.id, "在吗")
     assert msgs[0].content == "在吗" and "连不上" in msgs[-1].content
+
+
+async def test_bad_tool_arguments_are_reported_back(session, llm, account):
+    from mediaflow.llm.client import LLMResponse, ToolCall
+    bad = LLMResponse(tool_calls=[ToolCall(id="c1", name="add_rule", arguments={}, error="参数不是合法 JSON")])
+    llm.push("manager", bad, tool_call("add_rule", text="不用感叹号"), say("记住了"))
+    msgs = await chat(session, llm, account.id, "以后别用感叹号")
+    assert "合法 JSON" in msgs[1].content and msgs[-1].content == "记住了"
+    assert session.exec(select(Rule).where(Rule.account_id == account.id)).one().text == "不用感叹号"
+
+
+async def test_step_limit_ends_with_summary_not_canned_text(session, llm, account):
+    from mediaflow.agents.manager import MAX_STEPS
+    llm.push("manager", *[tool_call("list_drafts") for _ in range(MAX_STEPS)], say("我查了几遍草稿，目前还没有"))
+    msgs = await chat(session, llm, account.id, "看看草稿")
+    assert msgs[-1].content == "我查了几遍草稿，目前还没有"
+    assert "tools" not in str(llm.calls[-1][1][-1]) and "上限" in llm.calls[-1][1][-1]["content"]

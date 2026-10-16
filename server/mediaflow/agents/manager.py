@@ -241,12 +241,22 @@ async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch:
                 for c in resp.tool_calls
             ]})
             for c in resp.tool_calls:
-                result = await box.call(c.name, c.arguments)
+                if c.error:
+                    result = {"ok": False, "error": c.error + "。请修正参数后重新调用。"}
+                else:
+                    result = await box.call(c.name, c.arguments)
                 summary = json.dumps(result, ensure_ascii=False)[:1500]
                 new.append(_save(session, acc, ChatRole.tool, summary, tool_name=c.name,
                                  payload={"args": c.arguments, "result": result}))
                 messages.append({"role": "tool", "tool_call_id": c.id, "content": summary})
         else:
-            reply = "这一轮操作有点多，我先停一下，刚才做的都已保存。"
+            # 步数用完：不再给工具，让模型基于已做的操作给用户一个交代（类似 Agents SDK 的 max_turns 收尾）
+            messages.append({"role": "user", "content": "（系统：本轮工具调用次数已达上限，请不要再调用工具，"
+                             "直接用一两句话告诉用户刚才做了什么、还有什么没做完。）"})
+            try:
+                reply = (await llm.complete(messages, temperature=0.3)).content.strip()
+            except LLMError:
+                reply = ""
+            reply = reply or "这一轮操作有点多，我先停一下，刚才做的都已保存。"
         new.append(_save(session, acc, ChatRole.assistant, reply))
         return new

@@ -72,7 +72,15 @@ async def _pick_topic(
     if proposal.source_note:
         emit("warning", proposal.source_note, None)
     if not proposal.topics:
-        raise LLMError("没能想出和历史内容不重复的选题，换个方向试试")
+        if not hint:
+            raise LLMError("没能想出和历史内容不重复的选题，换个方向试试")
+        # 用户给了具体想法：热点里没挑出新选题时，直接把想法当选题写，而不是报错
+        t = Topic(user_id=ctx.user_id, account_id=ctx.account_id, title=hint.strip()[:80], source="user")
+        session.add(t)
+        session.commit()
+        session.refresh(t)
+        emit("topic", f"按你的想法写：{t.title}", {"topic_id": t.id})
+        return t
     t = proposal.topics[0]
     emit("topic", f"选定选题：{t.title}", {"topic_id": t.id, "angle": t.angle})
     return t

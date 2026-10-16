@@ -29,6 +29,7 @@ export const PLATFORMS: Record<string, { label: string; cls: string }> = {
   baidu: { label: "百度", cls: "bg-blue-100 text-blue-700" },
   bilibili: { label: "B站", cls: "bg-cyan-100 text-cyan-700" },
   douyin: { label: "抖音", cls: "bg-slate-100 text-slate-700" },
+  toutiao: { label: "头条", cls: "bg-red-50 text-red-600" },
   ai: { label: "AI 推荐", cls: "bg-indigo-100 text-indigo-700" },
   user: { label: "手动", cls: "bg-gray-100 text-gray-700" },
 };
