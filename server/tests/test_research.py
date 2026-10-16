@@ -132,6 +132,40 @@ async def test_needs_login(monkeypatch):
         await service.search_creators("xiaohongshu", "x")
 
 
+async def test_bilibili_creator_flow(mock_http, monkeypatch):
+    monkeypatch.setattr(platforms.credentials, "get", lambda k: "")
+    monkeypatch.setattr(platforms.BilibiliSource, "_key", ("", 0.0))
+    monkeypatch.setattr(platforms.BilibiliSource, "_buvid", ({}, 0.0))
+    routes, seen = mock_http
+    A = "https://api.bilibili.com"
+    routes[f"{A}/x/web-interface/nav"] = {"data": {"wbi_img": {
+        "img_url": "https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
+        "sub_url": "https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"}}}
+    routes[f"{A}/x/frontend/finger/spi"] = {"code": 0, "data": {"b_3": "B3", "b_4": "B4"}}
+    routes[f"{A}/x/web-interface/wbi/search/type"] = {"code": 0, "data": {"result": [
+        {"mid": 946974, "uname": "<em class=\"keyword\">影视飓风</em>", "fans": 13900000, "videos": 900, "usign": "简介"}]}}
+    routes[f"{A}/x/web-interface/card"] = {"code": 0, "data": {
+        "card": {"name": "影视飓风", "sign": "简介"}, "follower": 13900000, "archive_count": 900, "like_num": 500000000}}
+    routes[f"{A}/x/space/wbi/arc/search"] = {"code": 0, "data": {"list": {"vlist": [
+        {"bvid": "BV1", "title": "相机评测", "play": 3000000, "comment": 5000, "created": 1700000000},
+        {"bvid": "BV2", "title": "航拍", "play": 9000000, "comment": 9000, "created": 1700100000}]}}}
+    routes[f"{A}/x/web-interface/view"] = {"code": 0, "data": {
+        "aid": 11, "title": "航拍", "desc": "简介正文", "owner": {"name": "影视飓风"}, "pubdate": 1700100000,
+        "stat": {"view": 9000000, "like": 600000, "reply": 9000, "favorite": 100000, "share": 2000}}}
+    routes[f"{A}/x/tag/archive/tags"] = {"code": 0, "data": [{"tag_name": "无人机"}]}
+    routes[f"{A}/x/v2/reply"] = {"code": 0, "data": {"replies": [
+        {"like": 5, "content": {"message": "一般"}}, {"like": 900, "content": {"message": "太强了"}}]}}
+
+    c = (await service.search_creators("bilibili", "影视飓风"))["creators"][0]
+    assert c["name"] == "影视飓风" and c["fans"] == "1390万" and c["ref"].startswith("bili:c")
+    got = await service.creator_posts(c["ref"], limit=1, sort="top")
+    assert got["creator"]["获赞"] == "5亿" and got["posts"][0]["title"] == "航拍" and got["posts"][0]["views"] == "900万"
+    d = await service.post_detail(got["posts"][0]["ref"])
+    assert d["tags"] == ["无人机"] and d["top_comments"][0] == "900赞｜太强了" and d["collects"] == "10万"
+    arc = [r for r in seen if "arc/search" in str(r.url)][0]
+    assert "w_rid=" in str(arc.url) and "dm_img_str=" in str(arc.url) and "buvid3=B3" in arc.headers.get("cookie", "")
+
+
 def test_capabilities_listed():
     caps = service.capabilities()
     assert caps["xiaohongshu"] == ["搜内容", "搜博主", "看博主作品", "看作品详情"]

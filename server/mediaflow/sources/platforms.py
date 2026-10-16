@@ -318,7 +318,7 @@ class BilibiliSource:
                 out.append(TrendItem(
                     title=t, source=self.name, heat=f"{it.get('play', '')}播放",
                     url=f"https://www.bilibili.com/video/{it.get('bvid', '')}",
-                    snippet=html.unescape(_TAG.sub("", it.get("description", "")))[:200],
+                    snippet=html.unescape(_TAG.sub("", it.get("description", "")))[:200], ref=it.get("bvid", ""),
                 ))
         return out
 

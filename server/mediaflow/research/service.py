@@ -39,6 +39,9 @@ def _impl(platform: str) -> Any:
     if platform == "douyin":
         from mediaflow.sources import douyin
         return douyin
+    if platform == "bilibili":
+        from mediaflow.sources import bilibili
+        return bilibili
     return None
 
 
@@ -128,7 +131,7 @@ def _creator_out(c: Creator) -> dict:
 
 def _post_out(p: Post) -> dict:
     d = {"ref": refs.put(p.platform, "p", p.native), "title": p.title, "date": p.published, "type": p.kind,
-         "likes": p.likes, "comments": p.comments, "collects": p.collects, "shares": p.shares, "url": p.url}
+         "views": p.views, "likes": p.likes, "comments": p.comments, "collects": p.collects, "shares": p.shares, "url": p.url}
     return {k: v for k, v in d.items() if v not in ("", None)}
 
 
@@ -147,7 +150,7 @@ async def creator_posts(creator_ref: str, limit: int = 10, sort: str = "latest")
     creator, posts = await _throttled(platform, ("cp", platform, native), lambda: fn(native, 30))
     total = len(posts)
     if sort == "top":
-        posts = sorted(posts, key=lambda p: -count_num(p.likes))
+        posts = sorted(posts, key=lambda p: -(count_num(p.likes) or count_num(p.views)))
     limit = max(1, min(limit, 20))
     out = {"platform": platform, "creator": _creator_out(creator), "posts": [_post_out(p) for p in posts[:limit]]}
     if total > limit:

@@ -30,6 +30,7 @@ class Post:
     comments: str = ""
     collects: str = ""
     shares: str = ""
+    views: str = ""        # 播放/阅读量（有的平台才有）
     published: str = ""    # YYYY-MM-DD
     kind: str = ""         # 图文 / 视频 / 文章
 
@@ -59,6 +60,8 @@ def fmt_count(n) -> str:
         n = int(n)
     except (TypeError, ValueError):
         return str(n or "")
+    if n >= 100_000_000:
+        return f"{n / 1e8:.1f}亿".replace(".0亿", "亿")
     return f"{n / 1e4:.1f}万".replace(".0万", "万") if n >= 10000 else str(n)
 
 
