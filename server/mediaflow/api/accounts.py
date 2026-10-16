@@ -3,9 +3,9 @@ from sqlmodel import Session, col, func, select
 
 from mediaflow.api.deps import current_user_id, owned_account
 from mediaflow.db import get_session
-from mediaflow.domain.models import Account, Draft, DraftStatus, Job, JobKind, JobStatus, Rule, utcnow
+from mediaflow.domain.models import Account, Draft, DraftStatus, Job, JobKind, JobStatus, Note, Rule, utcnow
 from mediaflow.domain.schemas import (
-    AccountDetail, AccountIn, AccountOut, AccountPatch, AccountSummary, RuleIn, RuleOut,
+    AccountDetail, AccountIn, AccountOut, AccountPatch, AccountSummary, NoteOut, RuleIn, RuleOut,
 )
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -14,7 +14,9 @@ router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 def _detail(s: Session, acc: Account) -> AccountDetail:
     rules = s.exec(select(Rule).where(Rule.account_id == acc.id, Rule.active == True)  # noqa: E712
                    .order_by(col(Rule.created_at))).all()
-    return AccountDetail(**acc.model_dump(), rules=[RuleOut(**r.model_dump()) for r in rules])
+    notes = s.exec(select(Note).where(Note.account_id == acc.id).order_by(col(Note.created_at).desc())).all()
+    return AccountDetail(**acc.model_dump(), rules=[RuleOut(**r.model_dump()) for r in rules],
+                         notes=[NoteOut(**n.model_dump()) for n in notes])
 
 
 @router.get("", response_model=list[AccountSummary])
@@ -67,6 +69,7 @@ def delete_account(acc: Account = Depends(owned_account), s: Session = Depends(g
         (Draft, Draft.account_id == acc.id),
         (Topic, Topic.account_id == acc.id),
         (Rule, Rule.account_id == acc.id),
+        (Note, Note.account_id == acc.id),
         (ChatMessage, ChatMessage.account_id == acc.id),
         (Job, Job.account_id == acc.id),
     ):
@@ -92,6 +95,16 @@ def remove_rule(rule_id: str, acc: Account = Depends(owned_account), s: Session 
         raise HTTPException(404, "规则不存在")
     r.active = False
     s.add(r)
+    s.commit()
+
+
+
+@router.delete("/{account_id}/notes/{note_id}", status_code=204)
+def remove_note(note_id: str, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    n = s.get(Note, note_id)
+    if n is None or n.account_id != acc.id:
+        raise HTTPException(404, "笔记不存在")
+    s.delete(n)
     s.commit()
 
 

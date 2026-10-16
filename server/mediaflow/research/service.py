@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import Any
 
-from mediaflow.research.types import Creator, Post, PostDetail, Unsupported, count_num
+from mediaflow.research.types import Creator, Post, PostDetail, Unsupported, count_num, fmt_count
 
 PLATFORM_LABELS = {
     "xiaohongshu": "小红书", "douyin": "抖音", "bilibili": "B站", "weibo": "微博",
@@ -159,9 +159,29 @@ async def creator_posts(creator_ref: str, limit: int = 10, sort: str = "latest")
         posts = sorted(posts, key=lambda p: -(count_num(p.likes) or count_num(p.views)))
     limit = max(1, min(limit, 20))
     out = {"platform": platform, "creator": _creator_out(creator), "posts": [_post_out(p) for p in posts[:limit]]}
+    stats = _stats(posts)
+    if stats:
+        out["stats"] = stats
     if total > limit:
         out["hint"] = f"共取到最近 {total} 条，只列了 {limit} 条；可调大 limit 或用 sort=top 看互动最高的"
     return out
+
+
+def _stats(posts: list[Post]) -> str:
+    """最近作品的更新频率和互动中位数，省得模型自己数。"""
+    from datetime import date
+    from statistics import median
+
+    days = sorted(date.fromisoformat(p.published) for p in posts if p.published)
+    parts = []
+    if len(days) >= 2:
+        span = max((days[-1] - days[0]).days, 1)
+        parts.append(f"这 {len(days)} 条发布于 {days[0]}～{days[-1]}，约每周 {len(days) * 7 / span:.1f} 条")
+    for label, vals in (("点赞", [count_num(p.likes) for p in posts if p.likes]),
+                        ("播放", [count_num(p.views) for p in posts if p.views])):
+        if vals:
+            parts.append(f"{label}中位数 {fmt_count(int(median(vals)))}")
+    return "；".join(parts)
 
 
 async def post_detail(post_ref: str) -> dict:

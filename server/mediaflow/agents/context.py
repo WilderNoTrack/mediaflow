@@ -10,7 +10,10 @@ from dataclasses import dataclass, field
 
 from sqlmodel import Session, col, select
 
-from mediaflow.domain.models import Account, Draft, Rule, Topic, TopicStatus
+from mediaflow.domain.models import Account, Draft, Note, Rule, Topic, TopicStatus
+
+NOTES_IN_CONTEXT = 5
+NOTE_CHARS = 400
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,7 @@ class AccountContext:
     rules: tuple[str, ...]
     recent_titles: tuple[str, ...] = field(default=())
     used_topics: tuple[str, ...] = field(default=())
+    notes: tuple[str, ...] = field(default=())  # 运营笔记（调研结论），已截断
 
     def profile_text(self) -> str:
         lines = [
@@ -39,6 +43,9 @@ class AccountContext:
         ]
         if self.keywords:
             lines.append("关键词：" + "、".join(self.keywords))
+        if self.notes:
+            lines.append("运营笔记（之前调研的结论，供参考，不必逐条照搬）：")
+            lines.extend(f"- {n}" for n in self.notes)
         return "\n".join(lines)
 
     def rules_text(self) -> str:
@@ -68,6 +75,9 @@ def load_context(session: Session, account_id: str) -> AccountContext:
         .order_by(col(Topic.created_at).desc())
         .limit(100)
     ).all()
+    notes = session.exec(
+        select(Note).where(Note.account_id == account_id).order_by(col(Note.created_at).desc()).limit(NOTES_IN_CONTEXT)
+    ).all()
     return AccountContext(
         account_id=acc.id,
         user_id=acc.user_id,
@@ -81,4 +91,5 @@ def load_context(session: Session, account_id: str) -> AccountContext:
         rules=tuple(rules),
         recent_titles=tuple(titles),
         used_topics=tuple(used),
+        notes=tuple(f"{n.title}：{' '.join(n.content.split())[:NOTE_CHARS]}" for n in notes),
     )

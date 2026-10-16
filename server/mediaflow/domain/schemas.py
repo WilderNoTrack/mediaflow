@@ -37,6 +37,13 @@ class RuleOut(BaseModel):
     created_at: datetime
 
 
+class NoteOut(BaseModel):
+    id: str
+    title: str
+    content: str
+    created_at: datetime
+
+
 class AccountOut(BaseModel):
     id: str
     name: str
@@ -61,6 +68,7 @@ class AccountSummary(AccountOut):
 
 class AccountDetail(AccountOut):
     rules: list[RuleOut]
+    notes: list[NoteOut] = []
 
 
 class RuleIn(BaseModel):

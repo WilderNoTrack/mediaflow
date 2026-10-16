@@ -21,6 +21,17 @@ def test_account_crud_and_rules(client):
     assert client.get(f"/api/accounts/{a['id']}").json()["rules"][0]["text"] == "不用感叹号"
     assert client.delete(f"/api/accounts/{a['id']}/rules/{rule['id']}").status_code == 204
     assert client.get(f"/api/accounts/{a['id']}").json()["rules"] == []
+    from mediaflow.db import get_engine
+    from mediaflow.domain.models import Note
+    from sqlmodel import Session
+    with Session(get_engine()) as s:
+        n = Note(user_id="local", account_id=a["id"], title="对标：某博主", content="标题爱用数字")
+        s.add(n)
+        s.commit()
+        nid = n.id
+    assert client.get(f"/api/accounts/{a['id']}").json()["notes"][0]["title"] == "对标：某博主"
+    assert client.delete(f"/api/accounts/{a['id']}/notes/{nid}").status_code == 204
+    assert client.get(f"/api/accounts/{a['id']}").json()["notes"] == []
     assert client.get("/api/accounts").json()[0]["pending_review"] == 0
     assert client.delete(f"/api/accounts/{a['id']}").status_code == 204
     assert client.get(f"/api/accounts/{a['id']}").status_code == 404

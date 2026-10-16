@@ -133,6 +133,17 @@ class Rule(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class Note(SQLModel, table=True):
+    """运营笔记：管家调研后存下的结论（对标账号分析、爆款规律等），写稿和出选题时作为参考。"""
+
+    id: str = Field(default_factory=_id, primary_key=True)
+    user_id: str = Field(index=True, foreign_key="user.id")
+    account_id: str = Field(index=True, foreign_key="account.id")
+    title: str
+    content: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class Topic(SQLModel, table=True):
     id: str = Field(default_factory=_id, primary_key=True)
     user_id: str = Field(index=True, foreign_key="user.id")

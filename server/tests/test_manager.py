@@ -81,3 +81,90 @@ async def test_step_limit_ends_with_summary_not_canned_text(session, llm, accoun
     msgs = await chat(session, llm, account.id, "看看草稿")
     assert msgs[-1].content == "我查了几遍草稿，目前还没有"
     assert "tools" not in str(llm.calls[-1][1][-1]) and "上限" in llm.calls[-1][1][-1]["content"]
+
+
+async def test_research_tools_run_in_parallel_and_save_note(session, llm, account, monkeypatch):
+    import asyncio
+    import json
+
+    from mediaflow.agents.context import load_context
+    from mediaflow.domain.models import Note
+    from mediaflow.llm.client import LLMResponse, ToolCall
+    from mediaflow.research import service
+
+    running, peak = 0, 0
+
+    async def slow(result):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.05)
+        running -= 1
+        return result
+
+    async def creators(platform, name, limit=5):
+        return await slow({"platform": platform, "creators": [{"ref": "xhs:c1", "name": name, "fans": "776.9万"}]})
+
+    async def posts(ref, limit=10, sort="latest"):
+        return await slow({"platform": "xiaohongshu", "creator": {"ref": ref}, "posts": [{"ref": "xhs:p2", "title": "爆款" * 2500}]})
+
+    monkeypatch.setattr(service, "search_creators", creators)
+    monkeypatch.setattr(service, "creator_posts", posts)
+    both = LLMResponse(tool_calls=[ToolCall(id="a", name="research_creators", arguments={"platform": "xiaohongshu", "name": "程十安"}),
+                                   ToolCall(id="b", name="research_creator_posts", arguments={"creator_ref": "xhs:c1", "sort": "top"})])
+    llm.push("manager", both, tool_call("save_note", title="对标：程十安", content="标题爱用数字；封面大字"), say("分析好了，已存成笔记"))
+    msgs = await chat(session, llm, account.id, "帮我分析一下程十安")
+
+    assert peak == 2  # 两个只读调研同时跑
+    assert [m.tool_name for m in msgs if m.role == ChatRole.tool] == ["research_creators", "research_creator_posts", "save_note"]
+    assert json.loads(msgs[1].content)["creators"][0]["fans"] == "776.9万"
+    assert len(msgs[2].content) < 4100 and msgs[2].content.endswith("已截断）")  # 长结果截断，完整结果在 payload
+    note = session.exec(select(Note).where(Note.account_id == account.id)).one()
+    assert "标题爱用数字" in load_context(session, account.id).profile_text()
+
+    # 下一轮：笔记在账号状态里，历史里的调研结果只留摘要
+    llm.push("manager", say("好"))
+    await chat(session, llm, account.id, "嗯")
+    ctx = llm.calls[-1][1]
+    assert note.id in ctx[0]["content"]
+    hist = [m["content"] for m in ctx[1:] if "我执行了 research_creator_posts" in (m.get("content") or "")]
+    assert hist and len(hist[0]) < 600
+
+
+async def test_research_errors_are_reported(session, llm, account, monkeypatch):
+    from mediaflow.sources import platforms
+    monkeypatch.setattr(platforms.credentials, "get", lambda k: "")
+    from mediaflow.llm.client import LLMResponse, ToolCall
+    llm.push("manager", LLMResponse(tool_calls=[ToolCall(id="a", name="research_creators",
+                                                         arguments={"platform": "xiaohongshu", "name": "x"})]),
+             tool_call("research_post", post_ref="xhs:p99999"), say("小红书没登录"))
+    msgs = await chat(session, llm, account.id, "查下x")
+    assert "没登录" in msgs[1].payload["result"]["error"] and "重新搜索" in msgs[2].payload["result"]["error"]
+
+
+async def test_research_search_keeps_refs_and_notes(session, llm, account, monkeypatch):
+    from mediaflow.sources import registry
+    from mediaflow.sources.base import SourceReport, SourceStatus, TrendItem
+
+    async def fake(keyword, limit=8, sources=None):
+        return SourceReport(items=[TrendItem(title="早八妆", source="xiaohongshu", heat="1万赞", ref="n1|tk",
+                                             url="https://www.xiaohongshu.com/explore/n1")],
+                            statuses=[SourceStatus(source="douyin", label="抖音", ok=False, note="抓取失败（超时）")])
+    monkeypatch.setattr(registry, "fetch_all", fake)
+    llm.push("manager", tool_call("research_search", keyword="早八妆"), say("搜到了"))
+    msgs = await chat(session, llm, account.id, "搜下早八妆")
+    r = msgs[1].payload["result"]
+    assert r["items"][0]["ref"].startswith("xhs:p") and r["source_notes"] == ["抖音：抓取失败（超时）"]
+
+
+async def test_notes_are_scoped_to_account(session, llm, account):
+    from mediaflow.domain.models import Note
+    other = Account(user_id="local", name="别的号")
+    session.add(other)
+    session.commit()
+    n = Note(user_id="local", account_id=other.id, title="别人的", content="x")
+    session.add(n)
+    session.commit()
+    llm.push("manager", tool_call("remove_note", note_id=n.id), say("删不了"))
+    msgs = await chat(session, llm, account.id, "删掉那条笔记")
+    assert msgs[1].payload["result"]["ok"] is False and session.get(Note, n.id) is not None

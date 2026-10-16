@@ -5,6 +5,8 @@
 - 每次工具调用都作为一条 tool 消息存进对话历史，下一轮对话它记得自己做过什么
 - 写稿不在对话里同步跑几分钟，而是派一个后台任务，聊天立刻返回
 - 同一账号的对话串行处理，连发两条不会同时改配置
+- 调研工具（搜内容/搜博主/看作品/看详情）只读、可并行；结论用 save_note 存成运营笔记，写稿时参考
+  设计依据见 docs/agent-architecture.md
 """
 
 from __future__ import annotations
@@ -19,16 +21,22 @@ from sqlmodel import Session, col, select
 
 from mediaflow.agents.context import load_context
 from mediaflow.domain.models import (
-    Account, AutoFrequency, ChatMessage, ChatRole, Draft, JobKind, Rule, RuleSource, Trigger, utcnow,
+    Account, AutoFrequency, ChatMessage, ChatRole, Draft, JobKind, Note, Rule, RuleSource, Trigger, utcnow,
 )
 from mediaflow.jobs.queue import JobConflict, enqueue
 from mediaflow.llm.client import LLM, LLMError
+from mediaflow.research import service as research
+from mediaflow.research.types import Unsupported
 from mediaflow.services.topics import Fetcher, propose_topics
 
 logger = logging.getLogger(__name__)
 
-MAX_STEPS = 8
+MAX_STEPS = 12
 HISTORY_LIMIT = 40
+RESULT_CHARS = 1500          # 普通工具结果给模型看的长度上限
+RESEARCH_RESULT_CHARS = 4000  # 调研结果信息密度高，放宽
+HISTORY_TOOL_CHARS = 500      # 历史轮次里的工具结果只留摘要，控制上下文
+READ_ONLY = {"list_drafts", "research_search", "research_creators", "research_creator_posts", "research_post"}
 _locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像一个靠谱的运营搭子。
@@ -42,7 +50,18 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
 5. 工具结果里有失败或降级（比如热点来源没抓到），必须如实告诉用户，不能装作正常。
 6. 不要在聊天里写整篇文案，那是 write_post 的事。
 
-【风格】中文，自然口语，简短（一般不超过 100 字），改了什么就明确说改了什么。"""
+【调研】用户想了解某个博主、某类爆款、某个话题在各平台的情况时，用 research_* 工具查真实数据。
+- 先宽后窄：research_search 看话题全貌，或 research_creators 先确认是哪位博主（重名时挑名字最吻合、粉丝最多的，拿不准就问用户），
+  再 research_creator_posts 看作品（sort=top 看爆款、latest 看近况），最后挑 2-3 篇最有代表性的 research_post 看正文、标签和热评。
+- 预算：简单问题 1-3 次调用；分析一个博主 5-10 次；不要为了凑数多查。互不依赖的调用在同一步一起发出（会并行执行）。
+- ref（如 xhs:c3、dy:p12）原样传回即可，不要编造；提示 ref 失效就重新搜。
+- 结论必须来自工具数据，引用具体标题和数字；拿不到的写「没有公开数据」，绝不编造粉丝数、阅读量。
+- 工具报「没登录/不支持」时如实告诉用户，并说明去「数据来源」里配置，或换个支持的平台。
+- 分析博主（对标分析）按这个结构回复：①账号概况（定位、粉丝、更新频率）②内容结构（常做的栏目/形式）
+  ③爆款规律（选题、标题写法、开头钩子、标签）④评论区用户在关心什么 ⑤给本账号的 3 条可执行建议。
+- 分析完用 save_note 存一份精炼要点（400 字内，偏「可借鉴的做法」），告诉用户已存为运营笔记、之后写稿会参考，不需要可以删。
+
+【风格】中文，自然口语，简短（一般不超过 100 字；调研分析可以长一些，但要分点、去水分），改了什么就明确说改了什么。"""
 
 
 def _tool(name: str, desc: str, props: dict[str, Any] | None = None, required: list[str] | None = None) -> dict:
@@ -50,6 +69,35 @@ def _tool(name: str, desc: str, props: dict[str, Any] | None = None, required: l
         "name": name, "description": desc,
         "parameters": {"type": "object", "properties": props or {}, "required": required or []},
     }}
+
+
+def _platforms_with(cap: str) -> list[str]:
+    return [p for p, caps in research.capabilities().items() if cap in caps]
+
+
+def _research_tools() -> list[dict]:
+    labels = research.PLATFORM_LABELS
+    creator_ps = _platforms_with("搜博主")
+    names = "、".join(f"{labels[p]}({p})" for p in creator_ps)
+    return [
+        _tool("research_search", "按关键词搜各平台的内容（标题、热度、链接），不传 platform 就全平台一起搜。"
+              "结果里带 ref 的可以接着用 research_post 看详情", {
+                  "keyword": {"type": "string"},
+                  "platform": {"type": "string", "enum": list(labels), "description": "可选：只搜一个平台"},
+              }, ["keyword"]),
+        _tool("research_creators", f"按名字搜博主，返回粉丝数、简介和 ref。支持：{names}。公众号没有粉丝数", {
+            "platform": {"type": "string", "enum": creator_ps},
+            "name": {"type": "string", "description": "博主名字，去掉表情和后缀更容易搜到"},
+        }, ["platform", "name"]),
+        _tool("research_creator_posts", "看博主最近的作品列表（标题、日期、互动数据）和更新频率、互动中位数", {
+            "creator_ref": {"type": "string", "description": "research_creators 返回的 ref，如 xhs:c3"},
+            "limit": {"type": "integer", "description": "列几条，默认 10，最多 20"},
+            "sort": {"type": "string", "enum": ["latest", "top"], "description": "latest 按时间；top 按互动从高到低"},
+        }, ["creator_ref"]),
+        _tool("research_post", "看一篇作品的详情：正文、标签、完整互动数据、高赞评论", {
+            "post_ref": {"type": "string", "description": "作品 ref，如 xhs:p12"},
+        }, ["post_ref"]),
+    ]
 
 
 TOOLS = [
@@ -76,6 +124,12 @@ TOOLS = [
         "enabled": {"type": "boolean"},
         "frequency": {"type": "string", "enum": ["daily", "every_2_days", "weekly"]},
     }, ["enabled"]),
+    *_research_tools(),
+    _tool("save_note", "存一条运营笔记（调研结论、对标账号要点、爆款规律等），之后写稿和出选题会参考", {
+        "title": {"type": "string", "description": "简短标题，如「对标：程十安an」"},
+        "content": {"type": "string", "description": "要点，400 字以内"},
+    }, ["title", "content"]),
+    _tool("remove_note", "删除一条运营笔记（ID 见账号状态）", {"note_id": {"type": "string"}}, ["note_id"]),
 ]
 
 PROFILE_FIELDS = ("name", "theme", "audience", "content_style", "image_style", "topic_type", "keywords")
@@ -90,8 +144,11 @@ class Toolbox:
             select(Rule).where(Rule.account_id == self.acc.id, Rule.active == True)  # noqa: E712
             .order_by(col(Rule.created_at))
         ).all()
+        notes = self.s.exec(select(Note).where(Note.account_id == self.acc.id)
+                            .order_by(col(Note.created_at).desc()).limit(20)).all()
         a = self.acc
         return {
+            "notes": [{"id": n.id, "title": n.title} for n in notes],
             "name": a.name, "theme": a.theme, "audience": a.audience,
             "content_style": a.content_style, "image_style": a.image_style,
             "topic_type": a.topic_type, "keywords": a.keywords,
@@ -107,6 +164,8 @@ class Toolbox:
             return await fn(**args)
         except TypeError as e:
             return {"ok": False, "error": f"参数不对：{e}"}
+        except (Unsupported, LookupError) as e:
+            return {"ok": False, "error": str(e)}
         except Exception as e:  # noqa: BLE001
             logger.exception("管家工具 %s 出错", name)
             return {"ok": False, "error": str(e)}
@@ -185,6 +244,71 @@ class Toolbox:
         return {"ok": True, "auto_enabled": self.acc.auto_enabled, "frequency": self.acc.auto_frequency.value}
 
 
+    # ---- 调研（只读，可并行）----
+
+    async def t_research_search(self, keyword: str, platform: str = "") -> dict:
+        keyword = keyword.strip()
+        if not keyword:
+            return {"ok": False, "error": "关键词是空的"}
+        if platform:
+            from mediaflow.sources.platforms import ALL_SOURCES
+            from mediaflow.sources.registry import fetch_all
+
+            srcs = [x for x in ALL_SOURCES if x.name == platform]
+            if not srcs:
+                return {"ok": False, "error": f"不认识的平台 {platform}"}
+            report = await fetch_all(keyword, 10, sources=srcs)
+        elif self.fetch is not None:
+            report = await self.fetch(keyword, 6)
+        else:
+            from mediaflow.sources.registry import fetch_all
+            report = await fetch_all(keyword, 6)
+        items = []
+        for it in report.items:
+            d = {"src": it.source, "title": it.title, "heat": it.heat}
+            ref = research.item_ref(it.source, it.ref) if it.ref else ""
+            if ref:
+                d["ref"] = ref
+            if it.kind == "hot":
+                d["note"] = "热榜兜底，非搜索结果"
+            if it.url and len(it.url) <= 120:
+                d["url"] = it.url
+            items.append({k: v for k, v in d.items() if v})
+        out: dict[str, Any] = {"ok": True, "items": items}
+        problems = [f"{st.label}：{st.note}" for st in report.statuses if st.note]
+        if problems:
+            out["source_notes"] = problems
+        return out
+
+    async def t_research_creators(self, platform: str, name: str) -> dict:
+        return {"ok": True, **await research.search_creators(platform, name.strip(), 5)}
+
+    async def t_research_creator_posts(self, creator_ref: str, limit: int = 10, sort: str = "latest") -> dict:
+        return {"ok": True, **await research.creator_posts(creator_ref.strip(), int(limit), sort)}
+
+    async def t_research_post(self, post_ref: str) -> dict:
+        return {"ok": True, **await research.post_detail(post_ref.strip())}
+
+    # ---- 运营笔记 ----
+
+    async def t_save_note(self, title: str, content: str) -> dict:
+        title, content = title.strip()[:60], content.strip()[:2000]
+        if not title or not content:
+            return {"ok": False, "error": "标题和内容都不能空"}
+        n = Note(user_id=self.acc.user_id, account_id=self.acc.id, title=title, content=content)
+        self.s.add(n)
+        self.s.commit()
+        return {"ok": True, "note_id": n.id, "title": title}
+
+    async def t_remove_note(self, note_id: str) -> dict:
+        n = self.s.get(Note, note_id)
+        if n is None or n.account_id != self.acc.id:
+            return {"ok": False, "error": "没有这条笔记"}
+        self.s.delete(n)
+        self.s.commit()
+        return {"ok": True, "removed": n.title}
+
+
 def _history(session: Session, account_id: str) -> list[dict]:
     rows = list(reversed(session.exec(
         select(ChatMessage).where(ChatMessage.account_id == account_id)
@@ -194,7 +318,8 @@ def _history(session: Session, account_id: str) -> list[dict]:
     for m in rows:
         if m.role == ChatRole.tool:
             # 把做过的操作作为管家自己的备忘放回上下文
-            msgs.append({"role": "assistant", "content": f"（我执行了 {m.tool_name}：{m.content}）"})
+            body = m.content if len(m.content) <= HISTORY_TOOL_CHARS else m.content[:HISTORY_TOOL_CHARS] + "…（已截断）"
+            msgs.append({"role": "assistant", "content": f"（我执行了 {m.tool_name}：{body}）"})
         else:
             msgs.append({"role": m.role.value, "content": m.content})
     return msgs
@@ -207,6 +332,26 @@ def _save(session: Session, acc: Account, role: ChatRole, content: str, tool_nam
     session.commit()
     session.refresh(m)
     return m
+
+
+async def _run_calls(box: Toolbox, calls: list) -> list[dict]:
+    """同一步的多个工具调用：只读的并行跑，会改数据的按顺序跑（共用一个数据库 session）。"""
+    write_lock = asyncio.Lock()
+
+    async def one(c) -> dict:
+        if c.error:
+            return {"ok": False, "error": c.error + "。请修正参数后重新调用。"}
+        if c.name in READ_ONLY:
+            return await box.call(c.name, c.arguments)
+        async with write_lock:
+            return await box.call(c.name, c.arguments)
+
+    return list(await asyncio.gather(*(one(c) for c in calls)))
+
+
+def _clip(result: dict, limit: int) -> str:
+    text = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    return text if len(text) <= limit else text[:limit] + "…（结果太长已截断）"
 
 
 async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = None) -> list[ChatMessage]:
@@ -240,12 +385,9 @@ async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch:
                  "function": {"name": c.name, "arguments": json.dumps(c.arguments, ensure_ascii=False)}}
                 for c in resp.tool_calls
             ]})
-            for c in resp.tool_calls:
-                if c.error:
-                    result = {"ok": False, "error": c.error + "。请修正参数后重新调用。"}
-                else:
-                    result = await box.call(c.name, c.arguments)
-                summary = json.dumps(result, ensure_ascii=False)[:1500]
+            results = await _run_calls(box, resp.tool_calls)
+            for c, result in zip(resp.tool_calls, results):
+                summary = _clip(result, RESEARCH_RESULT_CHARS if c.name.startswith("research_") else RESULT_CHARS)
                 new.append(_save(session, acc, ChatRole.tool, summary, tool_name=c.name,
                                  payload={"args": c.arguments, "result": result}))
                 messages.append({"role": "tool", "tool_call_id": c.id, "content": summary})
