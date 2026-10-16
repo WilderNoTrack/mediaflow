@@ -166,7 +166,69 @@ async def test_bilibili_creator_flow(mock_http, monkeypatch):
     assert "w_rid=" in str(arc.url) and "dm_img_str=" in str(arc.url) and "buvid3=B3" in arc.headers.get("cookie", "")
 
 
+async def test_weibo_creator_flow(mock_http, monkeypatch):
+    monkeypatch.setattr(platforms.credentials, "get", lambda k: "SUB=x; XSRF-TOKEN=tok" if k == "weibo_cookie" else "")
+    routes, seen = mock_http
+    W = "https://weibo.com/ajax"
+    routes["https://s.weibo.com/user"] = (
+        '<div class="card card-user-b"><div class="avator"><a href="//weibo.com/u/29"><span class="woo-avatar-icon" '
+        'title="微博个人认证"></span></a></div><div class="info"><div><a class="name" href="//weibo.com/u/29">李子柒</a></div>'
+        '<p>李子柒品牌创始人</p><p><span class="s-nobr">粉丝：2754.9万</span></p></div></div>')
+    routes[f"{W}/profile/info"] = {"ok": 1, "data": {"user": {
+        "screen_name": "李子柒", "followers_count_str": "2754.9万", "statuses_count": 462, "description": "俗人一个"}}}
+    routes[f"{W}/statuses/mymblog"] = {"ok": 1, "data": {"list": [
+        {"mblogid": "OLD", "id": 1, "isTop": 1, "text_raw": "置顶"},
+        {"mblogid": "K9G", "id": 46, "text_raw": "忙春种\n来着", "created_at": "Tue Apr 06 18:00:00 +0800 2021",
+         "attitudes_count": 749000, "comments_count": 75000, "reposts_count": 62000, "page_info": {"object_type": "video"}}]}}
+    routes[f"{W}/statuses/show"] = {"ok": 1, "id": 46, "user": {"id": 29, "screen_name": "李子柒"},
+        "text_raw": "短", "longText": {"longTextContent": "忙春种来着 #桃林#"}, "attitudes_count": 749000,
+        "created_at": "Tue Apr 06 18:00:00 +0800 2021", "topic_struct": [{"topic_title": "桃林"}]}
+    routes[f"{W}/statuses/buildComments"] = {"ok": 1, "data": [{"like_counts": 13839, "text_raw": "好久不见"}]}
+
+    c = (await service.search_creators("weibo", "李子柒"))["creators"][0]
+    assert c == {"ref": c["ref"], "name": "李子柒", "fans": "2754.9万", "desc": "李子柒品牌创始人",
+                 "url": "https://weibo.com/u/29", "认证": "微博个人认证"}
+    got = await service.creator_posts(c["ref"])
+    p = got["posts"][0]
+    assert len(got["posts"]) == 1 and p["title"] == "忙春种 来着" and p["likes"] == "74.9万" and p["type"] == "视频"
+    assert p["date"] == "2021-04-06" and got["creator"]["posts"] == "462"
+    d = await service.post_detail(p["ref"])
+    assert d["content"] == "忙春种来着 #桃林#" and d["tags"] == ["桃林"] and d["top_comments"] == ["13839赞｜好久不见"]
+    cm = [r for r in seen if "buildComments" in str(r.url)][0]
+    assert "id=46" in str(cm.url) and "uid=29" in str(cm.url) and cm.headers["x-xsrf-token"] == "tok"
+
+
+async def test_weibo_needs_cookie(monkeypatch):
+    monkeypatch.setattr(platforms.credentials, "get", lambda k: "")
+    with pytest.raises(Unsupported, match="微博没登录"):
+        await service.search_creators("weibo", "x")
+
+
+async def test_wechat_flow(mock_http):
+    from mediaflow.sources import wechat
+    wechat._JAR.clear()
+    routes, seen = mock_http
+
+    def li(title, acc, ts, href):
+        return (f'<li><h3><a href="{href}">{title}</a></h3><p class="txt-info">摘要</p>'
+                f'<span class="all-time-y2">{acc}</span><script>timeConvert(\'{ts}\')</script></li>')
+    routes["https://weixin.sogou.com/weixin"] = '<ul class="news-list">' + li("别家写丁香", "知乎日报", 1600000000, "/link?url=a") + \
+        li("丁香招人", "丁香医生", 1685000000, "/link?url=b") + li("丁香科普", "丁香医生", 1700000000, "/link?url=c") + "</ul>"
+    routes["https://weixin.sogou.com/link"] = "<script>var url = '';url += 'https://mp.';url += 'weixin.qq.com/s?x=1@';</script>"
+    routes["https://mp.weixin.qq.com/s"] = ('<h1 id="activity-name">丁香科普</h1><a id="js_name">丁香医生</a>'
+                                           '<div id="js_content"><p>正文第一段</p></div><script>var ct = "1700000000";</script>')
+
+    found = (await service.search_creators("wechat", "丁香医生"))["creators"]
+    assert [c["name"] for c in found] == ["丁香医生", "知乎日报"]
+    got = await service.creator_posts(found[0]["ref"])
+    assert [p["title"] for p in got["posts"]] == ["丁香科普", "丁香招人"] and "url" not in got["posts"][0]
+    d = await service.post_detail(got["posts"][0]["ref"])
+    assert d["content"] == "正文第一段" and d["author"] == "丁香医生" and d["url"] == "https://mp.weixin.qq.com/s?x=1"
+    assert d["date"] == "2023-11-15"
+
+
 def test_capabilities_listed():
     caps = service.capabilities()
     assert caps["xiaohongshu"] == ["搜内容", "搜博主", "看博主作品", "看作品详情"]
-    assert caps["baidu"] == ["搜内容"]
+    assert caps["baidu"] == ["搜内容"] and caps["zhihu"] == ["搜内容"]
+    assert caps["weibo"] == caps["wechat"] == caps["bilibili"] == caps["douyin"] == caps["xiaohongshu"]

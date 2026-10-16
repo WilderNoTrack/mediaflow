@@ -63,7 +63,7 @@ class WeiboSource:
             if text:
                 link = card.select_one("div.from a[href]")
                 href = link["href"] if link else ""
-                out.append(TrendItem(title=text[:80], source=self.name, snippet=text[:200],
+                out.append(TrendItem(title=text[:80], source=self.name, snippet=text[:200], ref=card.get("mid", ""),
                                      url=("https:" + href) if href.startswith("//") else href))
         return out
 
@@ -218,30 +218,13 @@ class WechatSource:
     async def fetch(self, keyword: str, limit: int) -> list[TrendItem]:
         if not keyword:
             return []
-        from bs4 import BeautifulSoup
+        from mediaflow.sources.wechat import articles
 
         async with httpx.AsyncClient(timeout=get_settings().source_timeout) as c:
-            r = await c.get("https://weixin.sogou.com/weixin", params={"type": "2", "query": keyword, "ie": "utf8"},
-                            headers={"User-Agent": DESKTOP_UA, "Accept-Language": "zh-CN,zh;q=0.9"})
-        if r.status_code in (301, 302) or "antispider" in str(r.url) or "antispider" in r.text[:3000]:
-            raise RuntimeError("搜狗微信要求验证码（搜得太频繁），稍后再试")
-        r.raise_for_status()
-        out = []
-        for li in BeautifulSoup(r.text, "html.parser").select("ul.news-list > li"):
-            a = li.select_one("h3 a")
-            if not a or not a.get_text(strip=True):
-                continue
-            href = a.get("href", "")
-            account = li.select_one("span.all-time-y2")
-            m = re.search(r"timeConvert\('(\d+)'\)", str(li))
-            date = time.strftime("%Y-%m-%d", time.localtime(int(m.group(1)))) if m else ""
-            out.append(TrendItem(
-                title=a.get_text("", strip=True)[:80], source=self.name,
-                url=("https://weixin.sogou.com" + href) if href.startswith("/") else href,
-                heat=" · ".join(x for x in (account.get_text(strip=True) if account else "", date) if x),
-                snippet=(li.select_one("p.txt-info").get_text("", strip=True) if li.select_one("p.txt-info") else "")[:200],
-            ))
-        return out[:limit]
+            arts = await articles(c, keyword)
+        return [TrendItem(title=x["title"][:80], source=self.name, url=x["url"], ref=x["href"],
+                          heat=" · ".join(v for v in (x["account"], x["date"]) if v), snippet=x["snippet"][:200])
+                for x in arts[:limit]]
 
 
 _WBI_ENC = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,

@@ -42,6 +42,12 @@ def _impl(platform: str) -> Any:
     if platform == "bilibili":
         from mediaflow.sources import bilibili
         return bilibili
+    if platform == "weibo":
+        from mediaflow.sources import weibo
+        return weibo
+    if platform == "wechat":
+        from mediaflow.sources import wechat
+        return wechat
     return None
 
 

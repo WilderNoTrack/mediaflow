@@ -73,4 +73,4 @@ def ms_date(ts) -> str:
         return ""
     if ts > 1e12:
         ts //= 1000
-    return time.strftime("%Y-%m-%d", time.localtime(ts)) if ts > 0 else ""
+    return time.strftime("%Y-%m-%d", time.gmtime(ts + 8 * 3600)) if ts > 0 else ""  # 按北京时间
