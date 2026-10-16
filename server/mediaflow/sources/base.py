@@ -26,6 +26,7 @@ class TrendItem:
     heat: str = ""
     snippet: str = ""
     kind: str = "search"  # "search" 关键词搜索结果；"hot" 热榜兜底
+    ref: str = ""         # 平台内部定位串，可交给调研能力看详情（热榜条目为空）
 
 
 @dataclass

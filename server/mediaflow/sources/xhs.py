@@ -52,10 +52,13 @@ async def _post(c: httpx.AsyncClient, path: str, payload: dict, cookies: dict, *
     return r
 
 
-async def _get(c: httpx.AsyncClient, path: str, params: dict, cookies: dict):
-    h = _signer().sign_headers_get(uri=EDITH + path, cookies=cookies, params=params)
+async def _get(c: httpx.AsyncClient, path: str, params: dict, cookies: dict, *, x_rap: bool = False):
+    x = _signer()
+    h = x.sign_headers_get(uri=EDITH + path, cookies=cookies, params=params, x_rap=x_rap)
     h["Cookie"] = _cookie_header(cookies)
-    r = await c.get(EDITH + path, params=params, headers=h)
+    # 查询串必须和签名时完全一致（逗号等字符的编码方式），所以用签名库自己拼 URL
+    url = x.build_url(base_url=EDITH + path, params=params) if params else EDITH + path
+    r = await c.get(url, headers=h)
     cookies.update({k: v for k, v in r.cookies.items()})
     return r
 
@@ -160,5 +163,116 @@ async def search(keyword: str, limit: int, cookie: str, timeout: float = 10) -> 
             url += f"?xsec_token={it['xsec_token']}&xsec_source=pc_search"
         out.append(TrendItem(title=title[:80], source="xiaohongshu", url=url,
                              heat=f"{liked}赞" if liked else "",
-                             snippet=f"作者：{(card.get('user') or {}).get('nickname', '')}"))
+                             snippet=f"作者：{(card.get('user') or {}).get('nickname', '')}",
+                             ref=f"{it['id']}|{it.get('xsec_token', '')}"))
     return out[:limit]
+
+
+# ── 调研能力：搜博主 / 博主作品 / 笔记详情 ─────────────────────────────
+
+
+def _need_cookie() -> dict[str, str]:
+    from mediaflow.research.types import Unsupported
+
+    cookie = credentials.get("xhs_cookie")
+    if not cookie:
+        raise Unsupported("小红书没登录，请先在「数据来源」里扫码或粘贴 Cookie")
+    return _parse(cookie)
+
+
+def _check(body: dict, what: str) -> dict:
+    if not body.get("success"):
+        msg = body.get("msg") or body.get("code")
+        hint = "（登录可能失效，请重新扫码）" if body.get("code") in (-100, -101, -104) else ""
+        raise RuntimeError(f"小红书{what}失败：{msg}{hint}")
+    return body.get("data") or {}
+
+
+async def search_creators(name: str, limit: int = 5, timeout: float = 15):
+    from mediaflow.research.types import Creator
+
+    cookies, x = _need_cookie(), _signer()
+    payload = {"search_user_request": {"keyword": name, "search_id": x.get_search_id(), "page": 1,
+                                       "page_size": 15, "biz_type": "web_search_user",
+                                       "request_id": x.get_search_request_id()}}
+    async with httpx.AsyncClient(timeout=timeout, headers=_HEADERS) as c:
+        r = await _post(c, "/api/sns/web/v1/search/usersearch", payload, cookies, x_rap=True)
+    out = []
+    for u in _check(r.json(), "搜博主").get("users") or []:
+        if not u.get("id"):
+            continue
+        out.append(Creator(
+            platform="xiaohongshu", name=u.get("name", ""), native=f"{u['id']}|{u.get('xsec_token', '')}",
+            fans=str(u.get("fans", "")), posts=str(u.get("note_count", "")), desc=u.get("sub_title", ""),
+            url=f"https://www.xiaohongshu.com/user/profile/{u['id']}",
+        ))
+    return out[:limit]
+
+
+async def creator_posts(native: str, limit: int = 10, timeout: float = 15):
+    from mediaflow.research.types import Creator, Post, fmt_count, ms_date
+
+    cookies = _need_cookie()
+    uid, _, tok = native.partition("|")
+    async with httpx.AsyncClient(timeout=timeout, headers=_HEADERS) as c:
+        info = _check((await _get(c, "/api/sns/web/v1/user/otherinfo",
+                                  {"target_user_id": uid, "xsec_token": tok, "xsec_source": "pc_search"},
+                                  cookies)).json(), "看博主主页")
+        await asyncio.sleep(0.8)
+        data = _check((await _get(c, "/api/sns/web/v1/user_posted",
+                                  {"num": "30", "cursor": "", "user_id": uid, "image_scenes": "FD_WM_WEBP"},
+                                  cookies)).json(), "看博主作品")
+    basic = info.get("basic_info") or {}
+    inter = {i.get("type"): i.get("count") for i in info.get("interactions") or []}
+    creator = Creator(
+        platform="xiaohongshu", name=basic.get("nickname", ""), native=native,
+        fans=fmt_count(inter.get("fans", "")), desc=" ".join((basic.get("desc") or "").split())[:200],
+        url=f"https://www.xiaohongshu.com/user/profile/{uid}",
+        extra={"获赞与收藏": fmt_count((info.get("liked") or 0) + (info.get("collected") or 0)),
+               "标签": [t.get("name") for t in info.get("tags") or [] if t.get("name")]},
+    )
+    posts = []
+    for n in data.get("notes") or []:
+        if not n.get("note_id"):
+            continue
+        posts.append(Post(
+            platform="xiaohongshu", title=" ".join((n.get("display_title") or "").split()) or "（无标题）",
+            native=f"{n['note_id']}|{n.get('xsec_token', '')}", author=creator.name,
+            likes=str((n.get("interact_info") or {}).get("liked_count", "")),
+            published=ms_date(n.get("time")), kind="视频" if n.get("type") == "video" else "图文",
+            url=f"https://www.xiaohongshu.com/explore/{n['note_id']}?xsec_token={n.get('xsec_token', '')}&xsec_source=pc_user",
+        ))
+    return creator, posts[:limit]
+
+
+async def post_detail(native: str, comments: int = 8, timeout: float = 15):
+    from mediaflow.research.types import PostDetail, count_num, ms_date
+
+    cookies = _need_cookie()
+    nid, _, tok = native.partition("|")
+    payload = {"source_note_id": nid, "image_formats": ["jpg", "webp", "avif"],
+               "extra": {"need_body_topic": "1"}, "xsec_source": "pc_search", "xsec_token": tok}
+    async with httpx.AsyncClient(timeout=timeout, headers=_HEADERS) as c:
+        data = _check((await _post(c, "/api/sns/web/v1/feed", payload, cookies, x_rap=True)).json(), "看笔记详情")
+        items = data.get("items") or []
+        if not items:
+            raise RuntimeError("小红书没有返回这篇笔记（可能已删除或仅自己可见）")
+        card = items[0].get("note_card") or {}
+        await asyncio.sleep(0.8)
+        cm = (await _get(c, "/api/sns/web/v2/comment/page",
+                         {"note_id": nid, "cursor": "", "top_comment_id": "", "image_formats": "jpg,webp,avif",
+                          "xsec_token": tok}, cookies)).json()
+    it = card.get("interact_info") or {}
+    top = sorted((cm.get("data") or {}).get("comments") or [], key=lambda x: -count_num(x.get("like_count")))
+    return PostDetail(
+        platform="xiaohongshu", title=card.get("title") or "（无标题）", native=native,
+        url=f"https://www.xiaohongshu.com/explore/{nid}?xsec_token={tok}&xsec_source=pc_search",
+        author=(card.get("user") or {}).get("nickname", ""), likes=str(it.get("liked_count", "")),
+        comments=str(it.get("comment_count", "")), collects=str(it.get("collected_count", "")),
+        shares=str(it.get("share_count", "")), published=ms_date(card.get("time")),
+        kind="视频" if card.get("type") == "video" else "图文",
+        content=(card.get("desc") or "").strip()[:1500],
+        tags=[t.get("name") for t in card.get("tag_list") or [] if t.get("name")],
+        top_comments=[f"{x.get('like_count', 0)}赞｜{' '.join((x.get('content') or '').split())[:120]}"
+                      for x in top[:comments] if x.get("content")],
+    )

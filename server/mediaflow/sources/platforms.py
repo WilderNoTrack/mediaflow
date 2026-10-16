@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import re
@@ -343,8 +344,6 @@ class DouyinSource:
     """
 
     name, label = "douyin", "抖音"
-    UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
     async def fetch(self, keyword: str, limit: int) -> list[TrendItem]:
         cookie = credentials.get("douyin_cookie")
@@ -353,52 +352,19 @@ class DouyinSource:
         return await self._hot(keyword, limit)
 
     async def _search(self, keyword: str, limit: int, cookie: str) -> list[TrendItem]:
-        from urllib.parse import urlencode
+        from mediaflow.sources import douyin
 
-        from mediaflow.sources.douyin_abogus import ABogus
-
-        ck = _parse_cookie(cookie)
-        uifid = ck.get("UIFID") or ck.get("UIFID_TEMP", "")
-        query = {
-            "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
-            "search_channel": "aweme_general", "enable_history": "1", "keyword": keyword,
-            "search_source": "tab_search", "query_correct_type": "1", "is_filter_search": "0",
-            "from_group_id": "", "offset": "0", "count": str(max(1, min(limit, 20))),
-            "need_filter_settings": "1", "list_type": "multi",
-            "update_version_code": "170400", "pc_client_type": "1", "pc_libra_divert": "Windows",
-            "version_code": "190600", "version_name": "19.6.0", "cookie_enabled": "true",
-            "screen_width": "1920", "screen_height": "1080", "browser_language": "zh-CN",
-            "browser_platform": "Win32", "browser_name": "Chrome", "browser_version": "131.0.0.0",
-            "browser_online": "true", "engine_name": "Blink", "engine_version": "131.0.0.0",
-            "os_name": "Windows", "os_version": "10", "cpu_core_num": "8", "device_memory": "8",
-            "platform": "PC", "downlink": "10", "effective_type": "4g", "round_trip_time": "50",
-            "webid": ck.get("webid", ""), "uifid": uifid,
-            "verifyFp": ck.get("s_v_web_id", ""), "fp": ck.get("s_v_web_id", ""),
-            "msToken": ck.get("msToken", ""),
-        }
-        qs = urlencode(query)
-        url = (f"https://www.douyin.com/aweme/v1/web/general/search/single/?{qs}"
-               f"&a_bogus={quote(ABogus(self.UA).get_value(qs), safe='')}")
-        headers = {
-            "User-Agent": self.UA, "Cookie": cookie, "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "zh-CN,zh;q=0.9", "x-tt-argus": "1",
-            "Referer": f"https://www.douyin.com/search/{quote(keyword)}?type=general",
-            "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors",
-        }
-        if uifid:
-            headers["uifid"] = uifid
         async with httpx.AsyncClient(timeout=get_settings().source_timeout) as c:
-            r = await c.get(url, headers=headers)
-        r.raise_for_status()
-        if not r.text.strip():
-            raise RuntimeError("抖音返回空内容，Cookie 可能失效了")
-        data = r.json()
-        if data.get("status_code") not in (0, None):
-            msg = data.get("status_msg") or data.get("status_code")
-            raise RuntimeError(f"抖音：{msg}（Cookie 可能过期）")
-        nil = (data.get("search_nil_info") or {}).get("search_nil_type")
-        if nil == "antispam_check":
-            raise RuntimeError("抖音触发了风控校验，稍后再试，或在浏览器里打开抖音搜一次后重新复制 Cookie")
+            for attempt in range(2):  # 实测偶尔会无理由返回空列表，重试一次通常就有
+                data = await douyin.api(c, "/aweme/v1/web/general/search/single/", {
+                    "search_channel": "aweme_general", "enable_history": "1", "keyword": keyword,
+                    "search_source": "tab_search", "query_correct_type": "1", "is_filter_search": "0",
+                    "from_group_id": "", "offset": "0", "count": str(max(1, min(limit, 20))),
+                    "need_filter_settings": "1", "list_type": "multi",
+                }, cookie, referer=f"https://www.douyin.com/search/{quote(keyword)}?type=general")
+                if data.get("data") or attempt:
+                    break
+                await asyncio.sleep(1)
         out = []
         for raw in data.get("data") or data.get("aweme_list") or []:
             aw = (raw.get("aweme_info") or raw.get("item") or raw) if isinstance(raw, dict) else {}
@@ -408,7 +374,7 @@ class DouyinSource:
             st = aw.get("statistics") or {}
             out.append(TrendItem(
                 title=desc[:80], source=self.name, snippet=desc[:200],
-                heat=f"{st.get('digg_count', 0)}赞", url=f"https://www.douyin.com/video/{aid}",
+                heat=f"{st.get('digg_count', 0)}赞", url=f"https://www.douyin.com/video/{aid}", ref=str(aid),
             ))
         return out[:limit]
 
