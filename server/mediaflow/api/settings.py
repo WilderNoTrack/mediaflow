@@ -21,6 +21,7 @@ class CredentialOut(BaseModel):
     help: str
     url: str
     configured: bool
+    auto_refresh: bool = False
     origin: str = Field(description="ui=界面里填的；env=来自 .env；空=没配置")
 
 
@@ -50,8 +51,12 @@ def _list() -> list[CredentialOut]:
     s = get_settings()
     out = []
     for sp in credentials.SPECS:
+        if sp.hidden:
+            continue
         origin = "ui" if stored.get(sp.key) else ("env" if getattr(s, sp.key, "") else "")
-        out.append(CredentialOut(**sp.__dict__, configured=bool(origin), origin=origin))
+        d = {k: v for k, v in sp.__dict__.items() if k != "hidden"}
+        out.append(CredentialOut(**d, configured=bool(origin), origin=origin,
+                                 auto_refresh=sp.key == "bilibili_cookie" and bool(stored.get("bilibili_refresh_token"))))
     return out
 
 
@@ -62,7 +67,10 @@ def list_credentials():
 
 @router.put("/credentials", response_model=list[CredentialOut])
 def update_credentials(body: CredentialsIn):
-    credentials.update(body.values)
+    values = dict(body.values)
+    if values.get("bilibili_cookie") is not None:
+        values["bilibili_refresh_token"] = ""  # 手动换了 Cookie，旧的刷新口令就对不上了
+    credentials.update(values)
     return _list()
 
 
@@ -77,3 +85,32 @@ async def test_sources(body: SourceTestIn):
             lst.append(SourceSample(title=it.title, url=it.url, heat=it.heat, kind=it.kind))
     return SourceTestOut(keyword=kw, sources=[SourceStatusOut(**st.__dict__) for st in report.statuses],
                          samples=samples)
+
+
+class QrOut(BaseModel):
+    url: str
+    key: str
+
+
+class QrPollOut(BaseModel):
+    status: str = Field(description="waiting|scanned|expired|ok|error")
+    message: str = ""
+
+
+@router.post("/bilibili/qrcode", response_model=QrOut)
+async def bilibili_qrcode():
+    from mediaflow.sources.bili_auth import qr_generate
+    return QrOut(**await qr_generate())
+
+
+@router.get("/bilibili/qrcode/{key}", response_model=QrPollOut)
+async def bilibili_qrcode_poll(key: str):
+    from mediaflow.sources.bili_auth import qr_poll
+    return QrPollOut(**await qr_poll(key))
+
+
+@router.post("/bilibili/refresh", response_model=QrPollOut)
+async def bilibili_refresh():
+    from mediaflow.sources.bili_auth import refresh_if_needed
+    res = await refresh_if_needed(force=False)
+    return QrPollOut(status=res.split(":")[0], message=res.partition(":")[2])

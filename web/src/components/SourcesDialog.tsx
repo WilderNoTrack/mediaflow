@@ -2,6 +2,7 @@ import { CheckCircle2, Circle, ExternalLink, KeyRound, Play, X } from "lucide-re
 import { useState } from "react";
 import { useCredentials, useSaveCredentials, useTestSources } from "../api/hooks";
 import { cn, PLATFORMS } from "../lib/utils";
+import { BiliQrLogin } from "./BiliQrLogin";
 import { Badge, Button, ErrorText, Input, Modal, Spinner } from "./ui";
 
 /** 数据来源设置：各平台搜索凭据（只存在本机），并可一键实测 */
@@ -34,6 +35,7 @@ export function SourcesDialog({ onClose }: { onClose: () => void }) {
               <Badge className={cn("rounded-full", PLATFORMS[c.platform]?.cls)}>{PLATFORMS[c.platform]?.label ?? c.platform}</Badge>
               {c.label}
               {c.origin === "env" && <span className="text-xs font-normal text-muted-foreground">（来自 .env）</span>}
+              {c.auto_refresh && <span className="text-xs font-normal text-emerald-600">自动续期中</span>}
               <a href={c.url} target="_blank" rel="noreferrer" className="ml-auto flex items-center gap-1 text-xs font-normal text-indigo-500 hover:underline">
                 去获取<ExternalLink className="size-3" />
               </a>
@@ -51,6 +53,7 @@ export function SourcesDialog({ onClose }: { onClose: () => void }) {
                 <Button variant="outline" size="sm" onClick={() => save.mutate({ [c.key]: "" })}>清除</Button>
               )}
             </div>
+            {c.key === "bilibili_cookie" && !c.auto_refresh && <div className="mt-2"><BiliQrLogin /></div>}
           </div>
         ))}
         <ErrorText error={save.error} />

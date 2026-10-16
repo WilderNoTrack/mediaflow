@@ -20,6 +20,7 @@ class CredSpec:
     kind: str         # "key" | "cookie"
     help: str
     url: str
+    hidden: bool = False  # 内部维护的值（如刷新口令），不在界面上展示
 
 
 SPECS: list[CredSpec] = [
@@ -33,8 +34,10 @@ SPECS: list[CredSpec] = [
              "抖音网页版搜索需要登录。在浏览器登录 douyin.com 后复制整段 Cookie。",
              "https://www.douyin.com/"),
     CredSpec("bilibili_cookie", "bilibili", "B站 Cookie（可选）", "cookie",
-             "不填也能搜（用游客身份），填了更不容易被风控。登录 bilibili.com 后复制 Cookie。",
+             "不填也能搜（游客身份），登录后更稳。推荐点「扫码登录」，会自动续期长期有效；也可以手动粘贴 Cookie。",
              "https://www.bilibili.com/"),
+    CredSpec("bilibili_refresh_token", "bilibili", "B站刷新口令", "key", "扫码登录时自动保存，用于续期", "", hidden=True),
+    CredSpec("bilibili_refreshed_at", "bilibili", "B站上次续期时间", "key", "", "", hidden=True),
     CredSpec("weibo_cookie", "weibo", "微博 Cookie", "cookie",
              "微博按关键词搜索需要登录。登录 weibo.com 后复制 Cookie（需包含 SUB）。",
              "https://weibo.com/"),
@@ -59,7 +62,7 @@ def get(key: str) -> str:
         raise KeyError(key)
     v = _load().get(key)
     if v is None:
-        v = getattr(get_settings(), key, "")
+        v = getattr(get_settings(), key, "") or ""
     return (v or "").strip()
 
 

@@ -269,7 +269,7 @@ class BilibiliSource:
             if not keyword:
                 return await self._ranking(c, limit)
             mk = await self._mixin_key(c)
-            params = {"search_type": "video", "keyword": keyword, "order": "click",
+            params = {"search_type": "video", "keyword": keyword, "order": "totalrank",
                       "page": 1, "wts": int(time.time())}
             qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in sorted(params.items()))
             params["w_rid"] = hashlib.md5((qs + mk).encode()).hexdigest()

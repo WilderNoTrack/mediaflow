@@ -55,4 +55,7 @@ async def scheduler_loop(interval: int = 60) -> None:
                 tick(s)
         except Exception:  # noqa: BLE001
             logger.exception("[自动模式] 调度出错")
+        from mediaflow.sources.bili_auth import daily_refresh
+
+        await daily_refresh()  # B站登录态每天检查一次，需要时自动续期
         await asyncio.sleep(interval)

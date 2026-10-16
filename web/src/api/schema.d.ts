@@ -369,6 +369,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/bilibili/qrcode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bilibili Qrcode */
+        post: operations["bilibili_qrcode_api_settings_bilibili_qrcode_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/bilibili/qrcode/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bilibili Qrcode Poll */
+        get: operations["bilibili_qrcode_poll_api_settings_bilibili_qrcode__key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/bilibili/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bilibili Refresh */
+        post: operations["bilibili_refresh_api_settings_bilibili_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -560,6 +611,11 @@ export interface components {
             url: string;
             /** Configured */
             configured: boolean;
+            /**
+             * Auto Refresh
+             * @default false
+             */
+            auto_refresh: boolean;
             /**
              * Origin
              * @description ui=界面里填的；env=来自 .env；空=没配置
@@ -765,6 +821,26 @@ export interface components {
             rules: string[];
             /** Summary */
             summary: string;
+        };
+        /** QrOut */
+        QrOut: {
+            /** Url */
+            url: string;
+            /** Key */
+            key: string;
+        };
+        /** QrPollOut */
+        QrPollOut: {
+            /**
+             * Status
+             * @description waiting|scanned|expired|ok|error
+             */
+            status: string;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
         };
         /** RuleIn */
         RuleIn: {
@@ -1857,6 +1933,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bilibili_qrcode_api_settings_bilibili_qrcode_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QrOut"];
+                };
+            };
+        };
+    };
+    bilibili_qrcode_poll_api_settings_bilibili_qrcode__key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QrPollOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bilibili_refresh_api_settings_bilibili_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QrPollOut"];
                 };
             };
         };
