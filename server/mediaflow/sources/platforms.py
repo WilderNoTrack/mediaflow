@@ -304,8 +304,9 @@ class BilibiliSource:
 class DouyinSource:
     """抖音：配了登录 Cookie 就用网页版综合搜索接口，否则退回抖音热榜。
 
-    搜索接口未登录会返回 status_code=2483「请先登录」；签名用 X-Bogus（见 douyin_sign.py），
-    请求参数参考 whiteguo233/OpenBiliClaw 的 douyin_direct。
+    搜索接口未登录会返回 status_code=2483「请先登录」。签名用 a_bogus（见 douyin_abogus/）；
+    实测旧的 X-Bogus 反而会被判 antispam（hit_shark，返回空列表）。参数/请求头参考 MediaCrawler：
+    webid、uifid、verifyFp/fp 都取自用户 Cookie，并带 uifid / x-tt-argus 头。
     """
 
     name, label = "douyin", "抖音"
@@ -321,26 +322,40 @@ class DouyinSource:
     async def _search(self, keyword: str, limit: int, cookie: str) -> list[TrendItem]:
         from urllib.parse import urlencode
 
-        from mediaflow.sources.douyin_sign import XBogusSigner
+        from mediaflow.sources.douyin_abogus import ABogus
 
+        ck = _parse_cookie(cookie)
+        uifid = ck.get("UIFID") or ck.get("UIFID_TEMP", "")
         query = {
             "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
-            "pc_client_type": "1", "version_code": "290100", "version_name": "29.1.0",
-            "cookie_enabled": "true", "screen_width": "1920", "screen_height": "1080",
-            "browser_language": "zh-CN", "browser_platform": "Win32", "browser_name": "Chrome",
-            "browser_version": "131.0.0.0", "browser_online": "true", "engine_name": "Blink",
-            "engine_version": "131.0.0.0", "os_name": "Windows", "os_version": "10", "platform": "PC",
-            "msToken": _parse_cookie(cookie).get("msToken", ""),
-            "search_channel": "aweme_video_web", "keyword": keyword, "search_source": "normal_search",
-            "query_correct_type": 1, "is_filter_search": 0, "offset": 0, "count": max(1, min(limit, 20)),
+            "search_channel": "aweme_general", "enable_history": "1", "keyword": keyword,
+            "search_source": "tab_search", "query_correct_type": "1", "is_filter_search": "0",
+            "from_group_id": "", "offset": "0", "count": str(max(1, min(limit, 20))),
+            "need_filter_settings": "1", "list_type": "multi",
+            "update_version_code": "170400", "pc_client_type": "1", "pc_libra_divert": "Windows",
+            "version_code": "190600", "version_name": "19.6.0", "cookie_enabled": "true",
+            "screen_width": "1920", "screen_height": "1080", "browser_language": "zh-CN",
+            "browser_platform": "Win32", "browser_name": "Chrome", "browser_version": "131.0.0.0",
+            "browser_online": "true", "engine_name": "Blink", "engine_version": "131.0.0.0",
+            "os_name": "Windows", "os_version": "10", "cpu_core_num": "8", "device_memory": "8",
+            "platform": "PC", "downlink": "10", "effective_type": "4g", "round_trip_time": "50",
+            "webid": ck.get("webid", ""), "uifid": uifid,
+            "verifyFp": ck.get("s_v_web_id", ""), "fp": ck.get("s_v_web_id", ""),
+            "msToken": ck.get("msToken", ""),
         }
-        url = XBogusSigner(self.UA).sign(
-            "https://www.douyin.com/aweme/v1/web/general/search/single/?" + urlencode(query))
+        qs = urlencode(query)
+        url = (f"https://www.douyin.com/aweme/v1/web/general/search/single/?{qs}"
+               f"&a_bogus={quote(ABogus(self.UA).get_value(qs), safe='')}")
+        headers = {
+            "User-Agent": self.UA, "Cookie": cookie, "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9", "x-tt-argus": "1",
+            "Referer": f"https://www.douyin.com/search/{quote(keyword)}?type=general",
+            "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors",
+        }
+        if uifid:
+            headers["uifid"] = uifid
         async with httpx.AsyncClient(timeout=get_settings().source_timeout) as c:
-            r = await c.get(url, headers={
-                "User-Agent": self.UA, "Cookie": cookie, "Referer": "https://www.douyin.com/",
-                "Accept": "application/json", "Accept-Language": "zh-CN,zh;q=0.9",
-            })
+            r = await c.get(url, headers=headers)
         r.raise_for_status()
         if not r.text.strip():
             raise RuntimeError("抖音返回空内容，Cookie 可能失效了")
@@ -348,10 +363,13 @@ class DouyinSource:
         if data.get("status_code") not in (0, None):
             msg = data.get("status_msg") or data.get("status_code")
             raise RuntimeError(f"抖音：{msg}（Cookie 可能过期）")
+        nil = (data.get("search_nil_info") or {}).get("search_nil_type")
+        if nil == "antispam_check":
+            raise RuntimeError("抖音触发了风控校验，稍后再试，或在浏览器里打开抖音搜一次后重新复制 Cookie")
         out = []
         for raw in data.get("data") or data.get("aweme_list") or []:
             aw = (raw.get("aweme_info") or raw.get("item") or raw) if isinstance(raw, dict) else {}
-            desc, aid = (aw.get("desc") or "").strip(), aw.get("aweme_id")
+            desc, aid = " ".join((aw.get("desc") or "").split()), aw.get("aweme_id")
             if not desc or not aid:
                 continue
             st = aw.get("statistics") or {}

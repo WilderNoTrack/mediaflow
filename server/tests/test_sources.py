@@ -152,14 +152,28 @@ async def test_baidu_without_key_marks_hot(mock_http, creds):
 
 async def test_douyin_search_with_cookie(mock_http, creds):
     routes, seen = mock_http
-    creds["douyin_cookie"] = "sessionid=abc; msToken=tok"
+    creds["douyin_cookie"] = "sessionid=abc; msToken=tok; UIFID=u1; s_v_web_id=verify_x"
     routes["https://www.douyin.com/aweme/v1/web/general/search/single/"] = {"status_code": 0, "data": [
         {"type": 1, "aweme_info": {"aweme_id": "73", "desc": "秋季穿搭一衣多穿", "statistics": {"digg_count": 9}}},
         {"type": 999, "user_list": []}]}
     items = await platforms.DouyinSource().fetch("秋季穿搭", 5)
     assert [i.title for i in items] == ["秋季穿搭一衣多穿"] and items[0].url.endswith("/video/73")
     url = str(seen[-1].url)
-    assert "X-Bogus=" in url and "msToken=tok" in url and seen[-1].headers["cookie"].startswith("sessionid=abc")
+    assert "a_bogus=" in url and "msToken=tok" in url and "verifyFp=verify_x" in url
+    assert seen[-1].headers["cookie"].startswith("sessionid=abc") and seen[-1].headers["uifid"] == "u1"
+    from urllib.parse import parse_qs, urlsplit
+
+    from mediaflow.sources.douyin_abogus.abogus import structure_error
+    assert structure_error(parse_qs(urlsplit(url).query)["a_bogus"][0]) is None
+
+
+async def test_douyin_antispam_is_reported(mock_http, creds):
+    routes, _ = mock_http
+    creds["douyin_cookie"] = "sessionid=abc"
+    routes["https://www.douyin.com/aweme/"] = {"status_code": 0, "data": [],
+                                               "search_nil_info": {"search_nil_type": "antispam_check"}}
+    with pytest.raises(RuntimeError, match="风控"):
+        await platforms.DouyinSource().fetch("穿搭", 5)
 
 
 async def test_douyin_expired_cookie_reports_login(mock_http, creds):
