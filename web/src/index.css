@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #ff2442;
+  --color-brand-soft: #fff0f2;
+  --color-ink: #2c2c2b;
+  --color-muted: #7d7a75;
+  --color-line: #e6e5e3;
+  --color-surface: #f9f8f7;
+  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+html, body, #root { height: 100%; }
+body { @apply bg-surface text-ink antialiased; }
