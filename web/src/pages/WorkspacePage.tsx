@@ -1,66 +1,60 @@
-import { ChevronLeft } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, FileText, Settings, TrendingUp } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { isActive, useAccount, useActiveJobs } from "../api/hooks";
-import { ChatPanel } from "../components/ChatPanel";
-import { DraftsPanel } from "../components/DraftsPanel";
-import { JobProgress } from "../components/JobProgress";
-import { ProfilePanel } from "../components/ProfilePanel";
+import { ConfigPanel } from "../components/ConfigPanel";
+import { ContentsPanel } from "../components/ContentsPanel";
+import { Header } from "../components/Header";
+import { JobDock } from "../components/JobProgress";
 import { TopicsPanel } from "../components/TopicsPanel";
-import { Empty, ErrorText, Spinner, Tabs } from "../components/ui";
+import { Avatar, Button, Empty, Segmented, Spinner } from "../components/ui";
 
-type Tab = "profile" | "topics" | "drafts";
+export type Tab = "contents" | "topics" | "config";
 
 export function WorkspacePage() {
   const { id = "" } = useParams();
   const [sp, setSp] = useSearchParams();
-  const tab = (sp.get("tab") as Tab) || "drafts";
-  const { data: account, isLoading, error } = useAccount(id);
+  const tab = (sp.get("tab") as Tab) || "contents";
+  const setTab = (t: Tab) => setSp({ tab: t });
+  const { data: account, isLoading } = useAccount(id);
   const { data: jobs = [] } = useActiveJobs(id);
-  const [hideDone, setHideDone] = useState<string[]>([]);
 
-  if (isLoading) return <div className="p-8"><Spinner /></div>;
-  if (!account) return <div className="p-8"><Empty title="找不到这个账号" /><ErrorText error={error} /></div>;
+  if (isLoading) return <div className="flex justify-center py-20"><Spinner className="size-6" /></div>;
+  if (!account) return <Empty title="找不到这个账号" action={<Link to="/"><Button size="sm">回到账号列表</Button></Link>} />;
 
   const writing = jobs.some((j) => j.kind === "write_draft" && isActive(j));
-  const visibleJobs = jobs.filter((j) => isActive(j) || !hideDone.includes(j.id)).slice(0, 3);
 
   return (
-    <div className="flex h-full">
-      <aside className="flex w-[380px] shrink-0 flex-col border-r border-line bg-white">
-        <ChatPanel accountId={id} />
-      </aside>
-      <main className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-2 border-b border-line bg-white px-4 py-3">
-          <Link to="/" className="text-muted hover:text-ink" aria-label="返回"><ChevronLeft className="size-5" /></Link>
-          <div className="font-semibold">{account.name}</div>
-          {account.theme && <div className="truncate text-sm text-muted">· {account.theme}</div>}
-        </div>
-        <div className="bg-white">
-          <Tabs<Tab>
-            value={tab}
-            onChange={(v) => setSp({ tab: v })}
-            items={[{ value: "drafts", label: "草稿" }, { value: "topics", label: "选题" }, { value: "profile", label: "定位与规矩" }]}
-          />
-        </div>
-        {visibleJobs.length > 0 && (
-          <div className="space-y-2 border-b border-line bg-white px-4 py-3">
-            {visibleJobs.map((j) => (
-              <div key={j.id} className="relative">
-                <JobProgress job={j} />
-                {!isActive(j) && (
-                  <button onClick={() => setHideDone([...hideDone, j.id])} className="absolute right-2 top-2 cursor-pointer text-xs text-muted hover:text-ink">关闭</button>
-                )}
-              </div>
-            ))}
+    <div className="min-h-full bg-gradient-to-br from-slate-50 via-white to-indigo-50/40">
+      <Header
+        narrow
+        left={<>
+          <Link to="/"><Button variant="ghost" size="sm"><ArrowLeft />账号列表</Button></Link>
+          <div className="flex min-w-0 items-center gap-2">
+            <Avatar name={account.name} size="sm" />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{account.name}</div>
+              {account.theme && <div className="truncate text-xs text-muted-foreground">{account.theme}</div>}
+            </div>
           </div>
-        )}
-        <div className="flex-1 overflow-y-auto">
-          {tab === "profile" && <ProfilePanel account={account} />}
-          {tab === "topics" && <TopicsPanel accountId={id} />}
-          {tab === "drafts" && <DraftsPanel accountId={id} busy={writing} />}
-        </div>
-      </main>
+        </>}
+        right={
+          <Segmented<Tab>
+            value={tab}
+            onChange={setTab}
+            items={[
+              { value: "contents", label: "内容", icon: <FileText /> },
+              { value: "topics", label: "选题", icon: <TrendingUp /> },
+              { value: "config", label: "配置", icon: <Settings /> },
+            ]}
+          />
+        }
+      />
+      <div className={`container mx-auto px-4 py-6 ${tab === "config" ? "max-w-5xl" : "max-w-4xl"}`}>
+        {tab === "contents" && <ContentsPanel accountId={id} busy={writing} onGoTopics={() => setTab("topics")} />}
+        {tab === "topics" && <TopicsPanel account={account} busy={writing} onGoConfig={() => setTab("config")} />}
+        {tab === "config" && <ConfigPanel account={account} busy={writing} />}
+      </div>
+      <JobDock jobs={jobs} />
     </div>
   );
 }
