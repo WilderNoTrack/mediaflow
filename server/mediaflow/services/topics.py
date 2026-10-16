@@ -28,9 +28,9 @@ class TopicProposal:
     @property
     def source_note(self) -> str:
         failed = self.report.failed_labels
-        if not self.report.statuses:
-            return ""
-        if len(failed) == len(self.report.statuses):
+        if not self.report.enabled:
+            return "没有可用的热点来源，本次选题完全由 AI 根据账号定位构思" if self.report.statuses else ""
+        if len(failed) == len(self.report.enabled):
             return "所有热点来源都没抓到数据，本次选题完全由 AI 根据账号定位构思"
         if failed:
             return f"{'、'.join(failed)} 没抓到数据，其余来源正常"

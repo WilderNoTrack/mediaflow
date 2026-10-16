@@ -25,6 +25,7 @@ class TrendItem:
     url: str = ""
     heat: str = ""
     snippet: str = ""
+    kind: str = "search"  # "search" 关键词搜索结果；"hot" 热榜兜底
 
 
 @dataclass
@@ -34,6 +35,7 @@ class SourceStatus:
     ok: bool
     count: int = 0
     note: str = ""
+    mode: str = ""  # "search" | "hot" | "off"（没配置凭据，未启用）
 
 
 @dataclass
@@ -43,7 +45,15 @@ class SourceReport:
 
     @property
     def failed_labels(self) -> list[str]:
-        return [s.label for s in self.statuses if not s.ok]
+        return [s.label for s in self.statuses if not s.ok and s.mode != "off"]
+
+    @property
+    def enabled(self) -> list[SourceStatus]:
+        return [s for s in self.statuses if s.mode != "off"]
+
+
+class NotConfigured(RuntimeError):
+    """来源需要的凭据没配置：不算失败，只标记为未启用。"""
 
 
 class Source(Protocol):

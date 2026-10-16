@@ -1,7 +1,14 @@
-"""各平台抓取实现（从 v1 移植并改为 async）。
+"""各平台抓取实现。
 
-抖音关键词搜索、小红书搜索需要签名或登录态，v1 里也经常失效，第一期先不接，
-只保留稳定可用的来源。新增来源：写一个类，加进 ALL_SOURCES。
+优先「关键词搜索」，配了凭据才启用；没配时能退回热榜的就退回热榜（条目标 kind="hot"），
+退不了的抛 NotConfigured，界面显示为「未启用」。凭据在设置里填，见 mediaflow/credentials.py。
+
+- 知乎：知乎数据开放平台官方搜索 API（Access Secret）
+- 百度：百度千帆 AI 搜索 API（官方，返回百度搜索结果）
+- 抖音：网页版搜索接口 + 登录 Cookie + X-Bogus 签名（做法参考 OpenBiliClaw）
+- B站：WBI 签名搜索，游客 buvid 即可，配 Cookie 更稳
+- 微博：s.weibo.com 搜索 + 登录 Cookie
+新增来源：写一个类，加进底部的来源列表。
 """
 
 from __future__ import annotations
@@ -15,7 +22,8 @@ from urllib.parse import quote
 import httpx
 
 from mediaflow.config import get_settings
-from mediaflow.sources.base import DESKTOP_UA, MOBILE_UA, TrendItem
+from mediaflow import credentials
+from mediaflow.sources.base import DESKTOP_UA, MOBILE_UA, NotConfigured, TrendItem
 
 _TAG = re.compile(r"<[^>]+>")
 
@@ -24,10 +32,10 @@ class WeiboSource:
     name, label = "weibo", "微博"
 
     async def fetch(self, keyword: str, limit: int) -> list[TrendItem]:
-        s = get_settings()
-        async with httpx.AsyncClient(timeout=s.source_timeout, follow_redirects=False) as c:
-            if s.weibo_cookie and keyword:
-                items = await self._search(c, keyword, limit, s.weibo_cookie)
+        cookie = credentials.get("weibo_cookie")
+        async with httpx.AsyncClient(timeout=get_settings().source_timeout, follow_redirects=False) as c:
+            if cookie and keyword:
+                items = await self._search(c, keyword, limit, cookie)
                 if items:
                     return items
             return _prefer_keyword(await self._hot(c), keyword, limit)
@@ -41,7 +49,7 @@ class WeiboSource:
             headers={"User-Agent": DESKTOP_UA, "Referer": "https://weibo.com/", "Cookie": cookie},
         )
         if r.status_code != 200:
-            return []
+            return []  # Cookie 过期会 302 到登录页，退回热榜
         soup = BeautifulSoup(r.text, "html.parser")
         out = []
         for card in soup.select("div.card-wrap[mid]")[:limit]:
@@ -50,7 +58,10 @@ class WeiboSource:
                 continue
             text = re.sub(r"\s*全文\s*$", "", el.get_text(" ", strip=True)).strip()
             if text:
-                out.append(TrendItem(title=text[:80], source=self.name))
+                link = card.select_one("div.from a[href]")
+                href = link["href"] if link else ""
+                out.append(TrendItem(title=text[:80], source=self.name, snippet=text[:200],
+                                     url=("https:" + href) if href.startswith("//") else href))
         return out
 
     async def _hot(self, c: httpx.AsyncClient) -> list[TrendItem]:
@@ -60,7 +71,7 @@ class WeiboSource:
         )
         r.raise_for_status()
         return [
-            TrendItem(title=it["note"], source=self.name, heat=str(it.get("num", "")),
+            TrendItem(title=it["note"], source=self.name, heat=str(it.get("num", "")), kind="hot",
                       url=f"https://s.weibo.com/weibo?q=%23{quote(it['note'])}%23")
             for it in r.json().get("data", {}).get("realtime", [])
             if it.get("note") and not it.get("is_ad")
@@ -68,17 +79,41 @@ class WeiboSource:
 
 
 class BaiduSource:
-    """百度热搜榜。
+    """百度：配了千帆 API Key 就走官方 AI 搜索（百度搜索结果），否则退回百度热搜榜。
 
-    v1 用的是百度网页搜索，云服务器 IP 基本必弹人机验证；改用热搜榜页面里内嵌的
-    s-data JSON（做法参考 imsyy/DailyHotApi），不需要登录也不触发验证。
-    有关键词时只保留标题/描述里命中关键词的条目，命中太少则返回整榜给模型挑。
+    百度网页搜索对非浏览器请求基本必弹人机验证，所以不直接抓 baidu.com/s。
+    千帆接口参考 HKUDS/DeepTutor 的 qianfan provider；热搜榜解析参考 imsyy/DailyHotApi。
     """
 
     name, label = "baidu", "百度"
     _SDATA = re.compile(r"<!--s-data:(.*?)-->", re.S)
+    SEARCH_URL = "https://qianfan.baidubce.com/v2/ai_search/web_search"
 
     async def fetch(self, keyword: str, limit: int) -> list[TrendItem]:
+        key = credentials.get("qianfan_api_key")
+        if key and keyword:
+            return await self._search(keyword, limit, key)
+        return await self._hot(keyword, limit)
+
+    async def _search(self, keyword: str, limit: int, key: str) -> list[TrendItem]:
+        async with httpx.AsyncClient(timeout=max(get_settings().source_timeout, 20)) as c:
+            r = await c.post(self.SEARCH_URL, headers={"Authorization": f"Bearer {key}"}, json={
+                "messages": [{"role": "user", "content": keyword[:72]}],
+                "search_source": "baidu_search_v2",
+                "resource_type_filter": [{"type": "web", "top_k": max(1, min(limit, 20))}],
+                "search_recency_filter": "month",
+            })
+        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        if r.status_code != 200 or data.get("code") not in (None, 0, "0"):
+            raise RuntimeError(f"千帆搜索出错：{data.get('message') or r.status_code}"[:60])
+        return [
+            TrendItem(title=(it.get("title") or "").strip(), source=self.name, url=it.get("url", ""),
+                      snippet=(it.get("snippet") or it.get("content") or "")[:200],
+                      heat=it.get("date", "") or "")
+            for it in data.get("references") or [] if it.get("title")
+        ][:limit]
+
+    async def _hot(self, keyword: str, limit: int) -> list[TrendItem]:
         import json
 
         async with httpx.AsyncClient(timeout=get_settings().source_timeout) as c:
@@ -102,11 +137,46 @@ class BaiduSource:
             if not t:
                 continue
             items.append(TrendItem(
-                title=t, source=self.name, heat=str(it.get("hotScore", "")),
+                title=t, source=self.name, heat=str(it.get("hotScore", "")), kind="hot",
                 url=f"https://www.baidu.com/s?wd={quote(it.get('query') or t)}",
                 snippet=(it.get("desc") or "")[:200],
             ))
         return _prefer_keyword(items, keyword, limit)
+
+
+class ZhihuSource:
+    """知乎数据开放平台官方搜索 API（developer.zhihu.com）。
+
+    鉴权：Authorization: Bearer <Access Secret> + X-Request-Timestamp（与服务器时差需 < 10 分钟）。
+    接口与错误码参考 dsh-plugin-lab/dsh-zhihu-search 的实测记录。
+    """
+
+    name, label = "zhihu", "知乎"
+    URL = "https://developer.zhihu.com/api/v1/content/zhihu_search"
+    _ERRORS = {20001: "Access Secret 无效，或电脑时间不准", 30001: "请求太频繁/额度用完", 10001: "参数被拒绝"}
+
+    async def fetch(self, keyword: str, limit: int) -> list[TrendItem]:
+        secret = credentials.get("zhihu_access_secret")
+        if not secret:
+            raise NotConfigured("没配置知乎开放平台 Access Secret")
+        if not keyword:
+            return []
+        async with httpx.AsyncClient(timeout=get_settings().source_timeout) as c:
+            for attempt in range(2):
+                r = await c.get(self.URL, params={"Query": keyword, "Count": max(1, min(limit, 10))}, headers={
+                    "Authorization": f"Bearer {secret}", "X-Request-Timestamp": str(int(time.time())),
+                })
+                data = r.json()
+                if data.get("Code") != 90001 or attempt:  # 90001 服务端错误可重试一次
+                    break
+        code = data.get("Code")
+        if code != 0:
+            raise RuntimeError(f"知乎：{self._ERRORS.get(code, data.get('Message') or code)}")
+        return [
+            TrendItem(title=it["Title"], source=self.name, url=it.get("Url", ""),
+                      heat=f"{it.get('VoteUpCount', 0)}赞", snippet=_TAG.sub("", it.get("ContentText") or "")[:200])
+            for it in (data.get("Data") or {}).get("Items") or [] if it.get("Title")
+        ]
 
 
 def _prefer_keyword(items: list[TrendItem], keyword: str, limit: int) -> list[TrendItem]:
@@ -133,7 +203,8 @@ class ToutiaoSource:
             )
         r.raise_for_status()
         items = [
-            TrendItem(title=it["Title"], source=self.name, heat=str(it.get("HotValue", "")), url=it.get("Url", ""))
+            TrendItem(title=it["Title"], source=self.name, heat=str(it.get("HotValue", "")), url=it.get("Url", ""),
+                      kind="hot")
             for it in r.json().get("data", []) if it.get("Title")
         ]
         return _prefer_keyword(items, keyword, limit)
@@ -141,6 +212,15 @@ class ToutiaoSource:
 
 _WBI_ENC = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
             33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13]
+
+
+def _parse_cookie(raw: str) -> dict[str, str]:
+    out = {}
+    for part in raw.split(";"):
+        k, sep, v = part.strip().partition("=")
+        if sep and k:
+            out[k] = v
+    return out
 
 
 class BilibiliSource:
@@ -165,6 +245,12 @@ class BilibiliSource:
 
         做法参考 SocialSisterYi/bilibili-API-collect：先从 finger/spi 领一个游客 buvid。
         """
+        user_ck = credentials.get("bilibili_cookie")
+        if user_ck:
+            for k, v in _parse_cookie(user_ck).items():
+                c.cookies.set(k, v, domain=".bilibili.com")
+            if "buvid3" in c.cookies:
+                return
         ck, exp = BilibiliSource._buvid
         if not ck or exp < time.time():
             d = (await c.get("https://api.bilibili.com/x/frontend/finger/spi")).json().get("data") or {}
@@ -196,8 +282,9 @@ class BilibiliSource:
             t = html.unescape(_TAG.sub("", it.get("title", "")))
             if t:
                 out.append(TrendItem(
-                    title=t, source=self.name, heat=str(it.get("play", "")),
+                    title=t, source=self.name, heat=f"{it.get('play', '')}播放",
                     url=f"https://www.bilibili.com/video/{it.get('bvid', '')}",
+                    snippet=html.unescape(_TAG.sub("", it.get("description", "")))[:200],
                 ))
         return out
 
@@ -208,16 +295,73 @@ class BilibiliSource:
         if r.json().get("code") not in (0, None):
             raise RuntimeError(f"B站排行榜被风控（code={r.json().get('code')}）")
         return [
-            TrendItem(title=it["title"], source=self.name, heat=str((it.get("stat") or {}).get("view", "")),
+            TrendItem(title=it["title"], source=self.name, heat=str((it.get("stat") or {}).get("view", "")), kind="hot",
                       url=f"https://www.bilibili.com/video/{it.get('bvid', '')}")
             for it in (r.json().get("data") or {}).get("list", [])[:limit] if it.get("title")
         ]
 
 
-class DouyinHotSource:
-    name, label = "douyin", "抖音热榜"
+class DouyinSource:
+    """抖音：配了登录 Cookie 就用网页版综合搜索接口，否则退回抖音热榜。
+
+    搜索接口未登录会返回 status_code=2483「请先登录」；签名用 X-Bogus（见 douyin_sign.py），
+    请求参数参考 whiteguo233/OpenBiliClaw 的 douyin_direct。
+    """
+
+    name, label = "douyin", "抖音"
+    UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
     async def fetch(self, keyword: str, limit: int) -> list[TrendItem]:
+        cookie = credentials.get("douyin_cookie")
+        if cookie and keyword:
+            return await self._search(keyword, limit, cookie)
+        return await self._hot(keyword, limit)
+
+    async def _search(self, keyword: str, limit: int, cookie: str) -> list[TrendItem]:
+        from urllib.parse import urlencode
+
+        from mediaflow.sources.douyin_sign import XBogusSigner
+
+        query = {
+            "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
+            "pc_client_type": "1", "version_code": "290100", "version_name": "29.1.0",
+            "cookie_enabled": "true", "screen_width": "1920", "screen_height": "1080",
+            "browser_language": "zh-CN", "browser_platform": "Win32", "browser_name": "Chrome",
+            "browser_version": "131.0.0.0", "browser_online": "true", "engine_name": "Blink",
+            "engine_version": "131.0.0.0", "os_name": "Windows", "os_version": "10", "platform": "PC",
+            "msToken": _parse_cookie(cookie).get("msToken", ""),
+            "search_channel": "aweme_video_web", "keyword": keyword, "search_source": "normal_search",
+            "query_correct_type": 1, "is_filter_search": 0, "offset": 0, "count": max(1, min(limit, 20)),
+        }
+        url = XBogusSigner(self.UA).sign(
+            "https://www.douyin.com/aweme/v1/web/general/search/single/?" + urlencode(query))
+        async with httpx.AsyncClient(timeout=get_settings().source_timeout) as c:
+            r = await c.get(url, headers={
+                "User-Agent": self.UA, "Cookie": cookie, "Referer": "https://www.douyin.com/",
+                "Accept": "application/json", "Accept-Language": "zh-CN,zh;q=0.9",
+            })
+        r.raise_for_status()
+        if not r.text.strip():
+            raise RuntimeError("抖音返回空内容，Cookie 可能失效了")
+        data = r.json()
+        if data.get("status_code") not in (0, None):
+            msg = data.get("status_msg") or data.get("status_code")
+            raise RuntimeError(f"抖音：{msg}（Cookie 可能过期）")
+        out = []
+        for raw in data.get("data") or data.get("aweme_list") or []:
+            aw = (raw.get("aweme_info") or raw.get("item") or raw) if isinstance(raw, dict) else {}
+            desc, aid = (aw.get("desc") or "").strip(), aw.get("aweme_id")
+            if not desc or not aid:
+                continue
+            st = aw.get("statistics") or {}
+            out.append(TrendItem(
+                title=desc[:80], source=self.name, snippet=desc[:200],
+                heat=f"{st.get('digg_count', 0)}赞", url=f"https://www.douyin.com/video/{aid}",
+            ))
+        return out[:limit]
+
+    async def _hot(self, keyword: str, limit: int) -> list[TrendItem]:
         async with httpx.AsyncClient(timeout=get_settings().source_timeout) as c:
             r = await c.get(
                 "https://www.iesdouyin.com/web/api/v2/hotsearch/billboard/word/",
@@ -225,11 +369,11 @@ class DouyinHotSource:
             )
         r.raise_for_status()
         items = [
-            TrendItem(title=it["word"], source=self.name, heat=str(it.get("hot_value", "")),
+            TrendItem(title=it["word"], source=self.name, heat=str(it.get("hot_value", "")), kind="hot",
                       url=f"https://www.douyin.com/search/{quote(it['word'])}")
             for it in r.json().get("word_list", []) if it.get("word")
         ]
         return _prefer_keyword(items, keyword, limit)
 
 
-ALL_SOURCES = [WeiboSource(), BaiduSource(), BilibiliSource(), DouyinHotSource(), ToutiaoSource()]
+ALL_SOURCES = [ZhihuSource(), BaiduSource(), DouyinSource(), BilibiliSource(), WeiboSource(), ToutiaoSource()]

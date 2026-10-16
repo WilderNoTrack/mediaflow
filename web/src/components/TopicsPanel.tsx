@@ -1,11 +1,12 @@
-import { AlertCircle, ExternalLink, Plus, Search, TrendingUp, Zap } from "lucide-react";
+import { AlertCircle, ExternalLink, KeyRound, Plus, Search, TrendingUp, Zap } from "lucide-react";
 import { useState } from "react";
 import type { Account, S, Topic } from "../api/client";
 import { useTopicActions, useTopics, useWrite } from "../api/hooks";
 import { cn, PLATFORMS } from "../lib/utils";
+import { SourcesDialog } from "./SourcesDialog";
 import { Badge, Button, Card, CardBody, CardHead, Empty, ErrorText, Input, Spinner } from "./ui";
 
-const SOURCES = ["weibo", "baidu", "bilibili", "douyin", "toutiao"];
+const SOURCES = ["zhihu", "baidu", "douyin", "bilibili", "weibo", "toutiao"];
 
 export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; busy: boolean; onGoConfig: () => void }) {
   const { data: topics = [], isLoading } = useTopics(account.id);
@@ -15,6 +16,7 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
   const [manual, setManual] = useState("");
   const [result, setResult] = useState<S["TopicSearchOut"] | null>(null);
   const [writingId, setWritingId] = useState<string | null>(null);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const fresh = topics.filter((t) => t.status === "new");
   const used = topics.filter((t) => t.status === "used");
   const status = (src: string) => result?.sources.find((s) => s.source === src);
@@ -32,7 +34,9 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
       )}
 
       <Card>
-        <CardHead icon={<Search />} title="搜索选题热点" desc="AI 会抓取多平台热榜，按账号定位筛出适合的选题和切入角度" />
+        <CardHead icon={<Search />} title="搜索选题热点" desc="AI 会在各平台按关键词搜索（没配置的平台用热榜），按账号定位筛出适合的选题和切入角度"
+          action={<Button size="sm" variant="ghost" onClick={() => setSourcesOpen(true)}><KeyRound />数据来源</Button>} />
+        {sourcesOpen && <SourcesDialog onClose={() => setSourcesOpen(false)} />}
         <CardBody className="space-y-4">
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); doSearch(direction); }}>
             <Input placeholder="输入方向或关键词，留空则按账号定位搜索…" value={direction} onChange={(e) => setDirection(e.target.value)} />
@@ -44,8 +48,12 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
             {SOURCES.map((src) => {
               const st = status(src);
               return (
-                <Badge key={src} className={cn("rounded-full px-2.5 py-1", PLATFORMS[src].cls, st && !st.ok && "bg-red-50 text-red-500 line-through")}>
-                  <span title={st?.note}>{PLATFORMS[src].label}{st?.ok && ` · ${st.count}`}</span>
+                <Badge key={src} className={cn("rounded-full px-2.5 py-1", PLATFORMS[src].cls,
+                  st?.mode === "off" && "bg-gray-100 text-gray-400",
+                  st && !st.ok && st.mode !== "off" && "bg-red-50 text-red-500 line-through")}>
+                  <span title={st?.note}>
+                    {PLATFORMS[src].label}{st?.ok && ` · ${st.mode === "hot" ? "热榜" : "搜索"} ${st.count}`}{st?.mode === "off" && " · 未配置"}
+                  </span>
                 </Badge>
               );
             })}

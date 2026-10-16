@@ -25,6 +25,7 @@ export const DRAFT_STATUS: Record<string, { label: string; cls: string }> = {
 
 /** 与 v1 一致的平台色 */
 export const PLATFORMS: Record<string, { label: string; cls: string }> = {
+  zhihu: { label: "知乎", cls: "bg-sky-100 text-sky-700" },
   weibo: { label: "微博", cls: "bg-orange-100 text-orange-700" },
   baidu: { label: "百度", cls: "bg-blue-100 text-blue-700" },
   bilibili: { label: "B站", cls: "bg-cyan-100 text-cyan-700" },

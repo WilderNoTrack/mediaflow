@@ -29,6 +29,10 @@ class Settings(BaseSettings):
 
     # 选题来源
     weibo_cookie: str = ""
+    zhihu_access_secret: str = ""
+    qianfan_api_key: str = ""
+    douyin_cookie: str = ""
+    bilibili_cookie: str = ""
     source_timeout: float = 12.0
 
     # 运行

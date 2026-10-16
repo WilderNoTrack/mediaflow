@@ -94,6 +94,7 @@ class SourceStatusOut(BaseModel):
     ok: bool
     count: int
     note: str
+    mode: str = ""
 
 
 class TopicSearchIn(BaseModel):

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from mediaflow import __version__
-from mediaflow.api import accounts, drafts, misc, topics
+from mediaflow.api import accounts, drafts, misc, settings, topics
 from mediaflow.config import get_settings
 from mediaflow.db import init_db
 from mediaflow.jobs.queue import JobConflict, recover_interrupted, worker_loop
@@ -48,7 +48,7 @@ def create_app(*, background: bool = True) -> FastAPI:
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                        allow_methods=["*"], allow_headers=["*"])
 
-    for r in (accounts.router, topics.router, drafts.router, misc.router):
+    for r in (accounts.router, topics.router, drafts.router, misc.router, settings.router):
         app.include_router(r)
 
     @app.exception_handler(LookupError)

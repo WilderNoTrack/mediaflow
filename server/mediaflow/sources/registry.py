@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 
-from mediaflow.sources.base import Source, SourceReport, SourceStatus
+from mediaflow.sources.base import NotConfigured, Source, SourceReport, SourceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +27,19 @@ async def fetch_all(keyword: str, limit: int = 8, sources: Sequence[Source] | No
     report = SourceReport()
     for src, items, err in await asyncio.gather(*(one(s) for s in sources)):
         report.items.extend(items)
-        if err is not None:
+        mode = "hot" if items and all(i.kind == "hot" for i in items) else ("search" if items else "")
+        if isinstance(err, NotConfigured):
+            mode, note = "off", str(err)
+        elif err is not None:
             msg = str(err)
-            note = f"抓取失败（{msg if 0 < len(msg) <= 40 else type(err).__name__}）"
+            note = f"抓取失败（{msg if 0 < len(msg) <= 60 else type(err).__name__}）"
         elif not items:
-            note = "没有拿到结果"
+            note = "没有搜到结果"
+        elif mode == "hot" and keyword:
+            note = "没配置搜索，用的热榜（和关键词相关的排前面）"
         else:
             note = ""
         report.statuses.append(SourceStatus(
-            source=src.name, label=src.label, ok=bool(items), count=len(items), note=note,
+            source=src.name, label=src.label, ok=bool(items), count=len(items), note=note, mode=mode,
         ))
     return report

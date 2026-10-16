@@ -1,8 +1,9 @@
-import { AlertCircle, Bot, CheckCircle2, Clock, FileText, Plus, Sparkles, Trash2 } from "lucide-react";
+import { AlertCircle, Bot, KeyRound, CheckCircle2, Clock, FileText, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAccounts, useCreateAccount, useDeleteAccount } from "../api/hooks";
 import { Header } from "../components/Header";
+import { SourcesDialog } from "../components/SourcesDialog";
 import { Avatar, Badge, Button, ErrorText, Input, Label, Logo, Modal, Spinner, Textarea } from "../components/ui";
 
 export function AccountsPage() {
@@ -11,6 +12,7 @@ export function AccountsPage() {
   const del = useDeleteAccount();
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [form, setForm] = useState({ name: "", theme: "", audience: "" });
 
   return (
@@ -23,7 +25,9 @@ export function AccountsPage() {
             <div className="text-xs text-muted-foreground">账号孵化中台</div>
           </div>
         </>}
+        right={<Button variant="outline" size="sm" onClick={() => setSourcesOpen(true)}><KeyRound />数据来源</Button>}
       />
+      {sourcesOpen && <SourcesDialog onClose={() => setSourcesOpen(false)} />}
 
       <div className="container mx-auto max-w-5xl px-6 py-10">
         <div className="mb-8 flex items-end justify-between">

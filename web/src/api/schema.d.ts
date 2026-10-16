@@ -334,6 +334,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Credentials */
+        get: operations["list_credentials_api_settings_credentials_get"];
+        /** Update Credentials */
+        put: operations["update_credentials_api_settings_credentials_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/sources/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Sources */
+        post: operations["test_sources_api_settings_sources_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -509,6 +544,38 @@ export interface components {
          * @enum {string}
          */
         ChatRole: "user" | "assistant" | "tool";
+        /** CredentialOut */
+        CredentialOut: {
+            /** Key */
+            key: string;
+            /** Platform */
+            platform: string;
+            /** Label */
+            label: string;
+            /** Kind */
+            kind: string;
+            /** Help */
+            help: string;
+            /** Url */
+            url: string;
+            /** Configured */
+            configured: boolean;
+            /**
+             * Origin
+             * @description ui=界面里填的；env=来自 .env；空=没配置
+             */
+            origin: string;
+        };
+        /** CredentialsIn */
+        CredentialsIn: {
+            /**
+             * Values
+             * @description null 不改；空字符串清除
+             */
+            values: {
+                [key: string]: string | null;
+            };
+        };
         /** DraftDetail */
         DraftDetail: {
             /** Id */
@@ -726,6 +793,17 @@ export interface components {
          * @enum {string}
          */
         RuleSource: "user" | "chat" | "learned";
+        /** SourceSample */
+        SourceSample: {
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+            /** Heat */
+            heat: string;
+            /** Kind */
+            kind: string;
+        };
         /** SourceStatusOut */
         SourceStatusOut: {
             /** Source */
@@ -738,6 +816,30 @@ export interface components {
             count: number;
             /** Note */
             note: string;
+            /**
+             * Mode
+             * @default
+             */
+            mode: string;
+        };
+        /** SourceTestIn */
+        SourceTestIn: {
+            /**
+             * Keyword
+             * @default 秋季穿搭
+             */
+            keyword: string;
+        };
+        /** SourceTestOut */
+        SourceTestOut: {
+            /** Keyword */
+            keyword: string;
+            /** Sources */
+            sources: components["schemas"]["SourceStatusOut"][];
+            /** Samples */
+            samples: {
+                [key: string]: components["schemas"]["SourceSample"][];
+            };
         };
         /** SystemStatus */
         SystemStatus: {
@@ -1660,6 +1762,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_credentials_api_settings_credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialOut"][];
+                };
+            };
+        };
+    };
+    update_credentials_api_settings_credentials_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_sources_api_settings_sources_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceTestIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceTestOut"];
                 };
             };
             /** @description Validation Error */

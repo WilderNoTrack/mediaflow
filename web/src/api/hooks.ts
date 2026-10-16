@@ -180,3 +180,20 @@ export function useSendChat(id: string) {
     },
   });
 }
+
+export const useCredentials = () =>
+  useQuery({ queryKey: ["credentials"], queryFn: () => unwrap(api.GET("/api/settings/credentials")) });
+
+export function useSaveCredentials() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (values: Record<string, string | null>) =>
+      unwrap(api.PUT("/api/settings/credentials", { body: { values } })),
+    onSuccess: (d) => qc.setQueryData(["credentials"], d),
+  });
+}
+
+export const useTestSources = () =>
+  useMutation({
+    mutationFn: (keyword: string) => unwrap(api.POST("/api/settings/sources/test", { body: { keyword } })),
+  });
