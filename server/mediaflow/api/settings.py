@@ -114,3 +114,15 @@ async def bilibili_refresh():
     from mediaflow.sources.bili_auth import refresh_if_needed
     res = await refresh_if_needed(force=False)
     return QrPollOut(status=res.split(":")[0], message=res.partition(":")[2])
+
+
+@router.post("/xiaohongshu/qrcode", response_model=QrOut)
+async def xiaohongshu_qrcode():
+    from mediaflow.sources.xhs import qr_create
+    return QrOut(**await qr_create())
+
+
+@router.get("/xiaohongshu/qrcode/{key}", response_model=QrPollOut)
+async def xiaohongshu_qrcode_poll(key: str):
+    from mediaflow.sources.xhs import qr_poll
+    return QrPollOut(**await qr_poll(key))

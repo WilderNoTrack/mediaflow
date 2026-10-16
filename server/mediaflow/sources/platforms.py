@@ -5,9 +5,11 @@
 
 - 知乎：知乎数据开放平台官方搜索 API（Access Secret）
 - 百度：百度千帆 AI 搜索 API（官方，返回百度搜索结果）
-- 抖音：网页版搜索接口 + 登录 Cookie + X-Bogus 签名（做法参考 OpenBiliClaw）
+- 小红书：网页版笔记搜索 + 扫码登录 + xhshow 签名（xhs.py）
+- 抖音：网页版搜索接口 + 登录 Cookie + a_bogus 签名（douyin_abogus/）
 - B站：WBI 签名搜索，游客 buvid 即可，配 Cookie 更稳
 - 微博：s.weibo.com 搜索 + 登录 Cookie
+- 微信文章：搜狗微信搜索，无需配置
 新增来源：写一个类，加进底部的来源列表。
 """
 
@@ -189,25 +191,56 @@ def _prefer_keyword(items: list[TrendItem], keyword: str, limit: int) -> list[Tr
     return (hit + rest)[:limit]
 
 
-class ToutiaoSource:
-    """今日头条热榜（无需登录，参考 imsyy/DailyHotApi）。"""
+class XiaohongshuSource:
+    """小红书笔记搜索：必须扫码登录（游客会话没有搜索权限），实现见 xhs.py。"""
 
-    name, label = "toutiao", "头条"
+    name, label = "xiaohongshu", "小红书"
 
     async def fetch(self, keyword: str, limit: int) -> list[TrendItem]:
+        cookie = credentials.get("xhs_cookie")
+        if not cookie:
+            raise NotConfigured("没登录小红书，在「数据来源」里扫码登录")
+        if not keyword:
+            return []
+        from mediaflow.sources.xhs import search
+        return await search(keyword, limit, cookie, timeout=get_settings().source_timeout)
+
+
+class WechatSource:
+    """微信公众号文章：搜狗微信搜索（weixin.sogou.com），无需配置。
+
+    做法参考 zjp1997720/wechat-article-search。搜得太频繁搜狗会要求验证码，此时报错由上层标为失败。
+    """
+
+    name, label = "wechat", "微信文章"
+
+    async def fetch(self, keyword: str, limit: int) -> list[TrendItem]:
+        if not keyword:
+            return []
+        from bs4 import BeautifulSoup
+
         async with httpx.AsyncClient(timeout=get_settings().source_timeout) as c:
-            r = await c.get(
-                "https://www.toutiao.com/hot-event/hot-board/",
-                params={"origin": "toutiao_pc"},
-                headers={"User-Agent": DESKTOP_UA},
-            )
+            r = await c.get("https://weixin.sogou.com/weixin", params={"type": "2", "query": keyword, "ie": "utf8"},
+                            headers={"User-Agent": DESKTOP_UA, "Accept-Language": "zh-CN,zh;q=0.9"})
+        if r.status_code in (301, 302) or "antispider" in str(r.url) or "antispider" in r.text[:3000]:
+            raise RuntimeError("搜狗微信要求验证码（搜得太频繁），稍后再试")
         r.raise_for_status()
-        items = [
-            TrendItem(title=it["Title"], source=self.name, heat=str(it.get("HotValue", "")), url=it.get("Url", ""),
-                      kind="hot")
-            for it in r.json().get("data", []) if it.get("Title")
-        ]
-        return _prefer_keyword(items, keyword, limit)
+        out = []
+        for li in BeautifulSoup(r.text, "html.parser").select("ul.news-list > li"):
+            a = li.select_one("h3 a")
+            if not a or not a.get_text(strip=True):
+                continue
+            href = a.get("href", "")
+            account = li.select_one("span.all-time-y2")
+            m = re.search(r"timeConvert\('(\d+)'\)", str(li))
+            date = time.strftime("%Y-%m-%d", time.localtime(int(m.group(1)))) if m else ""
+            out.append(TrendItem(
+                title=a.get_text("", strip=True)[:80], source=self.name,
+                url=("https://weixin.sogou.com" + href) if href.startswith("/") else href,
+                heat=" · ".join(x for x in (account.get_text(strip=True) if account else "", date) if x),
+                snippet=(li.select_one("p.txt-info").get_text("", strip=True) if li.select_one("p.txt-info") else "")[:200],
+            ))
+        return out[:limit]
 
 
 _WBI_ENC = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
@@ -394,4 +427,5 @@ class DouyinSource:
         return _prefer_keyword(items, keyword, limit)
 
 
-ALL_SOURCES = [ZhihuSource(), BaiduSource(), DouyinSource(), BilibiliSource(), WeiboSource(), ToutiaoSource()]
+ALL_SOURCES = [XiaohongshuSource(), ZhihuSource(), BaiduSource(), DouyinSource(), BilibiliSource(), WeiboSource(),
+               WechatSource()]

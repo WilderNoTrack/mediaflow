@@ -24,6 +24,10 @@ class CredSpec:
 
 
 SPECS: list[CredSpec] = [
+    CredSpec("xhs_cookie", "xiaohongshu", "小红书登录", "cookie",
+             "小红书搜索必须登录。推荐点「扫码登录」，用小红书 App 扫码（建议用小号，主号频繁搜索可能被限流）；"
+             "也可以手动粘贴 xiaohongshu.com 的 Cookie（需包含 a1 和 web_session）。",
+             "https://www.xiaohongshu.com/"),
     CredSpec("zhihu_access_secret", "zhihu", "知乎开放平台 Access Secret", "key",
              "知乎官方搜索接口。到知乎数据开放平台登录 → 创建应用 → 复制 Access Secret。",
              "https://developer.zhihu.com/"),

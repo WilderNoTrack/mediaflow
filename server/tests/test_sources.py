@@ -7,7 +7,8 @@ import pytest
 
 from mediaflow.sources import platforms
 from mediaflow.sources.base import TrendItem
-from mediaflow.sources.platforms import BaiduSource, BilibiliSource, ToutiaoSource, _prefer_keyword
+from mediaflow.sources.platforms import (BaiduSource, BilibiliSource, WechatSource, XiaohongshuSource,
+                                         _prefer_keyword)
 
 
 @pytest.fixture
@@ -61,12 +62,70 @@ async def test_baidu_layout_change_raises(mock_http):
         await BaiduSource().fetch("", 10)
 
 
-async def test_toutiao_parses_hot_board(mock_http):
+async def test_wechat_parses_sogou(mock_http):
     routes, _ = mock_http
-    routes["https://www.toutiao.com/hot-event/hot-board/"] = {"data": [
-        {"Title": "国庆出行高峰", "HotValue": "123", "Url": "https://t/1"}, {"Title": ""}]}
-    items = await ToutiaoSource().fetch("", 10)
-    assert [i.title for i in items] == ["国庆出行高峰"] and items[0].source == "toutiao"
+    routes["https://weixin.sogou.com/weixin"] = """<ul class="news-list"><li><div class="txt-box">
+      <h3><a href="/link?url=abc&amp;type=2"><em><!--red_beg-->露营<!--red_end--></em>装备清单</a></h3>
+      <p class="txt-info">新手露营要带什么</p>
+      <div class="s-p"><span class="all-time-y2">户外君</span><script>document.write(timeConvert('1667260821'))</script></div>
+    </div></li><li><h3><a href="/x"></a></h3></li></ul>"""
+    items = await WechatSource().fetch("露营", 5)
+    assert [i.title for i in items] == ["露营装备清单"] and items[0].url == "https://weixin.sogou.com/link?url=abc&type=2"
+    assert items[0].heat.startswith("户外君 · 2022-") and items[0].snippet == "新手露营要带什么"
+
+
+async def test_wechat_antispider_raises(mock_http):
+    routes, _ = mock_http
+    routes["https://weixin.sogou.com/weixin"] = "<html>antispider</html>"
+    with pytest.raises(RuntimeError, match="验证码"):
+        await WechatSource().fetch("露营", 5)
+
+
+async def test_xhs_requires_login(creds):
+    from mediaflow.sources.base import NotConfigured
+    with pytest.raises(NotConfigured):
+        await XiaohongshuSource().fetch("露营", 5)
+
+
+async def test_xhs_search_signs_and_parses(mock_http, creds):
+    routes, seen = mock_http
+    creds["xhs_cookie"] = "a1=aaa; webId=w; web_session=s1"
+    routes["https://edith.xiaohongshu.com/api/sns/web/v1/search/notes"] = {"success": True, "data": {"items": [
+        {"model_type": "note", "id": "n1", "xsec_token": "t",
+         "note_card": {"display_title": "露营\n避坑", "interact_info": {"liked_count": "1.2万"},
+                       "user": {"nickname": "小林"}}},
+        {"model_type": "hot_query", "id": "q"}]}}
+    items = await XiaohongshuSource().fetch("露营", 5)
+    assert [i.title for i in items] == ["露营 避坑"] and items[0].heat == "1.2万赞"
+    assert items[0].url == "https://www.xiaohongshu.com/explore/n1?xsec_token=t&xsec_source=pc_search"
+    req = seen[-1]
+    assert req.headers["x-s"].startswith("XYS_") and "x-rap-param" in req.headers
+    assert "web_session=s1" in req.headers["cookie"] and json.loads(req.content)["keyword"] == "露营"
+
+
+async def test_xhs_expired_login_is_reported(mock_http, creds):
+    routes, _ = mock_http
+    creds["xhs_cookie"] = "a1=aaa; web_session=old"
+    routes["https://edith.xiaohongshu.com/"] = {"success": False, "code": -100, "msg": "登录已过期"}
+    with pytest.raises(RuntimeError, match="重新扫码"):
+        await XiaohongshuSource().fetch("露营", 5)
+
+
+async def test_xhs_qr_login_saves_cookie(mock_http, creds):
+    from mediaflow.sources import xhs
+    routes, _ = mock_http
+    routes["https://edith.xiaohongshu.com/api/sns/web/v1/login/activate"] = {"success": True, "data": {}}
+    routes["https://edith.xiaohongshu.com/api/sns/web/v1/login/qrcode/create"] = {
+        "success": True, "data": {"qr_id": "q1", "code": "c1", "url": "https://www.xiaohongshu.com/mobile/login?qrId=q1"}}
+    states = iter([{"code_status": 1}, {"code_status": 2, "login_info": {"session": "sess9"}}])
+    routes["https://edith.xiaohongshu.com/api/sns/web/v1/login/qrcode/status"] = lambda req: {
+        "success": True, "data": next(states)}
+    qr = await xhs.qr_create()
+    assert qr["key"] == "q1"
+    assert (await xhs.qr_poll("q1"))["status"] == "scanned"
+    assert (await xhs.qr_poll("q1"))["status"] == "ok"
+    assert "web_session=sess9" in creds["xhs_cookie"] and "a1=" in creds["xhs_cookie"]
+    assert (await xhs.qr_poll("q1"))["status"] == "expired"
 
 
 async def test_bilibili_falls_back_to_ranking_when_search_empty(mock_http, monkeypatch):
@@ -99,6 +158,8 @@ async def test_bilibili_search_results_are_cleaned(mock_http, monkeypatch):
 def creds(monkeypatch):
     values: dict[str, str] = {}
     monkeypatch.setattr(platforms.credentials, "get", lambda k: values.get(k, ""))
+    monkeypatch.setattr(platforms.credentials, "update",
+                        lambda new: values.update({k: v for k, v in new.items() if v is not None}))
     return values
 
 

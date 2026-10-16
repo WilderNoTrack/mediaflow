@@ -12,6 +12,7 @@ dependencies = [
   "openai>=1.40",
   "httpx>=0.27",
   "beautifulsoup4>=4.12",
+  "xhshow>=0.2",
 ]
 
 [project.scripts]
