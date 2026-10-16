@@ -25,12 +25,13 @@ export const DRAFT_STATUS: Record<string, { label: string; cls: string }> = {
 
 /** 与 v1 一致的平台色 */
 export const PLATFORMS: Record<string, { label: string; cls: string }> = {
+  xiaohongshu: { label: "小红书", cls: "bg-rose-100 text-rose-600" },
   zhihu: { label: "知乎", cls: "bg-sky-100 text-sky-700" },
   weibo: { label: "微博", cls: "bg-orange-100 text-orange-700" },
   baidu: { label: "百度", cls: "bg-blue-100 text-blue-700" },
   bilibili: { label: "B站", cls: "bg-cyan-100 text-cyan-700" },
   douyin: { label: "抖音", cls: "bg-slate-100 text-slate-700" },
-  toutiao: { label: "头条", cls: "bg-red-50 text-red-600" },
+  wechat: { label: "微信文章", cls: "bg-emerald-100 text-emerald-700" },
   ai: { label: "AI 推荐", cls: "bg-indigo-100 text-indigo-700" },
   user: { label: "手动", cls: "bg-gray-100 text-gray-700" },
 };

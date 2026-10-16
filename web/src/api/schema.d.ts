@@ -420,6 +420,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/xiaohongshu/qrcode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Xiaohongshu Qrcode */
+        post: operations["xiaohongshu_qrcode_api_settings_xiaohongshu_qrcode_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/xiaohongshu/qrcode/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Xiaohongshu Qrcode Poll */
+        get: operations["xiaohongshu_qrcode_poll_api_settings_xiaohongshu_qrcode__key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -2004,6 +2038,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QrPollOut"];
+                };
+            };
+        };
+    };
+    xiaohongshu_qrcode_api_settings_xiaohongshu_qrcode_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QrOut"];
+                };
+            };
+        };
+    };
+    xiaohongshu_qrcode_poll_api_settings_xiaohongshu_qrcode__key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QrPollOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -2,7 +2,7 @@ import { CheckCircle2, Circle, ExternalLink, KeyRound, Play, X } from "lucide-re
 import { useState } from "react";
 import { useCredentials, useSaveCredentials, useTestSources } from "../api/hooks";
 import { cn, PLATFORMS } from "../lib/utils";
-import { BiliQrLogin } from "./BiliQrLogin";
+import { QrLogin } from "./QrLogin";
 import { Badge, Button, ErrorText, Input, Modal, Spinner } from "./ui";
 
 /** 数据来源设置：各平台搜索凭据（只存在本机），并可一键实测 */
@@ -53,7 +53,8 @@ export function SourcesDialog({ onClose }: { onClose: () => void }) {
                 <Button variant="outline" size="sm" onClick={() => save.mutate({ [c.key]: "" })}>清除</Button>
               )}
             </div>
-            {c.key === "bilibili_cookie" && !c.auto_refresh && <div className="mt-2"><BiliQrLogin /></div>}
+            {c.key === "bilibili_cookie" && !c.auto_refresh && <div className="mt-2"><QrLogin platform="bilibili" /></div>}
+            {c.key === "xhs_cookie" && <div className="mt-2"><QrLogin platform="xiaohongshu" again={c.configured} /></div>}
           </div>
         ))}
         <ErrorText error={save.error} />

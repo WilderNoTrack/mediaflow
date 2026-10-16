@@ -6,7 +6,7 @@ import { cn, PLATFORMS } from "../lib/utils";
 import { SourcesDialog } from "./SourcesDialog";
 import { Badge, Button, Card, CardBody, CardHead, Empty, ErrorText, Input, Spinner } from "./ui";
 
-const SOURCES = ["zhihu", "baidu", "douyin", "bilibili", "weibo", "toutiao"];
+const SOURCES = ["xiaohongshu", "zhihu", "baidu", "douyin", "bilibili", "weibo", "wechat"];
 
 export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; busy: boolean; onGoConfig: () => void }) {
   const { data: topics = [], isLoading } = useTopics(account.id);
