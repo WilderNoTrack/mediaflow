@@ -60,16 +60,16 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
 );
 
 export function Card({ className, children, onClick }: { className?: string; children: ReactNode; onClick?: () => void }) {
-  return <div onClick={onClick} className={cn("rounded-xl border-2 bg-card", className)}>{children}</div>;
+  return <div onClick={onClick} className={cn("rounded-xl border bg-card shadow-[0_1px_2px_rgba(15,23,42,0.04)]", className)}>{children}</div>;
 }
 
-/** 带图标标题的卡片头，对应 v1 的 CardHeader + CardTitle + CardDescription */
+/** 卡片头：小标题 + 可选说明 + 右侧操作 */
 export function CardHead({ icon, title, desc, action }: { icon?: ReactNode; title: ReactNode; desc?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-3 px-6 pt-6">
-      <div>
-        <div className="flex items-center gap-2 font-medium [&_svg]:size-5 [&_svg]:text-indigo-500">{icon}{title}</div>
-        {desc && <div className="mt-1.5 text-muted-foreground">{desc}</div>}
+    <div className="flex items-start justify-between gap-3 px-5 pt-4">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-sm font-semibold [&_svg]:size-4 [&_svg]:text-indigo-500">{icon}{title}</div>
+        {desc && <div className="mt-1 text-xs text-muted-foreground">{desc}</div>}
       </div>
       {action}
     </div>
@@ -77,8 +77,51 @@ export function CardHead({ icon, title, desc, action }: { icon?: ReactNode; titl
 }
 
 export const CardBody = ({ className, children }: { className?: string; children: ReactNode }) => (
-  <div className={cn("px-6 py-6", className)}>{children}</div>
+  <div className={cn("px-5 py-4", className)}>{children}</div>
 );
+
+/** 下划线式页签（工作台主导航） */
+export function Tabs<T extends string>({ value, onChange, items, className }: {
+  value: T; onChange: (v: T) => void; className?: string;
+  items: { value: T; label: ReactNode; icon?: ReactNode; count?: number }[];
+}) {
+  return (
+    <div className={cn("flex items-center gap-1", className)}>
+      {items.map((it) => (
+        <button
+          key={it.value}
+          onClick={() => onChange(it.value)}
+          className={cn(
+            "relative flex cursor-pointer items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm font-medium transition-colors [&_svg]:size-4",
+            value === it.value ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {it.icon}{it.label}
+          {!!it.count && <span className="rounded-full bg-amber-100 px-1.5 text-[11px] leading-4 text-amber-700">{it.count}</span>}
+          {value === it.value && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-indigo-500" />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 小号胶囊筛选 */
+export function Pills<T extends string>({ value, onChange, items }: {
+  value: T; onChange: (v: T) => void; items: { value: T; label: ReactNode }[];
+}) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.map((it) => (
+        <button
+          key={it.value}
+          onClick={() => onChange(it.value)}
+          className={cn("cursor-pointer rounded-full px-3 py-1 text-xs font-medium transition-colors",
+            value === it.value ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted")}
+        >{it.label}</button>
+      ))}
+    </div>
+  );
+}
 
 export function Badge({ className, children }: { className?: string; children: ReactNode }) {
   return (
@@ -130,12 +173,13 @@ export function Segmented<T extends string>({ value, onChange, items }: {
 
 export const Spinner = ({ className }: { className?: string }) => <Loader2 className={cn("size-4 animate-spin text-indigo-500", className)} />;
 
-export function Empty({ icon, title, action }: { icon?: ReactNode; title: string; action?: ReactNode }) {
+export function Empty({ icon, title, desc, action }: { icon?: ReactNode; title: string; desc?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="py-16 text-center text-muted-foreground">
-      {icon && <div className="mx-auto mb-3 w-fit opacity-20 [&_svg]:size-12">{icon}</div>}
-      <p className="mb-3 text-sm">{title}</p>
-      {action}
+    <div className="rounded-xl border border-dashed px-6 py-12 text-center text-muted-foreground">
+      {icon && <div className="mx-auto mb-3 w-fit opacity-30 [&_svg]:size-10">{icon}</div>}
+      <p className="text-sm font-medium text-foreground">{title}</p>
+      {desc && <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed">{desc}</p>}
+      {action && <div className="mt-4 flex justify-center gap-2">{action}</div>}
     </div>
   );
 }
@@ -154,9 +198,9 @@ export function Label({ children, hint }: { children: ReactNode; hint?: string }
   );
 }
 
-export function Modal({ children, className }: { children: ReactNode; className?: string }) {
+export function Modal({ children, className, onClose }: { children: ReactNode; className?: string; onClose?: () => void }) {
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
       <div className={cn("w-full max-w-md rounded-2xl bg-card shadow-2xl", className)}>{children}</div>
     </div>
   );

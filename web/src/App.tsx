@@ -5,18 +5,14 @@ import { AccountsPage } from "./pages/AccountsPage";
 import { DraftPage } from "./pages/DraftPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 
+/** 只有缺了必需的模型密钥才提示；可选项放在首页的「开始之前」清单里 */
 function SystemBanner() {
   const { data } = useSystem();
-  if (!data) return null;
-  const missing = [
-    !data.llm_configured && "DEEPSEEK_API_KEY（写稿、对话都需要）",
-    !data.image_configured && "配图服务密钥（不配也能用，只是没有图）",
-  ].filter(Boolean);
-  if (!missing.length) return null;
+  if (!data || data.llm_configured) return null;
   return (
-    <div className="flex items-center justify-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+    <div className="flex items-center justify-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-800">
       <AlertCircle className="size-3.5 shrink-0" />
-      还没配置：{missing.join("；")}。在 <code className="rounded bg-amber-100 px-1">server/.env</code> 里填好后重启。
+      还没填 DeepSeek API Key，写稿和对话用不了。在 <code className="rounded bg-amber-100 px-1">server/.env</code> 里填 DEEPSEEK_API_KEY 后重启。
     </div>
   );
 }
