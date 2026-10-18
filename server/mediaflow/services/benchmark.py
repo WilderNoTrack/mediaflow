@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -148,6 +149,10 @@ async def _run(s: Session, llm: LLM, b: Benchmark, acc: Account, emit: Emit) -> 
          {"benchmark_id": b.id})
 
 
+def _norm(t: str) -> str:
+    return re.sub(r"[\W_]+", "", t).lower()
+
+
 def _apply(s: Session, b: Benchmark, acc: Account, plan: dict, theme: str) -> dict:
     """把方案写进账号：定位字段、写法规则、复刻选题。旧对标留下的规则和没用过的选题先清掉。"""
     prof = plan.get("profile") or {}
@@ -190,6 +195,8 @@ def _apply(s: Session, b: Benchmark, acc: Account, plan: dict, theme: str) -> di
             ref = b.samples[int(raw.get("ref")) - 1]
         except (TypeError, ValueError, IndexError):
             ref = {}
+        if ref and _norm(title) == _norm(str(ref.get("title", ""))):
+            continue  # 模型偷懒原样照抄了对方标题（还是对方领域的），不能算复刻选题
         reference = {k: ref[k] for k in ("title", "likes", "content", "tags", "url") if ref.get(k)}
         reference |= {"creator": b.creator_name, "benchmark_id": b.id}
         t = Topic(user_id=acc.user_id, account_id=acc.id, title=title, angle=str(raw.get("angle", ""))[:200],
