@@ -1,7 +1,7 @@
 import { ArrowLeft, Copy, FileText, KeyRound, MessageCircle, Settings, TrendingUp } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { isActive, useAccount, useActiveJobs, useDrafts, useTopics } from "../api/hooks";
+import { isActive, useAccount, useActiveJobs, useDrafts, useSendChat, useTopics } from "../api/hooks";
 import { BenchmarkPanel } from "../components/BenchmarkPanel";
 import { ChatPanel } from "../components/ChatPanel";
 import { ContentsPanel } from "../components/ContentsPanel";
@@ -25,6 +25,18 @@ export function WorkspacePage() {
   const { data: topics = [] } = useTopics(id);
   const [chatOpen, setChatOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const send = useSendChat(id);
+  const started = useRef(false);
+
+  // 新建账号选了「对标起号」：进来就让小媒按主题去找同领域的号
+  useEffect(() => {
+    if (sp.get("start") !== "bench" || !account || started.current) return;
+    started.current = true;
+    setSp({ tab: "bench" }, { replace: true });
+    if (!account.theme) return;
+    send.mutate(`我想对标同领域做得好的小红书账号来起号，主题是「${account.theme}」，帮我找几个看看`);
+    if (window.innerWidth < 1024) setChatOpen(true);
+  }, [account, sp, setSp, send]);
 
   if (isLoading) return <div className="flex justify-center py-20"><Spinner className="size-6" /></div>;
   if (!account) return <div className="p-10"><Empty title="找不到这个账号" action={<Link to="/"><Button size="sm">回到账号列表</Button></Link>} /></div>;
@@ -70,7 +82,7 @@ export function WorkspacePage() {
             <JobStrip jobs={jobs} />
             {tab === "contents" && <ContentsPanel account={account} busy={writing} onGoTopics={() => setTab("topics")} />}
             {tab === "topics" && <TopicsPanel account={account} busy={writing} onGoConfig={() => setTab("config")} />}
-            {tab === "bench" && <BenchmarkPanel account={account} jobs={jobs} onGoTopics={() => setTab("topics")} />}
+            {tab === "bench" && <BenchmarkPanel account={account} jobs={jobs} onGoTopics={() => setTab("topics")} onOpenChat={() => setChatOpen(true)} />}
             {tab === "config" && <SettingsPanel account={account} busy={writing} />}
           </div>
         </main>

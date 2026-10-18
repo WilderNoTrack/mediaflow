@@ -1,7 +1,8 @@
 import { ChevronDown, MessageCircle, Send, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { Account, ChatMessage } from "../api/client";
-import { useChat, useSendChat } from "../api/hooks";
+import type { Account, Candidate, ChatMessage } from "../api/client";
+import { useChat, usePendingChat, useSendChat } from "../api/hooks";
+import { CandidatePicker } from "./CandidatePicker";
 import { cn } from "../lib/utils";
 import { Button, ErrorText, Logo, Spinner, Textarea } from "./ui";
 
@@ -19,7 +20,8 @@ const TOOL_META: Record<string, { icon: string; label: string }> = {
   research_post: { icon: "📄", label: "看作品详情" },
   save_note: { icon: "📝", label: "存了运营笔记" },
   remove_note: { icon: "🗑", label: "删了运营笔记" },
-  clone_creator: { icon: "🪄", label: "开始复刻对标账号" },
+  find_benchmarks: { icon: "🔭", label: "找同领域对标账号" },
+  clone_creator: { icon: "🪄", label: "开始学习对标账号" },
 };
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -47,15 +49,16 @@ function toolSummary(m: ChatMessage) {
   }
   if (m.tool_name === "find_topics" && Array.isArray(result.topics)) return `${result.topics.length} 个，已放进选题库`;
   if (m.tool_name === "write_post") return "写好会出现在「草稿」里";
-  if (m.tool_name === "clone_creator") return "拆好会出现在「对标」里";
+  if (m.tool_name === "find_benchmarks" && Array.isArray(result.candidates)) return `${result.candidates.length} 个，在下面勾选`;
+  if (m.tool_name === "clone_creator") return `${Array.isArray(result.added) ? result.added.length : 1} 个，学好会出现在「对标」里`;
   return "";
 }
 
 /** 根据账号状态给几个可以直接点的开场问题 */
 function suggestions(a: Account): string[] {
-  if (!a.theme) return ["我想做一个职场新人理财账号", "帮我想想账号定位", "我想照着一个小红书账号的路子做"];
-  if (!a.benchmark) return ["找几个这周能写的选题", "写一篇试试", "帮我找个能复刻的对标账号", "最近的草稿写得怎么样？"];
-  return ["按对标的打法写一篇", "对标账号的标题公式是什么？", "找几个这周能写的选题", "最近的草稿写得怎么样？"];
+  if (!a.theme) return ["我想做一个职场新人理财账号", "帮我想想账号定位", "我想对标几个同领域的号来起号"];
+  if (!a.benchmarks.length) return ["帮我找几个同领域的对标账号", "找几个这周能写的选题", "写一篇试试", "最近的草稿写得怎么样？"];
+  return ["按对标的打法写一篇", "这几个对标账号各学了什么？", "再找几个同领域的对标账号", "找几个这周能写的选题"];
 }
 
 /** 和小媒的对话：工作台右侧常驻，手机上是全屏抽屉 */
@@ -63,7 +66,7 @@ export function ChatPanel({ account, onClose }: { account: Account; onClose?: ()
   const { data: msgs = [], isLoading } = useChat(account.id);
   const send = useSendChat(account.id);
   const [text, setText] = useState("");
-  const [pending, setPending] = useState<string | null>(null);
+  const pending = usePendingChat(account.id).at(-1) ?? null;
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -72,13 +75,12 @@ export function ChatPanel({ account, onClose }: { account: Account; onClose?: ()
 
   const submit = (t = text) => {
     const v = t.trim();
-    if (!v || send.isPending) return;
-    setPending(v);
+    if (!v || pending) return;
     setText("");
-    send.mutate(v, { onSettled: () => setPending(null) });
+    send.mutate(v);
   };
 
-  const welcome = `你好！我是小媒 🌀 「${account.name}」的账号管家。\n\n定位、选题、写稿直接跟我说，我会边聊边帮你改好左边的设定。\n\n想照着某个号做？把 TA 的小红书主页链接发我，说「照这个号的路子做职场理财」，我来拆打法、换主题、出选题。`;
+  const welcome = `你好！我是小媒，「${account.name}」的账号管家。\n\n定位、选题、写稿直接跟我说，我会边聊边帮你改好左边的设定。\n\n想照着做得好的号起步？说「帮我找几个同领域的对标账号」，我按你的主题去小红书找一批给你挑；有想学的号也可以直接把主页链接发我。最多同时对标 3 个，我会把它们的打法合成一套。`;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-card">
@@ -86,7 +88,7 @@ export function ChatPanel({ account, onClose }: { account: Account; onClose?: ()
         <MessageCircle className="size-4 text-indigo-500" />
         <div className="min-w-0 flex-1">
           <div className="font-semibold">账号管家小媒</div>
-          <div className="truncate text-xs text-muted-foreground">{send.isPending ? "正在处理…" : "聊定位 · 改配置 · 找选题 · 写稿，都在这"}</div>
+          <div className="truncate text-xs text-muted-foreground">{pending ? "正在处理…" : "聊定位 · 改配置 · 找选题 · 写稿，都在这"}</div>
         </div>
         {onClose && <button onClick={onClose} className="cursor-pointer rounded-lg p-1.5 text-muted-foreground hover:bg-muted" aria-label="收起"><X className="size-4" /></button>}
       </div>
@@ -95,17 +97,25 @@ export function ChatPanel({ account, onClose }: { account: Account; onClose?: ()
         {isLoading && <Spinner />}
         {!isLoading && msgs.length === 0 && <Bubble role="assistant" text={welcome} />}
         {groupTools(msgs).map((g) =>
-          Array.isArray(g) ? <ToolGroup key={g[0].id} items={g} /> : <Bubble key={g.id} role={g.role} text={g.content} />,
+          Array.isArray(g) ? (
+            <div key={g[0].id} className="space-y-2">
+              <ToolGroup items={g} />
+              {g.filter((m) => m.tool_name === "find_benchmarks").map((m) => {
+                const r = (m.payload?.result ?? {}) as { ok?: boolean; candidates?: Candidate[] };
+                return r.ok && r.candidates ? <CandidatePicker key={m.id} account={account} candidates={r.candidates} compact /> : null;
+              })}
+            </div>
+          ) : <Bubble key={g.id} role={g.role} text={g.content} />,
         )}
         {pending && <>
           <Bubble role="user" text={pending} />
-          <div className="ml-10 flex items-center gap-2 text-xs text-muted-foreground"><Spinner className="size-3" />小媒正在想，调研类问题要半分钟左右…</div>
+          <div className="ml-10 flex items-center gap-2 text-xs text-muted-foreground"><Spinner className="size-3" />{/对标|找.*号/.test(pending) ? "正在小红书上找同领域的号、看数据，大约半分钟到一分钟…" : "小媒正在想，调研类问题要半分钟左右…"}</div>
         </>}
         <ErrorText error={send.error} />
       </div>
 
       <div className="border-t p-3">
-        {!send.isPending && msgs.length < 4 && (
+        {!pending && msgs.length < 4 && (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {suggestions(account).map((s) => (
               <button key={s} onClick={() => submit(s)} className="cursor-pointer rounded bg-indigo-50 px-2 py-1 text-xs text-indigo-600 transition-colors hover:bg-indigo-100">{s}</button>
@@ -121,8 +131,8 @@ export function ChatPanel({ account, onClose }: { account: Account; onClose?: ()
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); } }}
           />
-          <Button variant="gradient" size="md" className="px-3" onClick={() => submit()} disabled={!text.trim()} loading={send.isPending} aria-label="发送">
-            {!send.isPending && <Send />}
+          <Button variant="gradient" size="md" className="px-3" onClick={() => submit()} disabled={!text.trim()} loading={!!pending} aria-label="发送">
+            {!pending && <Send />}
           </Button>
         </div>
       </div>

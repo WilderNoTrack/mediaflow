@@ -103,9 +103,29 @@ export interface paths {
         put?: never;
         /**
          * Clone Benchmark
-         * @description 复刻一个对标账号：后台拆解打法、按新主题出方案，完成后同步到账号定位、规则和选题库。
+         * @description 加 1-3 个对标账号：后台逐个拆解打法，再和已有的对标合成一套、换成你的主题，同步到账号定位、规则和选题库。
          */
         post: operations["clone_benchmark_api_accounts__account_id__benchmark_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/benchmark/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Find Candidates
+         * @description 按方向找同领域、有爆款的小红书博主，给出数据和值得学的地方，供用户勾选对标。大约半分钟到一分钟。
+         */
+        post: operations["find_candidates_api_accounts__account_id__benchmark_candidates_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -124,7 +144,8 @@ export interface paths {
         post?: never;
         /**
          * Remove Benchmark
-         * @description 不再对标：删掉拆解记录，没用过的复刻选题收起；已经同步到账号的定位和规则保留，可以自己改。
+         * @description 不再对标某个账号：它的复刻选题收起；还有别的对标就自动重新合成方案（返回任务），一个不剩就撤掉对标规则。
+         *     已经同步到账号的定位保留，可以自己改。
          */
         delete: operations["remove_benchmark_api_accounts__account_id__benchmark__benchmark_id__delete"];
         options?: never;
@@ -592,7 +613,18 @@ export interface components {
              * @default []
              */
             notes: components["schemas"]["NoteOut"][];
-            benchmark?: components["schemas"]["BenchmarkOut"] | null;
+            /**
+             * Benchmarks
+             * @default []
+             */
+            benchmarks: components["schemas"]["BenchmarkOut"][];
+            /**
+             * Bench Plan
+             * @default {}
+             */
+            bench_plan: {
+                [key: string]: unknown;
+            };
         };
         /** AccountIn */
         AccountIn: {
@@ -686,8 +718,15 @@ export interface components {
         /** BenchmarkIn */
         BenchmarkIn: {
             /**
+             * Targets
+             * @description 要对标的账号（1-3 个）：主页链接、笔记链接、名字或小红书号
+             * @default []
+             */
+            targets: string[];
+            /**
              * Target
-             * @description 对标账号：主页链接、笔记链接、名字或小红书号
+             * @description 只对标一个时也可以用这个字段
+             * @default
              */
             target: string;
             /**
@@ -751,6 +790,35 @@ export interface components {
          * @enum {string}
          */
         BenchmarkStatus: "analyzing" | "ready" | "failed";
+        /** CandidatesIn */
+        CandidatesIn: {
+            /**
+             * Query
+             * @description 方向，留空用账号主题
+             * @default
+             */
+            query: string;
+            /**
+             * Prefer
+             * @description 额外要求，如「粉丝少一点」「做通勤穿搭」
+             * @default
+             */
+            prefer: string;
+        };
+        /** CandidatesOut */
+        CandidatesOut: {
+            /** Theme */
+            theme: string;
+            /** Candidates */
+            candidates: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Notes
+             * @default []
+             */
+            notes: string[];
+        };
         /** ChatIn */
         ChatIn: {
             /** Text */
@@ -1053,6 +1121,10 @@ export interface components {
              * @default
              */
             message: string;
+        };
+        /** RemoveBenchmarkOut */
+        RemoveBenchmarkOut: {
+            job?: components["schemas"]["JobOut"] | null;
         };
         /** RuleIn */
         RuleIn: {
@@ -1523,6 +1595,41 @@ export interface operations {
             };
         };
     };
+    find_candidates_api_accounts__account_id__benchmark_candidates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CandidatesIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidatesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     remove_benchmark_api_accounts__account_id__benchmark__benchmark_id__delete: {
         parameters: {
             query?: never;
@@ -1536,11 +1643,13 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RemoveBenchmarkOut"];
+                };
             };
             /** @description Validation Error */
             422: {

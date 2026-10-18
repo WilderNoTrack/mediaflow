@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap, type Job, type S } from "./client";
 
 const ACTIVE = ["queued", "running"];
@@ -72,13 +72,15 @@ export function useNotes(id: string) {
   });
 }
 
-/** 复刻对标账号：发起后台拆解任务 */
+/** 加 1-3 个对标账号：发起后台拆解 + 合成任务 */
 export function useClone(id: string) {
   const qc = useQueryClient();
   const inv = useInvalidateAccount(id);
   return useMutation({
-    mutationFn: ({ accountId, ...body }: S["BenchmarkIn"] & { accountId?: string }) =>
-      unwrap(api.POST("/api/accounts/{account_id}/benchmark", { params: { path: { account_id: accountId ?? id } }, body })),
+    mutationFn: ({ accountId, targets, theme = "" }: { targets: string[]; theme?: string; accountId?: string }) =>
+      unwrap(api.POST("/api/accounts/{account_id}/benchmark", {
+        params: { path: { account_id: accountId ?? id } }, body: { targets, target: "", theme, platform: "xiaohongshu" },
+      })),
     onSettled: (_d, _e, v) => { qc.invalidateQueries({ queryKey: ["jobs", v.accountId ?? id] }); inv(); },
   });
 }
@@ -89,9 +91,16 @@ export function useRemoveBenchmark(id: string) {
   return useMutation({
     mutationFn: (benchmark_id: string) =>
       unwrap(api.DELETE("/api/accounts/{account_id}/benchmark/{benchmark_id}", { params: { path: { account_id: id, benchmark_id } } })),
-    onSuccess: () => { inv(); qc.invalidateQueries({ queryKey: ["topics", id] }); },
+    onSuccess: () => { inv(); qc.invalidateQueries({ queryKey: ["topics", id] }); qc.invalidateQueries({ queryKey: ["jobs", id] }); },
   });
 }
+
+/** 按方向找同领域的对标候选（半分钟到一分钟） */
+export const useFindCandidates = (id: string) =>
+  useMutation({
+    mutationFn: (body: { query: string; prefer: string }) =>
+      unwrap(api.POST("/api/accounts/{account_id}/benchmark/candidates", { params: { path: { account_id: id } }, body })),
+  });
 
 export const useFindCreators = () =>
   useMutation({
@@ -202,10 +211,15 @@ export const useChat = (id: string) =>
     queryFn: () => unwrap(api.GET("/api/accounts/{account_id}/chat", { params: { path: { account_id: id } } })),
   });
 
+/** 正在发给小媒、还没回复的消息（工作台里任何地方发的都算，两个对话面板都能显示） */
+export const usePendingChat = (id: string) =>
+  useMutationState({ filters: { mutationKey: ["chat-send", id], status: "pending" }, select: (m) => m.state.variables as string });
+
 export function useSendChat(id: string) {
   const qc = useQueryClient();
   const inv = useInvalidateAccount(id);
   return useMutation({
+    mutationKey: ["chat-send", id],
     mutationFn: (text: string) =>
       unwrap(api.POST("/api/accounts/{account_id}/chat", { params: { path: { account_id: id } }, body: { text } })),
     onSuccess: () => {

@@ -6,7 +6,7 @@ import { isActive } from "../api/hooks";
 import { cn } from "../lib/utils";
 
 const WRITE_STEPS = [["topic", "定选题"], ["write", "写稿"], ["review", "质检"], ["done", "完成"]] as const;
-const CLONE_STEPS = [["find", "读作品"], ["detail", "看爆款"], ["analyze", "拆打法"], ["adapt", "出方案"]] as const;
+const CLONE_STEPS = [["find", "读作品"], ["detail", "看爆款"], ["analyze", "拆打法"], ["adapt", "合成方案"]] as const;
 const HIDDEN_KEY = "mf.hiddenJobs";
 
 const finishedAt = (j: Job) => (j.finished_at ? new Date(/Z|[+-]\d\d:\d\d$/.test(j.finished_at) ? j.finished_at : j.finished_at + "Z").getTime() : 0);

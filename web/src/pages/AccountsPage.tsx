@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useAccounts, useClone, useCreateAccount, useCredentials, useDeleteAccount, useSystem } from "../api/hooks";
 import { Header } from "../components/Header";
 import { SourcesDialog } from "../components/SourcesDialog";
-import { Avatar, Badge, Button, Empty, ErrorText, Input, Label, Logo, Modal, Segmented, Spinner } from "../components/ui";
+import { Avatar, Badge, Button, Empty, ErrorText, Input, Label, Logo, Modal, Spinner, Textarea } from "../components/ui";
 import { cn, timeAgo } from "../lib/utils";
 
 export function AccountsPage() {
@@ -20,12 +20,14 @@ export function AccountsPage() {
   const clone = useClone("");
   const openNew = (m: "blank" | "clone") => { setMode(m); setOpen(true); };
   const cloneMode = mode === "clone";
-  const canCreate = !!form.name.trim() && (!cloneMode || (!!target.trim() && !!form.theme.trim()));
+  const targets = target.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 3);
+  const canCreate = !!form.name.trim() && (!cloneMode || !!form.theme.trim());
   const submit = () => create.mutate({ ...form, audience: "" }, {
     onSuccess: (a) => {
       if (!cloneMode) return nav(`/accounts/${a.id}?tab=config`);
-      clone.mutate({ accountId: a.id, target: target.trim(), theme: form.theme.trim(), platform: "xiaohongshu" },
-        { onSettled: () => nav(`/accounts/${a.id}?tab=bench`) });
+      // 没给对标账号：进工作台后小媒自动按主题去找同领域的号；给了就直接开始学
+      if (!targets.length) return nav(`/accounts/${a.id}?start=bench`);
+      clone.mutate({ accountId: a.id, targets, theme: form.theme.trim() }, { onSettled: () => nav(`/accounts/${a.id}?tab=bench`) });
     },
   });
 
@@ -53,7 +55,7 @@ export function AccountsPage() {
           </div>
           {accounts.length > 0 && (
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => openNew("clone")}><Copy />复刻一个账号</Button>
+              <Button variant="outline" onClick={() => openNew("clone")}><Copy />对标起号</Button>
               <Button variant="gradient" onClick={() => openNew("blank")}><Plus />新建账号</Button>
             </div>
           )}
@@ -64,9 +66,9 @@ export function AccountsPage() {
         ) : accounts.length === 0 ? (
           <Empty
             title="还没有账号"
-            desc="从零起一个，或者找个做起来的小红书博主照着复刻，只换成你的主题。"
+            desc="从零起一个，或者找几个同领域做起来的小红书号，学 TA 们的打法起步。"
             action={<div className="flex gap-2">
-              <Button variant="outline" onClick={() => openNew("clone")}><Copy />复刻对标账号</Button>
+              <Button variant="outline" onClick={() => openNew("clone")}><Copy />对标起号</Button>
               <Button variant="gradient" onClick={() => openNew("blank")}><Plus />新建第一个账号</Button>
             </div>}
           />
@@ -122,37 +124,44 @@ export function AccountsPage() {
         <Modal onClose={() => setOpen(false)}>
           <form className="p-6" onSubmit={(e) => { e.preventDefault(); if (canCreate) submit(); }}>
             <h3 className="mb-1 text-lg font-semibold">新建账号</h3>
-            <p className="mb-4 text-sm text-muted-foreground">
-              {cloneMode ? "给一个做起来的小红书账号，照着 TA 的打法起号，只换成你的主题" : "起个名字就行，进去后小媒会陪你把定位聊清楚"}
-            </p>
-            <div className="mb-5">
-              <Segmented<"blank" | "clone"> value={mode} onChange={setMode} items={[
-                { value: "blank", label: "从零开始", icon: <Plus /> },
-                { value: "clone", label: "复刻对标账号", icon: <Copy /> },
-              ]} />
+            <p className="mb-4 text-sm text-muted-foreground">选一种方式开始，之后随时都能换</p>
+            <div className="mb-5 grid grid-cols-2 gap-3">
+              {([
+                { m: "blank", icon: <Plus />, t: "从零开始", d: "自己定方向，小媒陪你聊清楚定位，再按热点找选题" },
+                { m: "clone", icon: <Copy />, t: "对标起号", d: "找 1-3 个同领域做起来的号，学 TA 们的打法起步" },
+              ] as const).map((o) => (
+                <button key={o.m} type="button" onClick={() => setMode(o.m)}
+                  className={cn("cursor-pointer rounded-xl border-2 p-4 text-left transition-all",
+                    mode === o.m ? "border-indigo-400 bg-indigo-50/60 ring-2 ring-indigo-100" : "hover:border-indigo-300")}>
+                  <div className={cn("mb-1 flex items-center gap-1.5 font-medium [&_svg]:size-4", mode === o.m && "text-indigo-700")}>{o.icon}{o.t}</div>
+                  <p className="text-xs leading-relaxed text-muted-foreground">{o.d}</p>
+                </button>
+              ))}
             </div>
             <div className="space-y-4">
               <div>
                 <Label>账号名称</Label>
                 <Input autoFocus value={form.name} placeholder="例如：打工人理财笔记" onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              {cloneMode && (
-                <div>
-                  <Label hint="主页链接、笔记链接、博主名字或小红书号">对标账号</Label>
-                  <Input value={target} placeholder="https://www.xiaohongshu.com/user/profile/…" onChange={(e) => setTarget(e.target.value)} />
-                </div>
-              )}
               <div>
-                <Label hint={cloneMode ? "对方的打法会换到这个主题上" : "可以先不填"}>{cloneMode ? "我想做的主题" : "一句话说说做什么"}</Label>
+                <Label hint={cloneMode ? "按这个方向找同领域的号，对方的打法也会换到这个主题上" : "可以先不填"}>{cloneMode ? "我想做的主题" : "一句话说说做什么"}</Label>
                 <Input value={form.theme} placeholder={cloneMode ? "例如：职场新人理财" : "例如：帮刚工作的年轻人学会存钱"} onChange={(e) => setForm({ ...form, theme: e.target.value })} />
               </div>
-              {cloneMode && <p className="text-xs text-muted-foreground">创建后自动拆解（约 1-2 分钟）：读 TA 的爆款 → 拆打法 → 换成你的主题，生成定位、写法规则和复刻选题。需要先在「数据来源」里连上小红书。</p>}
+              {cloneMode && <>
+                <div>
+                  <Label hint="可选，每行一个：主页链接、笔记链接或博主名字">已经有想对标的号？</Label>
+                  <Textarea rows={2} value={target} placeholder="不填的话，小媒会按主题帮你找一批同领域的号来挑" onChange={(e) => setTarget(e.target.value)} />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {targets.length ? `创建后直接开始学这 ${targets.length} 个号（每个约 1 分钟）` : "创建后小媒会先去小红书找同领域、有爆款的号，你在对话里勾选想学的（最多 3 个）"}。需要先在「数据来源」里连上小红书。
+                </p>
+              </>}
               <ErrorText error={create.error ?? clone.error} />
             </div>
             <div className="mt-6 flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>取消</Button>
               <Button type="submit" variant="gradient" disabled={!canCreate} loading={create.isPending || clone.isPending}>
-                {cloneMode ? "创建并开始拆解" : "创建并进入"}
+                {!cloneMode ? "创建并进入" : targets.length ? "创建并开始学习" : "创建，帮我找对标"}
               </Button>
             </div>
           </form>

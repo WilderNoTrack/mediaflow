@@ -11,6 +11,14 @@ export type DraftDetail = S["DraftDetail"];
 export type Topic = S["TopicOut"];
 export type Job = S["JobOut"];
 export type ChatMessage = S["ChatMessageOut"];
+export type Benchmark = S["BenchmarkOut"];
+/** 对标候选（后端 find_candidates 返回的一条） */
+export type Candidate = {
+  name: string; url: string; avatar?: string; fans?: string; desc?: string;
+  median_likes?: number; hit_rate?: number; per_week?: number | null; last_post?: string;
+  hits?: { title: string; likes: string; url: string }[]; top?: { title: string; likes: string; url: string }[];
+  fit?: number; level?: string; reason?: string; learn?: string;
+};
 export type JobEvent = { at: string; stage: string; message: string; data: Record<string, unknown> };
 
 export class ApiError extends Error {
