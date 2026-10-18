@@ -91,7 +91,7 @@ function RulesCard({ account }: { account: Account }) {
           <div key={r.id} className="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-muted/60">
             <span className="w-4 text-xs text-muted-foreground">{i + 1}</span>
             <span className="flex-1">{r.text}</span>
-            <Badge className={r.source === "learned" ? "bg-purple-50 text-purple-600" : "bg-gray-100 text-gray-500"}>{RULE_SOURCE[r.source]}</Badge>
+            <Badge className={r.source === "learned" ? "bg-purple-50 text-purple-600" : r.source === "benchmark" ? "bg-fuchsia-50 text-fuchsia-600" : "bg-gray-100 text-gray-500"}>{RULE_SOURCE[r.source]}</Badge>
             <button onClick={() => remove.mutate(r.id)} className="cursor-pointer text-muted-foreground opacity-0 hover:text-red-600 group-hover:opacity-100" aria-label="删除">
               <Trash2 className="size-3.5" />
             </button>

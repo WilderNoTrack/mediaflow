@@ -1,4 +1,4 @@
-import { AlertCircle, ExternalLink, Lightbulb, PenLine, Plus, Search, TrendingUp, X } from "lucide-react";
+import { AlertCircle, ExternalLink, Lightbulb, PenLine, Plus, Search, Sparkles, TrendingUp, X } from "lucide-react";
 import { useState } from "react";
 import type { Account, S, Topic } from "../api/client";
 import { useTopicActions, useTopics, useWrite } from "../api/hooks";
@@ -32,7 +32,8 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
         </div>
       )}
 
-      <div className="rounded-xl border bg-card p-4 shadow-sm">
+      <div className="rounded-xl border-2 border-indigo-200 bg-card p-4">
+        <div className="mb-2 flex items-center gap-2 text-sm font-medium"><Sparkles className="size-4 text-indigo-500" />智能找选题</div>
         <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); doSearch(direction); }}>
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -78,7 +79,7 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
       <ErrorText error={write.error} />
       <div>
         <div className="mb-2 flex items-baseline justify-between">
-          <h3 className="text-sm font-semibold">选题库 <span className="font-normal text-muted-foreground">{fresh.length}</span></h3>
+          <h3 className="font-semibold">选题库 <span className="font-normal text-muted-foreground">{fresh.length}</span></h3>
           <span className="text-xs text-muted-foreground">挑一个点「用这个写」</span>
         </div>
         {isLoading ? (
@@ -120,7 +121,7 @@ function TopicRow({ topic, onSelect, onSkip, generating, disabled }: {
 }) {
   const p = PLATFORMS[topic.source];
   return (
-    <div className="group flex gap-3 rounded-xl border bg-card p-4 transition-colors hover:border-indigo-200">
+    <div className="group flex gap-3 rounded-xl border bg-card p-4 transition-all hover:border-indigo-300 hover:shadow-md">
       <div className="min-w-0 flex-1">
         <div className="mb-1 flex flex-wrap items-center gap-2">
           <h4 className="text-sm font-medium leading-snug">{topic.title}</h4>
@@ -128,6 +129,11 @@ function TopicRow({ topic, onSelect, onSkip, generating, disabled }: {
         </div>
         {topic.angle && <p className="text-xs leading-relaxed text-muted-foreground">切入：{topic.angle}</p>}
         {topic.reason && <p className="mt-0.5 flex items-start gap-1 text-xs leading-relaxed text-indigo-600/80"><Lightbulb className="mt-0.5 size-3 shrink-0" />{topic.reason}</p>}
+        {typeof topic.reference?.title === "string" && (
+          <p className="mt-1.5 rounded-md bg-fuchsia-50 px-2 py-1 text-xs leading-relaxed text-fuchsia-700">
+            仿 {String(topic.reference.creator ?? "")} 的爆款「{topic.reference.title}」{topic.reference.likes ? ` · ${String(topic.reference.likes)}赞` : ""}
+          </p>
+        )}
         {topic.source_url && (
           <a href={topic.source_url} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
             <ExternalLink className="size-3" />看原帖
