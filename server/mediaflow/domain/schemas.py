@@ -7,7 +7,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from mediaflow.domain.models import (
-    AutoFrequency, ChatRole, DraftStatus, ImageStatus, JobKind, JobStatus, RuleSource, TopicStatus, Trigger,
+    AutoFrequency, BenchmarkStatus, ChatRole, DraftStatus, ImageStatus, JobKind, JobStatus, RuleSource, TopicStatus, Trigger,
 )
 
 
@@ -66,9 +66,41 @@ class AccountSummary(AccountOut):
     writing: bool = False
 
 
+class BenchmarkOut(BaseModel):
+    id: str
+    platform: str
+    target: str
+    theme: str
+    creator_name: str
+    creator_url: str
+    creator_info: dict
+    status: BenchmarkStatus
+    playbook: dict
+    plan: dict
+    samples: list[dict]
+    error: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class BenchmarkIn(BaseModel):
+    target: str = Field(min_length=1, max_length=500, description="对标账号：主页链接、笔记链接、名字或小红书号")
+    theme: str = Field("", max_length=100, description="想换成的主题，留空用账号现有主题")
+    platform: str = "xiaohongshu"
+
+
+class CreatorOut(BaseModel):
+    name: str
+    fans: str
+    posts: str
+    desc: str
+    url: str
+
+
 class AccountDetail(AccountOut):
     rules: list[RuleOut]
     notes: list[NoteOut] = []
+    benchmark: BenchmarkOut | None = None
 
 
 class RuleIn(BaseModel):
@@ -83,6 +115,7 @@ class TopicOut(BaseModel):
     reason: str
     source: str
     source_url: str
+    reference: dict = {}
     status: TopicStatus
     created_at: datetime
 

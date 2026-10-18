@@ -201,3 +201,51 @@ def item_ref(platform: str, native: str) -> str:
 
 def as_dict(obj: Any) -> dict:
     return asdict(obj)
+
+
+# ── 复刻对标账号用：直接拿数据类，不做截断 ────────────────────────────────
+
+
+async def creator_posts_raw(platform: str, native: str, n: int = 60) -> tuple[Creator, list[Post]]:
+    fn = _need(platform, "creator_posts", "看博主作品")
+    return await _throttled(platform, ("cpr", platform, native, n), lambda: fn(native, n))
+
+
+async def post_detail_raw(platform: str, native: str) -> PostDetail:
+    fn = _need(platform, "post_detail", "看作品详情")
+    return await _throttled(platform, ("pd", platform, native), lambda: fn(native))
+
+
+def _norm(s: str) -> str:
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+
+async def resolve_creator(platform: str, target: str) -> Creator:
+    """把用户给的「链接 / 名字 / 小红书号」解析成博主。
+
+    名字搜索时优先完全同名，其次粉丝最多的（重名小号通常没几个粉丝）。
+    """
+    target = (target or "").strip()
+    if not target:
+        raise ValueError("请给一个对标账号：主页链接、笔记链接或博主名字")
+    if platform == "xiaohongshu":
+        from mediaflow.sources import xhs
+
+        kind, native = await xhs.resolve_link(target)
+        if kind == "post":
+            d = await post_detail_raw(platform, native)
+            if not d.author_native:
+                raise LookupError("这篇笔记没拿到作者信息，换成博主主页链接试试")
+            kind, native = "creator", d.author_native
+        if kind == "creator":
+            return Creator(platform=platform, name="", native=native)
+    elif target.startswith("http"):
+        raise Unsupported(f"{PLATFORM_LABELS.get(platform, platform)}暂不支持用链接找博主，请直接写博主名字")
+    fn = _need(platform, "search_creators", "搜博主")
+    found: list[Creator] = await _throttled(platform, ("sc", platform, target, 10), lambda: fn(target, 10))
+    if not found:
+        raise LookupError(f"没搜到「{target}」，换个写法（去掉表情/后缀）或直接贴主页链接")
+    want = _norm(target)
+    exact = [c for c in found if _norm(c.name) == want or want in _norm(c.desc)]
+    pool = exact or found
+    return max(pool, key=lambda c: count_num(c.fans))

@@ -34,6 +34,7 @@ export const PLATFORMS: Record<string, { label: string; cls: string }> = {
   wechat: { label: "微信文章", cls: "bg-emerald-100 text-emerald-700" },
   ai: { label: "AI 推荐", cls: "bg-indigo-100 text-indigo-700" },
   user: { label: "手动", cls: "bg-gray-100 text-gray-700" },
+  benchmark: { label: "复刻", cls: "bg-fuchsia-100 text-fuchsia-700" },
 };
 
 export const FREQ_LABEL: Record<string, string> = { daily: "每天", every_2_days: "每 2 天", weekly: "每周" };

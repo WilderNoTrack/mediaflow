@@ -61,6 +61,11 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
   ③爆款规律（选题、标题写法、开头钩子、标签）④评论区用户在关心什么 ⑤给本账号的 3 条可执行建议。
 - 分析完用 save_note 存一份精炼要点（400 字内，偏「可借鉴的做法」），告诉用户已存为运营笔记、之后写稿会参考，不需要可以删。
 
+【复刻对标账号】用户说「照着某某做」「复刻这个号」「按这个博主的路子起号」，或贴了小红书主页/笔记链接想模仿，
+用 clone_creator（target 原样传用户给的链接或名字，theme 传用户想做的主题；主题没说就先问一句）。
+它会在后台读对方作品、拆打法、换主题出方案，并自动更新账号定位、写法规则和选题库，大约 1-2 分钟，告诉用户去「对标」页看。
+已经有对标方案时，账号状态里会有 benchmark；用户问「对标的打法是什么」直接按账号定位里的【对标账号打法】回答。
+
 【风格】中文，自然口语，简短（一般不超过 100 字；调研分析可以长一些，但要分点、去水分），改了什么就明确说改了什么。"""
 
 
@@ -130,9 +135,22 @@ TOOLS = [
         "content": {"type": "string", "description": "要点，400 字以内"},
     }, ["title", "content"]),
     _tool("remove_note", "删除一条运营笔记（ID 见账号状态）", {"note_id": {"type": "string"}}, ["note_id"]),
+    _tool("clone_creator", "复刻一个小红书对标账号：后台读作品、拆打法、按新主题出方案，自动更新定位/规则/选题库", {
+        "target": {"type": "string", "description": "对标账号：主页链接、笔记链接、博主名字或小红书号，原样传"},
+        "theme": {"type": "string", "description": "用户想换成的主题；用户没说且账号已有主题时可以不传"},
+    }, ["target"]),
 ]
 
 PROFILE_FIELDS = ("name", "theme", "audience", "content_style", "image_style", "topic_type", "keywords")
+
+
+def _bench_state(s: Session, account_id: str) -> dict:
+    from mediaflow.services.benchmark import latest
+
+    b = latest(s, account_id)
+    if b is None:
+        return {}
+    return {"benchmark": {"creator": b.creator_name or b.target, "status": b.status.value}}
 
 
 class Toolbox:
@@ -154,6 +172,7 @@ class Toolbox:
             "topic_type": a.topic_type, "keywords": a.keywords,
             "rules": [{"id": r.id, "text": r.text} for r in rules],
             "auto_enabled": a.auto_enabled, "auto_frequency": a.auto_frequency.value,
+            **_bench_state(self.s, a.id),
         }
 
     async def call(self, name: str, args: dict) -> dict:
@@ -233,6 +252,23 @@ class Toolbox:
         except JobConflict as e:
             return {"ok": False, "error": str(e), "job_id": e.job.id}
         return {"ok": True, "job_id": job.id, "note": "已开始在后台写，1-3 分钟后在草稿里能看到"}
+
+    async def t_clone_creator(self, target: str, theme: str = "") -> dict:
+        from mediaflow.domain.models import Benchmark
+
+        if not (theme.strip() or self.acc.theme):
+            return {"ok": False, "error": "还不知道用户想做什么主题，先问清楚再复刻"}
+        from mediaflow.jobs.queue import active_write_job
+
+        running = active_write_job(self.s, self.acc.id, JobKind.clone_creator)
+        if running:
+            return {"ok": False, "error": "这个账号正在拆解对标账号，等它好了再来", "job_id": running.id}
+        b = Benchmark(user_id=self.acc.user_id, account_id=self.acc.id, target=target.strip(), theme=theme.strip())
+        self.s.add(b)
+        self.s.commit()
+        job = enqueue(self.s, JobKind.clone_creator, user_id=self.acc.user_id, account_id=self.acc.id,
+                      payload={"benchmark_id": b.id})
+        return {"ok": True, "job_id": job.id, "note": "已开始拆解，1-2 分钟后在「对标」页看方案，账号定位和选题库会自动更新"}
 
     async def t_set_auto(self, enabled: bool, frequency: str | None = None) -> dict:
         self.acc.auto_enabled = bool(enabled)

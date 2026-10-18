@@ -92,6 +92,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/benchmark": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clone Benchmark
+         * @description 复刻一个对标账号：后台拆解打法、按新主题出方案，完成后同步到账号定位、规则和选题库。
+         */
+        post: operations["clone_benchmark_api_accounts__account_id__benchmark_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/benchmark/{benchmark_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Benchmark
+         * @description 不再对标：删掉拆解记录，没用过的复刻选题收起；已经同步到账号的定位和规则保留，可以自己改。
+         */
+        delete: operations["remove_benchmark_api_accounts__account_id__benchmark__benchmark_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/topics": {
         parameters: {
             query?: never;
@@ -351,6 +391,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/creators": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find Creators
+         * @description 按名字或领域关键词搜博主，用于挑对标账号。按粉丝从高到低。
+         */
+        get: operations["find_creators_api_research_creators_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/credentials": {
         parameters: {
             query?: never;
@@ -532,6 +592,7 @@ export interface components {
              * @default []
              */
             notes: components["schemas"]["NoteOut"][];
+            benchmark?: components["schemas"]["BenchmarkOut"] | null;
         };
         /** AccountIn */
         AccountIn: {
@@ -622,6 +683,74 @@ export interface components {
          * @enum {string}
          */
         AutoFrequency: "daily" | "every_2_days" | "weekly";
+        /** BenchmarkIn */
+        BenchmarkIn: {
+            /**
+             * Target
+             * @description 对标账号：主页链接、笔记链接、名字或小红书号
+             */
+            target: string;
+            /**
+             * Theme
+             * @description 想换成的主题，留空用账号现有主题
+             * @default
+             */
+            theme: string;
+            /**
+             * Platform
+             * @default xiaohongshu
+             */
+            platform: string;
+        };
+        /** BenchmarkOut */
+        BenchmarkOut: {
+            /** Id */
+            id: string;
+            /** Platform */
+            platform: string;
+            /** Target */
+            target: string;
+            /** Theme */
+            theme: string;
+            /** Creator Name */
+            creator_name: string;
+            /** Creator Url */
+            creator_url: string;
+            /** Creator Info */
+            creator_info: {
+                [key: string]: unknown;
+            };
+            status: components["schemas"]["BenchmarkStatus"];
+            /** Playbook */
+            playbook: {
+                [key: string]: unknown;
+            };
+            /** Plan */
+            plan: {
+                [key: string]: unknown;
+            };
+            /** Samples */
+            samples: {
+                [key: string]: unknown;
+            }[];
+            /** Error */
+            error: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * BenchmarkStatus
+         * @enum {string}
+         */
+        BenchmarkStatus: "analyzing" | "ready" | "failed";
         /** ChatIn */
         ChatIn: {
             /** Text */
@@ -651,6 +780,19 @@ export interface components {
          * @enum {string}
          */
         ChatRole: "user" | "assistant" | "tool";
+        /** CreatorOut */
+        CreatorOut: {
+            /** Name */
+            name: string;
+            /** Fans */
+            fans: string;
+            /** Posts */
+            posts: string;
+            /** Desc */
+            desc: string;
+            /** Url */
+            url: string;
+        };
         /** CredentialOut */
         CredentialOut: {
             /** Key */
@@ -833,7 +975,7 @@ export interface components {
          * JobKind
          * @enum {string}
          */
-        JobKind: "write_draft" | "generate_images";
+        JobKind: "write_draft" | "generate_images" | "clone_creator";
         /** JobOut */
         JobOut: {
             /** Id */
@@ -938,7 +1080,7 @@ export interface components {
          * RuleSource
          * @enum {string}
          */
-        RuleSource: "user" | "chat" | "learned";
+        RuleSource: "user" | "chat" | "learned" | "benchmark";
         /** SourceSample */
         SourceSample: {
             /** Title */
@@ -1024,6 +1166,13 @@ export interface components {
             source: string;
             /** Source Url */
             source_url: string;
+            /**
+             * Reference
+             * @default {}
+             */
+            reference: {
+                [key: string]: unknown;
+            };
             status: components["schemas"]["TopicStatus"];
             /**
              * Created At
@@ -1315,6 +1464,71 @@ export interface operations {
             header?: never;
             path: {
                 note_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clone_benchmark_api_accounts__account_id__benchmark_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_benchmark_api_accounts__account_id__benchmark__benchmark_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                benchmark_id: string;
                 account_id: string;
             };
             cookie?: never;
@@ -1938,6 +2152,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    find_creators_api_research_creators_get: {
+        parameters: {
+            query: {
+                q: string;
+                platform?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatorOut"][];
                 };
             };
             /** @description Validation Error */

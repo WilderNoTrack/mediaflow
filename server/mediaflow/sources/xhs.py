@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 
 import httpx
@@ -218,10 +219,17 @@ async def creator_posts(native: str, limit: int = 10, timeout: float = 15):
         info = _check((await _get(c, "/api/sns/web/v1/user/otherinfo",
                                   {"target_user_id": uid, "xsec_token": tok, "xsec_source": "pc_search"},
                                   cookies)).json(), "看博主主页")
-        await asyncio.sleep(0.8)
-        data = _check((await _get(c, "/api/sns/web/v1/user_posted",
-                                  {"num": "30", "cursor": "", "user_id": uid, "image_scenes": "FD_WM_WEBP"},
-                                  cookies)).json(), "看博主作品")
+        notes: list[dict] = []
+        cursor = ""
+        for _ in range(3):  # 一页 30 条，最多翻 3 页（复刻拆解要看更多历史爆款）
+            await asyncio.sleep(0.8)
+            data = _check((await _get(c, "/api/sns/web/v1/user_posted",
+                                      {"num": "30", "cursor": cursor, "user_id": uid, "image_scenes": "FD_WM_WEBP"},
+                                      cookies)).json(), "看博主作品")
+            notes += data.get("notes") or []
+            cursor = data.get("cursor") or ""
+            if len(notes) >= limit or not data.get("has_more") or not cursor:
+                break
     basic = info.get("basic_info") or {}
     inter = {i.get("type"): i.get("count") for i in info.get("interactions") or []}
     creator = Creator(
@@ -232,7 +240,7 @@ async def creator_posts(native: str, limit: int = 10, timeout: float = 15):
                "标签": [t.get("name") for t in info.get("tags") or [] if t.get("name")]},
     )
     posts = []
-    for n in data.get("notes") or []:
+    for n in notes:
         if not n.get("note_id"):
             continue
         posts.append(Post(
@@ -267,7 +275,10 @@ async def post_detail(native: str, comments: int = 8, timeout: float = 15):
     return PostDetail(
         platform="xiaohongshu", title=card.get("title") or "（无标题）", native=native,
         url=f"https://www.xiaohongshu.com/explore/{nid}?xsec_token={tok}&xsec_source=pc_search",
-        author=(card.get("user") or {}).get("nickname", ""), likes=str(it.get("liked_count", "")),
+        author=(card.get("user") or {}).get("nickname", ""),
+        author_native=f"{(card.get('user') or {}).get('user_id', '')}|{(card.get('user') or {}).get('xsec_token', '')}"
+        if (card.get("user") or {}).get("user_id") else "",
+        likes=str(it.get("liked_count", "")),
         comments=str(it.get("comment_count", "")), collects=str(it.get("collected_count", "")),
         shares=str(it.get("share_count", "")), published=ms_date(card.get("time")),
         kind="视频" if card.get("type") == "video" else "图文",
@@ -276,3 +287,36 @@ async def post_detail(native: str, comments: int = 8, timeout: float = 15):
         top_comments=[f"{x.get('like_count', 0)}赞｜{' '.join((x.get('content') or '').split())[:120]}"
                       for x in top[:comments] if x.get("content")],
     )
+
+
+_PROFILE = re.compile(r"/user/profile/([0-9a-zA-Z]{16,32})")
+_NOTE = re.compile(r"/(?:explore|discovery/item)/([0-9a-zA-Z]{16,32})")
+_TOKEN = re.compile(r"xsec_token=([^&#\s]+)")
+
+
+async def resolve_link(text: str, timeout: float = 10) -> tuple[str, str]:
+    """把用户贴的链接解析成 (kind, native)：kind 为 creator 或 post；认不出返回 ("", "")。
+
+    支持主页链接、笔记链接、xhslink.com 短链（跟随跳转，跳到登录页时从 redirectPath 里取原地址）。
+    """
+    from urllib.parse import unquote
+
+    m = re.search(r"https?://\S+", text or "")
+    if not m:
+        return "", ""
+    url = m.group(0)
+    if "xhslink.com" in url:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, headers=_HEADERS, follow_redirects=True) as c:
+                r = await c.get(url)
+            url = " ".join([str(h.headers.get("location", "")) for h in r.history] + [str(r.url)])
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"短链打不开：{e}") from e
+    url = unquote(unquote(url))
+    tok = _TOKEN.search(url)
+    token = tok.group(1) if tok else ""
+    if p := _PROFILE.search(url):
+        return "creator", f"{p.group(1)}|{token}"
+    if n := _NOTE.search(url):
+        return "post", f"{n.group(1)}|{token}"
+    return "", ""

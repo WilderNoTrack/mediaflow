@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from mediaflow.agents import prompts
 from mediaflow.agents.checks import clean_tags, hard_check
@@ -67,6 +67,14 @@ async def _pick_topic(
             raise LookupError("选题不存在或不属于这个账号")
         emit("topic", f"使用选题库里的选题：{t.title}", {"topic_id": t.id})
         return t
+    if not hint:
+        # 复刻模式：先按顺序用对标方案里的复刻选题
+        bt = session.exec(select(Topic).where(
+            Topic.account_id == ctx.account_id, Topic.source == "benchmark", Topic.status == TopicStatus.new,
+        ).order_by(col(Topic.created_at))).first()
+        if bt is not None:
+            emit("topic", f"使用复刻选题：{bt.title}", {"topic_id": bt.id})
+            return bt
     emit("topic", "正在搜热点、找选题…", None)
     proposal = await propose_topics(session, llm, ctx, direction=hint, count=3, fetch=fetch)
     if proposal.source_note:
@@ -86,6 +94,18 @@ async def _pick_topic(
     return t
 
 
+def _reference_block(topic: Topic) -> str:
+    ref = topic.reference or {}
+    if not ref.get("title"):
+        return ""
+    body = " ".join(str(ref.get("content", "")).split())[:600]
+    return ("\n\n" + prompts.UNTRUSTED_NOTICE + "\n<external_data>\n"
+            f"【参考爆款（{ref.get('creator', '对标账号')}，{ref.get('likes', '?')}赞）】\n标题：{ref['title']}\n"
+            + (f"正文：{body}\n" if body else "")
+            + (f"标签：{'、'.join(ref.get('tags') or [])}\n" if ref.get("tags") else "")
+            + "</external_data>\n学它的标题公式、开头钩子、结构节奏和信息密度，内容必须换成本账号主题，不照抄任何句子。")
+
+
 async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feedback: str) -> Candidate:
     data = await complete_json(llm, [
         {"role": "system", "content": prompts.WRITER_SYSTEM},
@@ -96,7 +116,7 @@ async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feed
             topic_angle=topic.angle or "自行决定",
             hint_block=f"用户补充要求：{hint}\n" if hint else "",
             feedback_block=f"\n【上一版的问题，这次必须改掉】\n{feedback}\n" if feedback else "",
-        )},
+        ) + _reference_block(topic)},
     ], temperature=0.85)
     return Candidate(
         title=str(data.get("title", "")).strip(),

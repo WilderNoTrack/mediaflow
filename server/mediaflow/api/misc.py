@@ -7,7 +7,7 @@ from mediaflow.api.deps import current_user_id, owned_account
 from mediaflow.config import get_settings
 from mediaflow.db import get_session
 from mediaflow.domain.models import Account, ChatMessage, Job
-from mediaflow.domain.schemas import ChatIn, ChatMessageOut, JobOut, SystemStatus
+from mediaflow.domain.schemas import ChatIn, ChatMessageOut, CreatorOut, JobOut, SystemStatus
 from mediaflow.llm.client import get_llm
 
 router = APIRouter(tags=["misc"])
@@ -51,3 +51,20 @@ def get_job(job_id: str, s: Session = Depends(get_session), uid: str = Depends(c
     if j is None or j.user_id != uid:
         raise HTTPException(404, "任务不存在")
     return JobOut(**j.model_dump())
+
+
+@router.get("/api/research/creators", response_model=list[CreatorOut])
+async def find_creators(q: str, platform: str = "xiaohongshu"):
+    """按名字或领域关键词搜博主，用于挑对标账号。按粉丝从高到低。"""
+    from mediaflow.research import service as research
+    from mediaflow.research.types import Unsupported, count_num
+
+    try:
+        fn = research._need(platform, "search_creators", "搜博主")
+        found = await research._throttled(platform, ("sc", platform, q.strip(), 10), lambda: fn(q.strip(), 10))
+    except Unsupported as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(502, str(e)) from e
+    found = sorted(found, key=lambda c: -count_num(c.fans))
+    return [CreatorOut(name=c.name, fans=c.fans, posts=c.posts, desc=c.desc, url=c.url) for c in found]

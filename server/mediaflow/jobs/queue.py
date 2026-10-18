@@ -26,23 +26,25 @@ ACTIVE = (JobStatus.queued, JobStatus.running)
 
 class JobConflict(RuntimeError):
     def __init__(self, job: Job) -> None:
-        super().__init__("这个账号已经有一篇正在写，等它写完再来")
+        msg = ("这个账号正在拆解对标账号，等它好了再来" if job.kind == JobKind.clone_creator
+               else "这个账号已经有一篇正在写，等它写完再来")
+        super().__init__(msg)
         self.job = job
 
 
-def active_write_job(session: Session, account_id: str) -> Job | None:
+def active_write_job(session: Session, account_id: str, kind: JobKind = JobKind.write_draft) -> Job | None:
     return session.exec(
         select(Job).where(
             Job.account_id == account_id,
-            Job.kind == JobKind.write_draft,
+            Job.kind == kind,
             col(Job.status).in_(ACTIVE),
         )
     ).first()
 
 
 def enqueue(session: Session, kind: JobKind, *, user_id: str, account_id: str | None, payload: dict) -> Job:
-    if kind == JobKind.write_draft and account_id:
-        existing = active_write_job(session, account_id)
+    if kind in (JobKind.write_draft, JobKind.clone_creator) and account_id:
+        existing = active_write_job(session, account_id, kind)
         if existing:
             raise JobConflict(existing)
     job = Job(kind=kind, user_id=user_id, account_id=account_id, payload=payload)
@@ -102,9 +104,20 @@ async def _handle_images(job: Job, emit) -> dict:
         )
 
 
+async def _handle_clone(job: Job, emit) -> dict:
+    from mediaflow.llm.client import get_llm
+    from mediaflow.services.benchmark import analyze
+
+    with session_scope() as s:
+        b = await analyze(s, get_llm(), job.payload["benchmark_id"], emit=emit)
+        return {"benchmark_id": b.id, "creator": b.creator_name,
+                "topics": len((b.plan.get("applied") or {}).get("topics") or [])}
+
+
 HANDLERS: dict[JobKind, Handler] = {
     JobKind.write_draft: _handle_write,
     JobKind.generate_images: _handle_images,
+    JobKind.clone_creator: _handle_clone,
 }
 
 
@@ -144,6 +157,10 @@ def recover_interrupted() -> int:
         for j in stuck:
             j.status, j.error, j.finished_at = JobStatus.failed, "程序重启，任务被中断", utcnow()
             s.add(j)
+        from mediaflow.domain.models import Benchmark, BenchmarkStatus
+        for b in s.exec(select(Benchmark).where(Benchmark.status == BenchmarkStatus.analyzing)).all():
+            b.status, b.error = BenchmarkStatus.failed, "程序重启，拆解被中断，重新试一次就好"
+            s.add(b)
         s.commit()
         return len(stuck)
 

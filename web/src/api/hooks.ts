@@ -72,6 +72,32 @@ export function useNotes(id: string) {
   });
 }
 
+/** 复刻对标账号：发起后台拆解任务 */
+export function useClone(id: string) {
+  const qc = useQueryClient();
+  const inv = useInvalidateAccount(id);
+  return useMutation({
+    mutationFn: ({ accountId, ...body }: S["BenchmarkIn"] & { accountId?: string }) =>
+      unwrap(api.POST("/api/accounts/{account_id}/benchmark", { params: { path: { account_id: accountId ?? id } }, body })),
+    onSettled: (_d, _e, v) => { qc.invalidateQueries({ queryKey: ["jobs", v.accountId ?? id] }); inv(); },
+  });
+}
+
+export function useRemoveBenchmark(id: string) {
+  const inv = useInvalidateAccount(id);
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (benchmark_id: string) =>
+      unwrap(api.DELETE("/api/accounts/{account_id}/benchmark/{benchmark_id}", { params: { path: { account_id: id, benchmark_id } } })),
+    onSuccess: () => { inv(); qc.invalidateQueries({ queryKey: ["topics", id] }); },
+  });
+}
+
+export const useFindCreators = () =>
+  useMutation({
+    mutationFn: (q: string) => unwrap(api.GET("/api/research/creators", { params: { query: { q } } })),
+  });
+
 export const useTopics = (id: string) =>
   useQuery({
     queryKey: ["topics", id],
@@ -160,6 +186,7 @@ export function useActiveJobs(id: string) {
         qc.invalidateQueries({ queryKey: ["topics", id] });
         qc.invalidateQueries({ queryKey: ["draft"] });
         qc.invalidateQueries({ queryKey: ["accounts"] });
+        qc.invalidateQueries({ queryKey: ["account", id] });
       }
       return jobs;
     },

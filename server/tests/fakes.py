@@ -41,7 +41,8 @@ class FakeLLM:
         system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
         for kind, marker in (("writer", prompts.WRITER_SYSTEM), ("eval", prompts.EVALUATOR_SYSTEM),
                              ("topic", prompts.TOPIC_SYSTEM), ("image", prompts.IMAGE_PROMPT_SYSTEM),
-                             ("learn", prompts.LEARN_SYSTEM), ("manager", MANAGER_PROMPT)):
+                             ("learn", prompts.LEARN_SYSTEM), ("manager", MANAGER_PROMPT),
+                             ("bench_analyze", prompts.BENCH_ANALYZE_SYSTEM), ("bench_adapt", prompts.BENCH_ADAPT_SYSTEM)):
             if system.startswith(marker[:30]):
                 return kind
         return "other"

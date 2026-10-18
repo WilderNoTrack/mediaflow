@@ -48,6 +48,7 @@ class RuleSource(str, Enum):
     user = "user"  # 用户在设置里手写
     chat = "chat"  # 管家在对话里记下
     learned = "learned"  # 从用户的修改/反馈中学到（经用户确认）
+    benchmark = "benchmark"  # 复刻对标账号时按对方打法生成
 
 
 class TopicStatus(str, Enum):
@@ -74,6 +75,7 @@ class ImageStatus(str, Enum):
 class JobKind(str, Enum):
     write_draft = "write_draft"
     generate_images = "generate_images"
+    clone_creator = "clone_creator"  # 拆解对标账号并生成复刻方案
 
 
 class JobStatus(str, Enum):
@@ -144,6 +146,33 @@ class Note(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class BenchmarkStatus(str, Enum):
+    analyzing = "analyzing"
+    ready = "ready"
+    failed = "failed"
+
+
+class Benchmark(SQLModel, table=True):
+    """对标账号：拆解出来的打法（playbook）+ 爆款样本。每个账号以最新一条 ready 的为准。"""
+
+    id: str = Field(default_factory=_id, primary_key=True)
+    user_id: str = Field(index=True, foreign_key="user.id")
+    account_id: str = Field(index=True, foreign_key="account.id")
+    platform: str = "xiaohongshu"
+    target: str = ""  # 用户输入的链接 / 名字
+    theme: str = ""  # 用户想换成的主题
+    creator_name: str = ""
+    creator_url: str = ""
+    creator_info: dict = json_obj_col()  # 粉丝、获赞、简介、更新频率等
+    status: BenchmarkStatus = BenchmarkStatus.analyzing
+    playbook: dict = json_obj_col()  # 拆解结果：人设、栏目、标题公式、结构、视觉…
+    plan: dict = json_obj_col()  # 换主题后的方案：定位、规则、起号建议
+    samples: list[dict] = json_col()  # 爆款样本（标题、互动、正文摘要、标签、热评）
+    error: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class Topic(SQLModel, table=True):
     id: str = Field(default_factory=_id, primary_key=True)
     user_id: str = Field(index=True, foreign_key="user.id")
@@ -153,6 +182,7 @@ class Topic(SQLModel, table=True):
     reason: str = ""
     source: str = "ai"  # weibo / baidu / bilibili / douyin / ai / user
     source_url: str = ""
+    reference: dict = json_obj_col()  # 复刻选题对应的原爆款（标题、互动、正文摘要），写稿时学结构
     status: TopicStatus = TopicStatus.new
     created_at: datetime = Field(default_factory=utcnow)
 

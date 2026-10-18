@@ -3,10 +3,16 @@ from sqlmodel import Session, col, func, select
 
 from mediaflow.api.deps import current_user_id, owned_account
 from mediaflow.db import get_session
-from mediaflow.domain.models import Account, Draft, DraftStatus, Job, JobKind, JobStatus, Note, Rule, utcnow
-from mediaflow.domain.schemas import (
-    AccountDetail, AccountIn, AccountOut, AccountPatch, AccountSummary, NoteOut, RuleIn, RuleOut,
+from mediaflow.domain.models import (
+    Account, Benchmark, Draft, DraftStatus, Job, JobKind, JobStatus, Note, Rule, Topic, TopicStatus, utcnow,
 )
+from mediaflow.domain.schemas import (
+    AccountDetail, AccountIn, AccountOut, AccountPatch, AccountSummary, BenchmarkIn, BenchmarkOut, JobOut, NoteOut,
+    RuleIn, RuleOut,
+)
+from mediaflow.jobs.queue import JobConflict, active_write_job, enqueue
+from mediaflow.llm.client import get_llm
+from mediaflow.services import benchmark as bench
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
@@ -15,8 +21,10 @@ def _detail(s: Session, acc: Account) -> AccountDetail:
     rules = s.exec(select(Rule).where(Rule.account_id == acc.id, Rule.active == True)  # noqa: E712
                    .order_by(col(Rule.created_at))).all()
     notes = s.exec(select(Note).where(Note.account_id == acc.id).order_by(col(Note.created_at).desc())).all()
+    b = bench.latest(s, acc.id)
     return AccountDetail(**acc.model_dump(), rules=[RuleOut(**r.model_dump()) for r in rules],
-                         notes=[NoteOut(**n.model_dump()) for n in notes])
+                         notes=[NoteOut(**n.model_dump()) for n in notes],
+                         benchmark=BenchmarkOut(**b.model_dump()) if b else None)
 
 
 @router.get("", response_model=list[AccountSummary])
@@ -70,6 +78,7 @@ def delete_account(acc: Account = Depends(owned_account), s: Session = Depends(g
         (Topic, Topic.account_id == acc.id),
         (Rule, Rule.account_id == acc.id),
         (Note, Note.account_id == acc.id),
+        (Benchmark, Benchmark.account_id == acc.id),
         (ChatMessage, ChatMessage.account_id == acc.id),
         (Job, Job.account_id == acc.id),
     ):
@@ -105,6 +114,38 @@ def remove_note(note_id: str, acc: Account = Depends(owned_account), s: Session 
     if n is None or n.account_id != acc.id:
         raise HTTPException(404, "笔记不存在")
     s.delete(n)
+    s.commit()
+
+
+@router.post("/{account_id}/benchmark", response_model=JobOut, status_code=201)
+def clone_benchmark(body: BenchmarkIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """复刻一个对标账号：后台拆解打法、按新主题出方案，完成后同步到账号定位、规则和选题库。"""
+    get_llm()  # 没配模型直接报错，不白跑抓取
+    if not (body.theme.strip() or acc.theme):
+        raise ValueError("先说一下你想做什么主题，比如「职场新人理财」")
+    existing = active_write_job(s, acc.id, JobKind.clone_creator)
+    if existing:
+        raise JobConflict(existing)
+    b = Benchmark(user_id=acc.user_id, account_id=acc.id, platform=body.platform, target=body.target.strip(),
+                  theme=body.theme.strip())
+    s.add(b)
+    s.commit()
+    job = enqueue(s, JobKind.clone_creator, user_id=acc.user_id, account_id=acc.id, payload={"benchmark_id": b.id})
+    return JobOut(**job.model_dump())
+
+
+@router.delete("/{account_id}/benchmark/{benchmark_id}", status_code=204)
+def remove_benchmark(benchmark_id: str, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """不再对标：删掉拆解记录，没用过的复刻选题收起；已经同步到账号的定位和规则保留，可以自己改。"""
+    b = s.get(Benchmark, benchmark_id)
+    if b is None or b.account_id != acc.id:
+        raise HTTPException(404, "对标记录不存在")
+    for t in s.exec(select(Topic).where(Topic.account_id == acc.id, Topic.source == "benchmark",
+                                        Topic.status == TopicStatus.new)).all():
+        if (t.reference or {}).get("benchmark_id") == b.id:
+            t.status = TopicStatus.dismissed
+            s.add(t)
+    s.delete(b)
     s.commit()
 
 
