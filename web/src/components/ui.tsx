@@ -128,14 +128,57 @@ export function Segmented<T extends string>({ value, onChange, items }: {
   );
 }
 
+/** 工作台主导航：原版分段式外观，带数量角标 */
+export function Tabs<T extends string>({ value, onChange, items, className }: {
+  value: T; onChange: (v: T) => void; className?: string;
+  items: { value: T; label: ReactNode; icon?: ReactNode; count?: number }[];
+}) {
+  return (
+    <div className={cn("flex w-fit items-center gap-1 rounded-lg bg-muted p-1", className)}>
+      {items.map((it) => (
+        <button
+          key={it.value}
+          onClick={() => onChange(it.value)}
+          className={cn(
+            "flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-all [&_svg]:size-3.5",
+            value === it.value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {it.icon}{it.label}
+          {!!it.count && <span className="rounded-full bg-brand-gradient px-1.5 text-[11px] leading-4 text-white">{it.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 胶囊筛选（原版内容页的样式） */
+export function Pills<T extends string>({ value, onChange, items }: {
+  value: T; onChange: (v: T) => void; items: { value: T; label: ReactNode }[];
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((it) => (
+        <button
+          key={it.value}
+          onClick={() => onChange(it.value)}
+          className={cn("cursor-pointer whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-all",
+            value === it.value ? "bg-indigo-100 text-indigo-700" : "text-muted-foreground hover:bg-muted")}
+        >{it.label}</button>
+      ))}
+    </div>
+  );
+}
+
 export const Spinner = ({ className }: { className?: string }) => <Loader2 className={cn("size-4 animate-spin text-indigo-500", className)} />;
 
-export function Empty({ icon, title, action }: { icon?: ReactNode; title: string; action?: ReactNode }) {
+export function Empty({ icon, title, desc, action }: { icon?: ReactNode; title: string; desc?: ReactNode; action?: ReactNode }) {
   return (
     <div className="py-16 text-center text-muted-foreground">
       {icon && <div className="mx-auto mb-3 w-fit opacity-20 [&_svg]:size-12">{icon}</div>}
-      <p className="mb-3 text-sm">{title}</p>
-      {action}
+      <p className="text-sm">{title}</p>
+      {desc && <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed">{desc}</p>}
+      {action && <div className="mt-4 flex justify-center gap-2">{action}</div>}
     </div>
   );
 }
@@ -154,9 +197,9 @@ export function Label({ children, hint }: { children: ReactNode; hint?: string }
   );
 }
 
-export function Modal({ children, className }: { children: ReactNode; className?: string }) {
+export function Modal({ children, className, onClose }: { children: ReactNode; className?: string; onClose?: () => void }) {
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
       <div className={cn("w-full max-w-md rounded-2xl bg-card shadow-2xl", className)}>{children}</div>
     </div>
   );

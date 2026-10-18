@@ -1,60 +1,88 @@
-import { CheckCircle2, Loader2, X, XCircle } from "lucide-react";
+import { Check, CheckCircle2, Loader2, X, XCircle } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { Job, JobEvent } from "../api/client";
 import { isActive } from "../api/hooks";
+import { cn } from "../lib/utils";
 
-const KIND = { write_draft: "AI 正在创作", generate_images: "正在生成配图", clone_creator: "正在拆解对标账号" } as const;
-const STAGES = ["topic", "write", "review", "done"];
-const CLONE_STAGES = ["find", "detail", "analyze", "adapt", "done"];
+const STEPS = [["topic", "定选题"], ["write", "写稿"], ["review", "质检"], ["done", "完成"]] as const;
+const HIDDEN_KEY = "mf.hiddenJobs";
 
-/** 右下角浮动的任务进度卡（对应 v1 的 GenerationProgress） */
-export function JobDock({ jobs }: { jobs: Job[] }) {
-  const [hidden, setHidden] = useState<string[]>([]);
-  // 只显示进行中的任务和 2 分钟内刚结束的任务，避免旧任务一直挂着
-  const recent = (j: Job) => !!j.finished_at && Date.now() - new Date(j.finished_at.endsWith("Z") || j.finished_at.includes("+") ? j.finished_at : j.finished_at + "Z").getTime() < 120_000;
-  const shown = jobs.filter((j) => isActive(j) || (recent(j) && !hidden.includes(j.id))).slice(0, 3);
+const finishedAt = (j: Job) => (j.finished_at ? new Date(/Z|[+-]\d\d:\d\d$/.test(j.finished_at) ? j.finished_at : j.finished_at + "Z").getTime() : 0);
+
+/** 工作台顶部的任务条：进行中的写稿显示步骤，刚写完的给一个入口，失败的说原因。不再用浮层挡内容。 */
+export function JobStrip({ jobs }: { jobs: Job[] }) {
+  const [hidden, setHidden] = useState<string[]>(() => JSON.parse(sessionStorage.getItem(HIDDEN_KEY) || "[]"));
+  const hide = (id: string) => {
+    const next = [...hidden, id];
+    setHidden(next);
+    sessionStorage.setItem(HIDDEN_KEY, JSON.stringify(next));
+  };
+  const shown = jobs.filter((j) => {
+    if (isActive(j)) return true;
+    if (j.kind !== "write_draft" || hidden.includes(j.id)) return false; // 配图任务结束后在草稿页看结果即可
+    return Date.now() - finishedAt(j) < 10 * 60_000;
+  }).slice(0, 2);
   if (!shown.length) return null;
-  return (
-    <div className="fixed bottom-6 right-6 z-50 w-80 space-y-3">
-      {shown.map((j) => <JobCard key={j.id} job={j} onClose={() => setHidden([...hidden, j.id])} />)}
-    </div>
-  );
+  return <div className="mb-5 space-y-2">{shown.map((j) => <JobRow key={j.id} job={j} onClose={() => hide(j.id)} />)}</div>;
 }
 
-function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
+function JobRow({ job, onClose }: { job: Job; onClose: () => void }) {
   const events = job.events as JobEvent[];
   const last = events[events.length - 1];
   const draftId = (job.result as { draft_id?: string }).draft_id;
+  const title = (job.result as { title?: string }).title;
   const active = isActive(job);
-  const seen = new Set(events.map((e) => e.stage));
-  const stages = job.kind === "clone_creator" ? CLONE_STAGES : STAGES;
-  const pct = job.status === "succeeded" ? 100 : Math.max(8, Math.round((stages.filter((s) => seen.has(s)).length / stages.length) * 100));
-  return (
-    <div className="overflow-hidden rounded-xl border bg-card shadow-xl">
-      <div className="flex items-center gap-2 px-4 pt-3">
-        {active ? <Loader2 className="size-4 animate-spin text-indigo-500" />
-          : job.status === "succeeded" ? <CheckCircle2 className="size-4 text-green-600" /> : <XCircle className="size-4 text-red-600" />}
-        <span className="flex-1 text-sm font-medium">
-          {job.status === "queued" ? "排队中…" : active ? KIND[job.kind] : job.status === "succeeded" ? "完成" : "失败了"}
-        </span>
-        {!active && <button onClick={onClose} className="cursor-pointer text-muted-foreground hover:text-foreground" aria-label="关闭"><X className="size-4" /></button>}
+
+  if (job.kind === "generate_images") {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border bg-card px-4 py-2.5 text-sm">
+        <Loader2 className="size-4 animate-spin text-indigo-500" />正在生成配图<span className="truncate text-xs text-muted-foreground">{last?.message}</span>
       </div>
-      <div className="px-4 pb-3 pt-1.5">
-        <p className="line-clamp-2 text-xs text-muted-foreground">
-          {job.status === "failed" ? job.error || "未知错误" : last?.message ?? "准备中…"}
-        </p>
-        {job.kind !== "generate_images" && (
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-            <div className={`h-full rounded-full transition-all ${job.status === "failed" ? "bg-red-400" : "bg-brand-gradient"}`} style={{ width: `${pct}%` }} />
-          </div>
-        )}
-        {draftId && job.status === "succeeded" && job.kind === "write_draft" && (
-          <Link to={`/drafts/${draftId}`} className="mt-2 inline-block text-xs font-medium text-indigo-600 hover:underline">查看草稿 →</Link>
-        )}
-        {job.kind === "clone_creator" && job.status === "succeeded" && (
-          <Link to={`/accounts/${job.account_id}?tab=bench`} className="mt-2 inline-block text-xs font-medium text-indigo-600 hover:underline">查看复刻方案 →</Link>
-        )}
+    );
+  }
+  if (job.status === "failed") {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+        <XCircle className="size-4 shrink-0" /><span className="font-medium">没写成</span>
+        <span className="min-w-0 flex-1 truncate text-xs">{job.error || "未知错误"}</span>
+        <button onClick={onClose} className="cursor-pointer opacity-60 hover:opacity-100" aria-label="知道了"><X className="size-4" /></button>
+      </div>
+    );
+  }
+  if (!active) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">
+        <CheckCircle2 className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">写好了{title ? `：${title}` : last?.message ? `：${last.message.replace(/^草稿已保存：/, "")}` : ""}</span>
+        {draftId && <Link to={`/drafts/${draftId}`} className="shrink-0 font-medium hover:underline">去审核 →</Link>}
+        <button onClick={onClose} className="cursor-pointer opacity-60 hover:opacity-100" aria-label="关闭"><X className="size-4" /></button>
+      </div>
+    );
+  }
+  const seen = new Set(events.map((e) => e.stage));
+  const cur = STEPS.findIndex(([s]) => !seen.has(s));
+  return (
+    <div className="rounded-xl border border-indigo-200 bg-card px-4 py-3">
+      <div className="mb-2.5 flex items-center gap-2 text-sm font-medium">
+        <Loader2 className="size-4 animate-spin text-indigo-500" />{job.status === "queued" ? "排队中…" : "AI 正在写稿"}
+        <span className="truncate text-xs font-normal text-muted-foreground">{last?.message ?? "准备中…"}</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        {STEPS.map(([s, label], i) => {
+          const done = seen.has(s);
+          const now = i === cur;
+          return (
+            <div key={s} className="flex flex-1 items-center gap-1.5">
+              <span className={cn("flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold",
+                done ? "bg-indigo-500 text-white" : now ? "border-2 border-indigo-400 text-indigo-500" : "bg-muted text-muted-foreground")}>
+                {done ? <Check className="size-3" /> : i + 1}
+              </span>
+              <span className={cn("text-xs", done || now ? "text-foreground" : "text-muted-foreground")}>{label}</span>
+              {i < STEPS.length - 1 && <span className={cn("h-px flex-1", done ? "bg-indigo-300" : "bg-border")} />}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

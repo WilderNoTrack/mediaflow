@@ -1,12 +1,12 @@
-import { AlertCircle, ExternalLink, KeyRound, Plus, Search, TrendingUp, Zap } from "lucide-react";
+import { AlertCircle, ExternalLink, Lightbulb, PenLine, Plus, Search, TrendingUp, X } from "lucide-react";
 import { useState } from "react";
 import type { Account, S, Topic } from "../api/client";
 import { useTopicActions, useTopics, useWrite } from "../api/hooks";
 import { cn, PLATFORMS } from "../lib/utils";
 import { SourcesDialog } from "./SourcesDialog";
-import { Badge, Button, Card, CardBody, CardHead, Empty, ErrorText, Input, Spinner } from "./ui";
+import { Badge, Button, Empty, ErrorText, Input, Spinner } from "./ui";
 
-const SOURCES = ["xiaohongshu", "zhihu", "baidu", "douyin", "bilibili", "weibo", "wechat"];
+const SOURCES = ["xiaohongshu", "douyin", "bilibili", "weibo", "zhihu", "baidu", "wechat"];
 
 export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; busy: boolean; onGoConfig: () => void }) {
   const { data: topics = [], isLoading } = useTopics(account.id);
@@ -19,91 +19,76 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const fresh = topics.filter((t) => t.status === "new");
   const used = topics.filter((t) => t.status === "used");
-  const status = (src: string) => result?.sources.find((s) => s.source === src);
 
   const doSearch = (d: string) => { setDirection(d); search.mutate(d, { onSuccess: setResult }); };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {!account.theme && (
-        <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <AlertCircle className="size-5 shrink-0 text-amber-500" />
-          <div className="flex-1 text-sm text-amber-800">账号主题还没设定，选题会不够精准</div>
-          <Button size="sm" variant="outline" onClick={onGoConfig}>去配置</Button>
+        <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+          <AlertCircle className="size-4 shrink-0" />
+          <span className="flex-1">账号定位还没定，找到的选题会比较泛。</span>
+          <button className="cursor-pointer font-medium hover:underline" onClick={onGoConfig}>去设定</button>
         </div>
       )}
 
-      <Card>
-        <CardHead icon={<Search />} title="搜索选题热点" desc="AI 会在各平台按关键词搜索（没配置的平台用热榜），按账号定位筛出适合的选题和切入角度"
-          action={<Button size="sm" variant="ghost" onClick={() => setSourcesOpen(true)}><KeyRound />数据来源</Button>} />
-        {sourcesOpen && <SourcesDialog onClose={() => setSourcesOpen(false)} />}
-        <CardBody className="space-y-4">
-          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); doSearch(direction); }}>
-            <Input placeholder="输入方向或关键词，留空则按账号定位搜索…" value={direction} onChange={(e) => setDirection(e.target.value)} />
-            <Button type="submit" variant="gradient" loading={search.isPending}>{!search.isPending && <Search />}搜索</Button>
-          </form>
-
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-muted-foreground">来源平台：</span>
-            {SOURCES.map((src) => {
-              const st = status(src);
-              return (
-                <Badge key={src} className={cn("rounded-full px-2.5 py-1", PLATFORMS[src].cls,
-                  st?.mode === "off" && "bg-gray-100 text-gray-400",
-                  st && !st.ok && st.mode !== "off" && "bg-red-50 text-red-500 line-through")}>
-                  <span title={st?.note}>
-                    {PLATFORMS[src].label}{st?.ok && ` · ${st.mode === "hot" ? "热榜" : "搜索"} ${st.count}`}{st?.mode === "off" && " · 未配置"}
-                  </span>
-                </Badge>
-              );
-            })}
-            {search.isPending && <span className="flex items-center gap-1 text-indigo-500"><Spinner className="size-3" />抓取并筛选中，约半分钟…</span>}
+      <div className="rounded-xl border bg-card p-4 shadow-sm">
+        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); doSearch(direction); }}>
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input className="h-10 pl-9" placeholder="想找什么方向？留空就按账号定位找" value={direction} onChange={(e) => setDirection(e.target.value)} />
           </div>
-          {result && !search.isPending && (
-            <p className="text-xs text-muted-foreground">
-              新增 {result.topics.length} 个选题{result.skipped_duplicates > 0 && `，已跳过 ${result.skipped_duplicates} 个和历史重复的`}{result.note && `。${result.note}`}
-            </p>
+          <Button type="submit" variant="gradient" className="h-10" loading={search.isPending}>找选题</Button>
+        </form>
+        {account.keywords.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground">常用：</span>
+            {account.keywords.map((k) => (
+              <button key={k} onClick={() => doSearch(k)} className="cursor-pointer rounded-full border px-2.5 py-0.5 text-muted-foreground transition-colors hover:border-indigo-300 hover:text-indigo-600">{k}</button>
+            ))}
+          </div>
+        )}
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-3 text-xs text-muted-foreground">
+          {search.isPending ? (
+            <span className="flex items-center gap-1.5 text-indigo-600"><Spinner className="size-3" />正在各平台搜索并按定位筛选，大约半分钟…</span>
+          ) : result ? (
+            <>
+              {result.sources.map((st) => (
+                <span key={st.source} title={st.note} className="flex items-center gap-1">
+                  <span className={cn("size-1.5 rounded-full", st.ok ? "bg-emerald-500" : st.mode === "off" ? "bg-gray-300" : "bg-red-500")} />
+                  {PLATFORMS[st.source]?.label ?? st.label}
+                  <span className="text-muted-foreground/70">{st.ok ? `${st.mode === "hot" ? "热榜" : ""}${st.count}` : st.mode === "off" ? "未连接" : "失败"}</span>
+                </span>
+              ))}
+            </>
+          ) : (
+            <span>从 {SOURCES.map((s) => PLATFORMS[s].label).join("、")} 搜热点，再按你的定位挑出能写的角度</span>
           )}
-          <ErrorText error={search.error} />
-
-          <div>
-            <span className="text-xs text-muted-foreground">选题类型</span>
-            {account.topic_type ? (
-              <div className="mt-1 flex items-center justify-between rounded-lg bg-indigo-50 px-2.5 py-1.5 text-xs font-medium text-indigo-700">
-                <span>{account.topic_type}</span><span className="font-normal text-indigo-400 opacity-60">来自配置</span>
-              </div>
-            ) : (
-              <button onClick={onGoConfig} className="mt-1 w-full cursor-pointer rounded-lg border border-dashed px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-indigo-300 hover:text-indigo-500">
-                未设置 → 去「配置」Tab 和小媒对话确认
-              </button>
-            )}
-            {account.keywords.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {account.keywords.map((k) => (
-                  <button key={k} onClick={() => doSearch(k)} className="cursor-pointer rounded bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600 hover:bg-indigo-100">{k}</button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <form className="flex gap-2 border-t pt-4" onSubmit={(e) => { e.preventDefault(); if (manual.trim()) add.mutate({ title: manual.trim(), angle: "" }, { onSuccess: () => setManual("") }); }}>
-            <Input placeholder="自己有想法？直接加一个选题" value={manual} onChange={(e) => setManual(e.target.value)} />
-            <Button type="submit" variant="outline" loading={add.isPending}><Plus />添加</Button>
-          </form>
-        </CardBody>
-      </Card>
+          <button className="ml-auto cursor-pointer text-indigo-600 hover:underline" onClick={() => setSourcesOpen(true)}>管理数据来源</button>
+        </div>
+        {result && !search.isPending && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            新增 {result.topics.length} 个选题{result.skipped_duplicates > 0 && `，跳过 ${result.skipped_duplicates} 个和以前重复的`}{result.note && `。${result.note}`}
+          </p>
+        )}
+        <ErrorText error={search.error} />
+      </div>
+      {sourcesOpen && <SourcesDialog onClose={() => setSourcesOpen(false)} />}
 
       <ErrorText error={write.error} />
-      {isLoading ? (
-        <div className="flex justify-center py-10"><Spinner className="size-6" /></div>
-      ) : fresh.length === 0 ? (
-        <Empty icon={<TrendingUp />} title="输入关键词，发现适合你账号的选题热点" />
-      ) : (
-        <div>
-          <h3 className="mb-3 text-sm font-semibold">选题库（{fresh.length}）</h3>
-          <div className="grid gap-3 sm:grid-cols-2">
+      <div>
+        <div className="mb-2 flex items-baseline justify-between">
+          <h3 className="text-sm font-semibold">选题库 <span className="font-normal text-muted-foreground">{fresh.length}</span></h3>
+          <span className="text-xs text-muted-foreground">挑一个点「用这个写」</span>
+        </div>
+        {isLoading ? (
+          <div className="flex justify-center py-10"><Spinner className="size-6" /></div>
+        ) : fresh.length === 0 ? (
+          <Empty icon={<TrendingUp />} title="选题库是空的" desc="点上面「找选题」，或者在下面直接加一个你自己的想法。" />
+        ) : (
+          <div className="space-y-2">
             {fresh.map((t) => (
-              <TopicCard
+              <TopicRow
                 key={t.id}
                 topic={t}
                 generating={write.isPending && writingId === t.id}
@@ -113,11 +98,16 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
               />
             ))}
           </div>
-        </div>
-      )}
+        )}
+        <form className="mt-2 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (manual.trim()) add.mutate({ title: manual.trim(), angle: "" }, { onSuccess: () => setManual("") }); }}>
+          <Input className="border-dashed border-border bg-transparent" placeholder="＋ 自己加一个选题" value={manual} onChange={(e) => setManual(e.target.value)} />
+          {manual.trim() && <Button type="submit" variant="outline" loading={add.isPending}><Plus />加入</Button>}
+        </form>
+      </div>
+
       {used.length > 0 && (
         <details className="text-sm">
-          <summary className="cursor-pointer text-muted-foreground">已用过的选题（{used.length}）</summary>
+          <summary className="cursor-pointer text-xs text-muted-foreground">写过的选题（{used.length}）</summary>
           <ul className="mt-2 space-y-1 text-xs text-muted-foreground">{used.map((t) => <li key={t.id}>· {t.title}</li>)}</ul>
         </details>
       )}
@@ -125,33 +115,30 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
   );
 }
 
-function TopicCard({ topic, onSelect, onSkip, generating, disabled }: {
+function TopicRow({ topic, onSelect, onSkip, generating, disabled }: {
   topic: Topic; onSelect: () => void; onSkip: () => void; generating: boolean; disabled: boolean;
 }) {
   const p = PLATFORMS[topic.source];
   return (
-    <div className="rounded-xl border-2 bg-card p-4 transition-all hover:border-indigo-300">
-      <div className="mb-2 flex items-start justify-between gap-2">
-        <h4 className="flex-1 text-sm font-medium leading-snug">{topic.title}</h4>
-        {p && <Badge className={p.cls}>{p.label}</Badge>}
-      </div>
-      {topic.angle && <p className="mb-1 text-xs leading-relaxed text-muted-foreground">{topic.angle}</p>}
-      {topic.reason && <p className="mb-2 text-xs leading-relaxed text-indigo-500/80">💡 {topic.reason}</p>}
-      {typeof topic.reference?.title === "string" && (
-        <p className="mb-2 rounded-md bg-fuchsia-50 px-2 py-1 text-xs leading-relaxed text-fuchsia-700">
-          仿 {String(topic.reference.creator ?? "")} 的爆款「{topic.reference.title}」{topic.reference.likes ? ` · ${String(topic.reference.likes)}赞` : ""}
-        </p>
-      )}
-      <div className="mt-2 flex items-center justify-between">
-        {topic.source_url ? (
-          <a href={topic.source_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-            <ExternalLink className="size-3" />原文
-          </a>
-        ) : <span />}
-        <div className="flex gap-2">
-          <Button size="xs" variant="ghost" className="text-muted-foreground" onClick={onSkip}>跳过</Button>
-          <Button size="xs" variant="gradient" onClick={onSelect} loading={generating} disabled={disabled}>{!generating && <Zap />}生成图文</Button>
+    <div className="group flex gap-3 rounded-xl border bg-card p-4 transition-colors hover:border-indigo-200">
+      <div className="min-w-0 flex-1">
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <h4 className="text-sm font-medium leading-snug">{topic.title}</h4>
+          {p && <Badge className={cn("px-1.5 py-0 text-[11px]", p.cls)}>{p.label}</Badge>}
         </div>
+        {topic.angle && <p className="text-xs leading-relaxed text-muted-foreground">切入：{topic.angle}</p>}
+        {topic.reason && <p className="mt-0.5 flex items-start gap-1 text-xs leading-relaxed text-indigo-600/80"><Lightbulb className="mt-0.5 size-3 shrink-0" />{topic.reason}</p>}
+        {topic.source_url && (
+          <a href={topic.source_url} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+            <ExternalLink className="size-3" />看原帖
+          </a>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-col items-end justify-between gap-2">
+        <button onClick={onSkip} title="不要这个" className="cursor-pointer rounded p-1 text-muted-foreground/50 hover:bg-muted hover:text-foreground"><X className="size-3.5" /></button>
+        <Button size="sm" variant="outline" className="border-indigo-200 text-indigo-700 hover:bg-indigo-50" onClick={onSelect} loading={generating} disabled={disabled}>
+          {!generating && <PenLine />}用这个写
+        </Button>
       </div>
     </div>
   );
