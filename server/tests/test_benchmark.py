@@ -256,7 +256,11 @@ async def test_find_candidates(session, account, llm, monkeypatch, multi_researc
                 {"user_id": UID_C, "name": "美妆C", "avatar": "", "native": f"{UID_C}|t", "title": "偶尔一篇穿搭", "likes": "9万", "url": "u3"},
                 {"user_id": UID_A, "name": "穿搭阿A", "avatar": "", "native": f"{UID_A}|t", "title": "通勤一周", "likes": "1万", "url": "u4"}]
 
+    async def creators(platform, kw, n=10):
+        return [Creator(platform, "美妆C", f"{UID_C}|t", fans="50万"), Creator(platform, "小号", "d" * 24 + "|t", fans="300")]
+
     monkeypatch.setattr(research, "hot_authors_raw", hot)
+    monkeypatch.setattr(research, "creators_raw", creators)
     llm.push("bench_pick", {"picks": [{"no": 1, "fit": 9, "level": "腰部", "reason": "通勤公式化标题"},
                                       {"no": 2, "fit": 2, "reason": "主要做美妆"}]})
     out = await bench.find_candidates(llm, "通勤穿搭", exclude=["通勤小B"])

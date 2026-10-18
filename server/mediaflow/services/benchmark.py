@@ -11,6 +11,7 @@ import logging
 import re
 import string
 from collections.abc import Callable
+from itertools import zip_longest
 from typing import Any
 
 from sqlmodel import Session, col, select
@@ -30,7 +31,7 @@ MAX_BENCH = 3    # 一个账号最多同时对标几个
 N_POSTS = 60     # 每个对标最多读多少条作品
 N_DETAILS = 5    # 看几篇爆款详情
 N_HITS = 12      # 给模型看的爆款列表长度
-N_PROBE = 7      # 找候选时细看几个博主的主页
+N_PROBE = 8      # 找候选时细看几个博主的主页
 PROFILE_KEYS = ("theme", "audience", "content_style", "image_style", "topic_type")
 LETTERS = string.ascii_uppercase
 
@@ -431,9 +432,20 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
             a = authors.setdefault(r["user_id"], {**r, "hits": []})
             if all(h["title"] != r["title"] for h in a["hits"]):
                 a["hits"].append({"title": r["title"], "likes": r["likes"], "url": r["url"]})
-    if not authors:
+    # 再按领域词搜博主：名字/简介里就是做这个的号，通常比偶尔爆一篇的更值得学
+    domain: list[dict] = []
+    try:
+        for c in await research.creators_raw(platform, theme, 15):
+            uid = c.native.split("|")[0]
+            if c.name in skip or uid in skip or uid in authors or count_num(c.fans) < 5000:
+                continue
+            domain.append({"user_id": uid, "name": c.name, "avatar": "", "native": c.native, "hits": []})
+    except Exception as e:  # noqa: BLE001
+        notes.append(f"按领域搜博主失败：{e}")
+    if not authors and not domain:
         raise LookupError("；".join(notes) or f"没搜到「{theme}」相关的热门笔记，换个说法试试")
-    pool = sorted(authors.values(), key=lambda a: (-len(a["hits"]), -sum(count_num(h["likes"]) for h in a["hits"])))
+    by_hits = sorted(authors.values(), key=lambda a: (-len(a["hits"]), -sum(count_num(h["likes"]) for h in a["hits"])))
+    pool = [x for pair in zip_longest(by_hits, domain) for x in pair if x]
 
     cands: list[dict] = []
     for a in pool[:N_PROBE]:
@@ -445,9 +457,12 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
                 break
             continue
         stats = _stats(posts)
+        if (stats.get("median_likes") or 0) < 20 and count_num(creator.fans) < 1e4:
+            continue  # 几乎没互动的小号不值得对标
         uid, _, tok = a["native"].partition("|")
         cands.append({
-            "name": creator.name or a["name"], "avatar": a["avatar"], "fans": creator.fans,
+            "name": creator.name or a["name"], "avatar": a["avatar"] or creator.extra.get("avatar", ""),
+            "fans": creator.fans,
             "desc": creator.desc[:80], "url": f"https://www.xiaohongshu.com/user/profile/{uid}"
                                              + (f"?xsec_token={tok}&xsec_source=pc_search" if tok else ""),
             **{k: stats[k] for k in ("median_likes", "hit_rate", "per_week", "last_post", "posts_read") if k in stats},

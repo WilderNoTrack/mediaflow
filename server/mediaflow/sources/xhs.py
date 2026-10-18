@@ -261,7 +261,8 @@ async def creator_posts(native: str, limit: int = 10, timeout: float = 15):
         platform="xiaohongshu", name=basic.get("nickname", ""), native=native,
         fans=fmt_count(inter.get("fans", "")), desc=" ".join((basic.get("desc") or "").split())[:200],
         url=f"https://www.xiaohongshu.com/user/profile/{uid}",
-        extra={"获赞与收藏": fmt_count((info.get("liked") or 0) + (info.get("collected") or 0)),
+        extra={"avatar": basic.get("images") or basic.get("imageb") or "",
+               "获赞与收藏": fmt_count((info.get("liked") or 0) + (info.get("collected") or 0)),
                "标签": [t.get("name") for t in info.get("tags") or [] if t.get("name")]},
     )
     posts = []
