@@ -82,9 +82,9 @@ def load_context(session: Session, account_id: str) -> AccountContext:
     notes = session.exec(
         select(Note).where(Note.account_id == account_id).order_by(col(Note.created_at).desc()).limit(NOTES_IN_CONTEXT)
     ).all()
-    from mediaflow.services.benchmark import latest, playbook_text
+    from mediaflow.services.benchmark import plan_text, ready
 
-    bench = latest(session, account_id, ready_only=True)
+    benches = ready(session, account_id)
     return AccountContext(
         account_id=acc.id,
         user_id=acc.user_id,
@@ -98,6 +98,6 @@ def load_context(session: Session, account_id: str) -> AccountContext:
         rules=tuple(rules),
         recent_titles=tuple(titles),
         used_topics=tuple(used),
-        playbook=playbook_text(bench) if bench else "",
+        playbook=plan_text(acc, benches),
         notes=tuple(f"{n.title}：{' '.join(n.content.split())[:NOTE_CHARS]}" for n in notes),
     )

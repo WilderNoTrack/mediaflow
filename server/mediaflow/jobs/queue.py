@@ -106,12 +106,12 @@ async def _handle_images(job: Job, emit) -> dict:
 
 async def _handle_clone(job: Job, emit) -> dict:
     from mediaflow.llm.client import get_llm
-    from mediaflow.services.benchmark import analyze
+    from mediaflow.services import benchmark
 
+    p = job.payload
+    ids = p.get("benchmark_ids") or ([p["benchmark_id"]] if p.get("benchmark_id") else [])
     with session_scope() as s:
-        b = await analyze(s, get_llm(), job.payload["benchmark_id"], emit=emit)
-        return {"benchmark_id": b.id, "creator": b.creator_name,
-                "topics": len((b.plan.get("applied") or {}).get("topics") or [])}
+        return await benchmark.run(s, get_llm(), job.account_id or "", ids, p.get("theme") or "", emit=emit)
 
 
 HANDLERS: dict[JobKind, Handler] = {

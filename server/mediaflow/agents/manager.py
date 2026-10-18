@@ -36,7 +36,7 @@ HISTORY_LIMIT = 40
 RESULT_CHARS = 1500          # 普通工具结果给模型看的长度上限
 RESEARCH_RESULT_CHARS = 4000  # 调研结果信息密度高，放宽
 HISTORY_TOOL_CHARS = 500      # 历史轮次里的工具结果只留摘要，控制上下文
-READ_ONLY = {"list_drafts", "research_search", "research_creators", "research_creator_posts", "research_post"}
+READ_ONLY = {"list_drafts", "find_benchmarks", "research_search", "research_creators", "research_creator_posts", "research_post"}
 _locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像一个靠谱的运营搭子。
@@ -61,10 +61,16 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
   ③爆款规律（选题、标题写法、开头钩子、标签）④评论区用户在关心什么 ⑤给本账号的 3 条可执行建议。
 - 分析完用 save_note 存一份精炼要点（400 字内，偏「可借鉴的做法」），告诉用户已存为运营笔记、之后写稿会参考，不需要可以删。
 
-【复刻对标账号】用户说「照着某某做」「复刻这个号」「按这个博主的路子起号」，或贴了小红书主页/笔记链接想模仿，
-用 clone_creator（target 原样传用户给的链接或名字，theme 传用户想做的主题；主题没说就先问一句）。
-它会在后台读对方作品、拆打法、换主题出方案，并自动更新账号定位、写法规则和选题库，大约 1-2 分钟，告诉用户去「对标」页看。
-已经有对标方案时，账号状态里会有 benchmark；用户问「对标的打法是什么」直接按账号定位里的【对标账号打法】回答。
+【对标账号】用户想照着别人的路子做（「对标」「复刻」「照着某某做」「按这个博主的路子起号」），一个账号最多同时对标 3 个：
+- 用户给了链接、名字或小红书号：直接 clone_creator（targets 原样传，可以一次传多个）。
+- 用户只说了方向、没指定是谁（「帮我找几个做穿搭的号」）：用 find_benchmarks 找同领域、有爆款的博主。
+  结果会以卡片形式展示给用户勾选，你不用逐个复述，只用两三句话点出最值得学的 1-2 个和理由，
+  然后说「勾选后点『学习选中的』，或者直接告诉我选哪几个」。用户说「选第 1 和第 3 个」就把对应的 url 传给 clone_creator。
+  用户说「再找一批」「要粉丝少一点的」就再调 find_benchmarks，把要求写进 prefer。
+- 默认只找同领域；用户明确要跨领域借鉴（比如「学美妆博主的标题写法」）才放宽，写进 prefer。
+- 主题还不知道就先问一句。clone_creator 会在后台读作品、逐个拆打法，再把几个人的打法合成一套、换成用户的主题，
+  自动更新账号定位、写法规则和选题库，每个账号大约 1 分钟，告诉用户去「对标」页看。
+- 账号状态里的 benchmarks 是已经在对标的账号；用户问「对标的打法是什么」直接按账号定位里的【对标账号打法】回答。
 
 【风格】中文，自然口语，简短（一般不超过 100 字；调研分析可以长一些，但要分点、去水分），改了什么就明确说改了什么。"""
 
@@ -135,22 +141,29 @@ TOOLS = [
         "content": {"type": "string", "description": "要点，400 字以内"},
     }, ["title", "content"]),
     _tool("remove_note", "删除一条运营笔记（ID 见账号状态）", {"note_id": {"type": "string"}}, ["note_id"]),
-    _tool("clone_creator", "复刻一个小红书对标账号：后台读作品、拆打法、按新主题出方案，自动更新定位/规则/选题库", {
-        "target": {"type": "string", "description": "对标账号：主页链接、笔记链接、博主名字或小红书号，原样传"},
+    _tool("find_benchmarks", "按方向找同领域、有爆款的小红书博主当对标候选（带粉丝、点赞中位数、爆款率、值得学的地方），"
+          "结果会以可勾选的卡片展示给用户。大约半分钟到一分钟", {
+              "query": {"type": "string", "description": "方向，如「通勤穿搭」；不传用账号主题"},
+              "prefer": {"type": "string", "description": "可选：用户的额外要求，如「粉丝少一点」「要做视频的」"},
+          }),
+    _tool("clone_creator", "对标 1-3 个小红书账号：后台读作品、逐个拆打法、合成一套并换成新主题，自动更新定位/规则/选题库", {
+        "targets": {"type": "array", "items": {"type": "string"},
+                    "description": "对标账号列表：主页链接、笔记链接、博主名字或小红书号，原样传"},
         "theme": {"type": "string", "description": "用户想换成的主题；用户没说且账号已有主题时可以不传"},
-    }, ["target"]),
+    }, ["targets"]),
 ]
 
 PROFILE_FIELDS = ("name", "theme", "audience", "content_style", "image_style", "topic_type", "keywords")
 
 
 def _bench_state(s: Session, account_id: str) -> dict:
-    from mediaflow.services.benchmark import latest
+    from mediaflow.services.benchmark import listing
 
-    b = latest(s, account_id)
-    if b is None:
+    rows = listing(s, account_id)
+    if not rows:
         return {}
-    return {"benchmark": {"creator": b.creator_name or b.target, "status": b.status.value}}
+    return {"benchmarks": [{"id": b.id, "creator": b.creator_name or b.target, "status": b.status.value,
+                            **({"error": b.error} if b.error else {})} for b in rows]}
 
 
 class Toolbox:
@@ -253,22 +266,27 @@ class Toolbox:
             return {"ok": False, "error": str(e), "job_id": e.job.id}
         return {"ok": True, "job_id": job.id, "note": "已开始在后台写，1-3 分钟后在草稿里能看到"}
 
-    async def t_clone_creator(self, target: str, theme: str = "") -> dict:
-        from mediaflow.domain.models import Benchmark
+    async def t_find_benchmarks(self, query: str = "", prefer: str = "") -> dict:
+        from mediaflow.services import benchmark as bench
 
-        if not (theme.strip() or self.acc.theme):
-            return {"ok": False, "error": "还不知道用户想做什么主题，先问清楚再复刻"}
-        from mediaflow.jobs.queue import active_write_job
+        rows = bench.listing(self.s, self.acc.id)
+        have = [x for b in rows for x in (b.creator_name, b.target) if x]
+        out = await bench.find_candidates(self.llm, query.strip() or self.acc.theme, prefer=prefer,
+                                          keywords=self.acc.keywords, exclude=have)
+        return {"ok": True, **out, "slots_left": bench.MAX_BENCH - len(rows)}
 
-        running = active_write_job(self.s, self.acc.id, JobKind.clone_creator)
-        if running:
-            return {"ok": False, "error": "这个账号正在拆解对标账号，等它好了再来", "job_id": running.id}
-        b = Benchmark(user_id=self.acc.user_id, account_id=self.acc.id, target=target.strip(), theme=theme.strip())
-        self.s.add(b)
-        self.s.commit()
-        job = enqueue(self.s, JobKind.clone_creator, user_id=self.acc.user_id, account_id=self.acc.id,
-                      payload={"benchmark_id": b.id})
-        return {"ok": True, "job_id": job.id, "note": "已开始拆解，1-2 分钟后在「对标」页看方案，账号定位和选题库会自动更新"}
+    async def t_clone_creator(self, targets: list[str] | str = "", theme: str = "", target: str = "") -> dict:
+        from mediaflow.services import benchmark as bench
+
+        items = [targets] if isinstance(targets, str) else list(targets or [])
+        try:
+            job, new = bench.add(self.s, self.acc, [*items, target], theme=theme)
+        except JobConflict as e:
+            return {"ok": False, "error": str(e), "job_id": e.job.id}
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "job_id": job.id, "added": [b.target for b in new],
+                "note": f"已开始拆解 {len(new)} 个账号，每个大约 1 分钟，好了在「对标」页看方案，账号定位和选题库会自动更新"}
 
     async def t_set_auto(self, enabled: bool, frequency: str | None = None) -> dict:
         self.acc.auto_enabled = bool(enabled)
@@ -385,6 +403,16 @@ async def _run_calls(box: Toolbox, calls: list) -> list[dict]:
     return list(await asyncio.gather(*(one(c) for c in calls)))
 
 
+def _for_model(name: str, result: dict) -> dict:
+    """候选卡片里的头像、链接只给界面用，模型看精简版（链接留着，选中后要传给 clone_creator）。"""
+    if name != "find_benchmarks" or not result.get("candidates"):
+        return result
+    keep = ("name", "url", "fans", "median_likes", "hit_rate", "per_week", "last_post", "level", "reason", "learn")
+    return {**result, "candidates": [
+        {"no": i + 1, **{k: c[k] for k in keep if c.get(k) not in (None, "")}} for i, c in enumerate(result["candidates"])
+    ]}
+
+
 def _clip(result: dict, limit: int) -> str:
     text = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     return text if len(text) <= limit else text[:limit] + "…（结果太长已截断）"
@@ -423,7 +451,8 @@ async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch:
             ]})
             results = await _run_calls(box, resp.tool_calls)
             for c, result in zip(resp.tool_calls, results):
-                summary = _clip(result, RESEARCH_RESULT_CHARS if c.name.startswith("research_") else RESULT_CHARS)
+                wide = c.name.startswith("research_") or c.name == "find_benchmarks"
+                summary = _clip(_for_model(c.name, result), RESEARCH_RESULT_CHARS if wide else RESULT_CHARS)
                 new.append(_save(session, acc, ChatRole.tool, summary, tool_name=c.name,
                                  payload={"args": c.arguments, "result": result}))
                 messages.append({"role": "tool", "tool_call_id": c.id, "content": summary})

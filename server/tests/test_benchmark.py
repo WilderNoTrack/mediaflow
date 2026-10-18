@@ -83,7 +83,8 @@ async def test_clone_flow(session, account, llm, fake_research):
     assert {r.text for r in rules} >= {"标题用「干货｜结果」公式"} and "旧对标规则" not in {r.text for r in rules}
     topics = session.exec(select(Topic).where(Topic.source == "benchmark")).all()
     assert len(topics) == 2 and topics[0].reference["title"].startswith("干货")
-    assert b.plan["applied"]["topics"] and b.plan["steps"]
+    assert account.bench_plan["applied"]["topics"] and account.bench_plan["steps"]
+    assert account.bench_plan["creators"] == ["程十安an"]
 
     # 上下文带上打法；写稿默认用复刻选题，并把原爆款作为结构参考
     ctx = load_context(session, account.id)
@@ -104,7 +105,7 @@ async def test_clone_failure_marks_benchmark(session, account, llm, monkeypatch)
     b = Benchmark(user_id=account.user_id, account_id=account.id, target="谁")
     session.add(b)
     session.commit()
-    with pytest.raises(LookupError):
+    with pytest.raises(RuntimeError, match="没搜到"):
         await bench.analyze(session, llm, b.id)
     session.refresh(b)
     assert b.status == BenchmarkStatus.failed and "没搜到" in b.error
@@ -130,15 +131,24 @@ async def test_resolve_creator_by_name(monkeypatch):
 
 
 def test_api_clone(client, account, monkeypatch, llm):
-    r = client.post(f"/api/accounts/{account.id}/benchmark", json={"target": "程十安", "theme": "职场理财"})
-    assert r.status_code == 201 and r.json()["kind"] == "clone_creator"
+    r = client.post(f"/api/accounts/{account.id}/benchmark", json={"targets": ["程十安", "小雨攒钱笔记"], "theme": "职场理财"})
+    assert r.status_code == 201 and r.json()["kind"] == "clone_creator" and len(r.json()["payload"]["benchmark_ids"]) == 2
     r2 = client.post(f"/api/accounts/{account.id}/benchmark", json={"target": "程十安"})
     assert r2.status_code == 409
     detail = client.get(f"/api/accounts/{account.id}").json()
-    assert detail["benchmark"]["status"] == "analyzing" and detail["benchmark"]["theme"] == "职场理财"
-    bid = detail["benchmark"]["id"]
-    assert client.delete(f"/api/accounts/{account.id}/benchmark/{bid}").status_code == 204
-    assert client.get(f"/api/accounts/{account.id}").json()["benchmark"] is None
+    assert [b["status"] for b in detail["benchmarks"]] == ["analyzing", "analyzing"]
+    bid = detail["benchmarks"][0]["id"]
+    from mediaflow.domain.models import Job, JobStatus
+    from sqlmodel import Session
+    from mediaflow.db import get_engine
+    with Session(get_engine()) as s:  # 让任务结束，才能删
+        for j in s.exec(select(Job)).all():
+            j.status = JobStatus.failed
+            s.add(j)
+        s.commit()
+    r3 = client.delete(f"/api/accounts/{account.id}/benchmark/{bid}")
+    assert r3.status_code == 200 and r3.json()["job"] is None  # 没拆完的删了不用重新合成
+    assert len(client.get(f"/api/accounts/{account.id}").json()["benchmarks"]) == 1
 
 
 async def test_manager_clone_tool(session, account, llm):
@@ -146,10 +156,118 @@ async def test_manager_clone_tool(session, account, llm):
     from mediaflow.domain.models import Job, JobKind
 
     tb = Toolbox(session, llm, account, None)
-    r = await tb.call("clone_creator", {"target": "https://www.xiaohongshu.com/user/profile/abc", "theme": "职场理财"})
+    r = await tb.call("clone_creator", {"targets": ["https://www.xiaohongshu.com/user/profile/abc"], "theme": "职场理财"})
     assert r["ok"]
     job = session.get(Job, r["job_id"])
-    assert job.kind == JobKind.clone_creator and session.get(Benchmark, job.payload["benchmark_id"]).theme == "职场理财"
-    again = await tb.call("clone_creator", {"target": "x"})
+    assert job.kind == JobKind.clone_creator and session.get(Benchmark, job.payload["benchmark_ids"][0]).theme == "职场理财"
+    again = await tb.call("clone_creator", {"targets": ["x"]})
     assert not again["ok"] and "正在拆解" in again["error"]
-    assert tb.snapshot()["benchmark"]["status"] == "analyzing"
+    assert tb.snapshot()["benchmarks"][0]["status"] == "analyzing"
+
+
+UID_A, UID_B, UID_C = "a" * 24, "b" * 24, "c" * 24
+
+
+@pytest.fixture
+def multi_research(monkeypatch):
+    names = {UID_A: "穿搭阿A", UID_B: "通勤小B", UID_C: "美妆C"}
+
+    async def resolve(platform, target):
+        uid = next(u for u, n in names.items() if n == target)
+        return Creator(platform=platform, name=names[uid], native=f"{uid}|t")
+
+    async def posts(platform, native, n=60):
+        uid = native.split("|")[0]
+        return (Creator(platform=platform, name=names[uid], native=native, fans="10万",
+                        url=f"https://www.xiaohongshu.com/user/profile/{uid}"),
+                [Post(platform=platform, title=f"{names[uid]}的爆款{i}", native=f"{uid}{i}|t", likes=str(1000 * (5 - i)),
+                      published=f"2024-05-0{i + 1}", kind="图文") for i in range(4)])
+
+    async def detail(platform, native):
+        raise RuntimeError("风控")
+
+    monkeypatch.setattr(research, "resolve_creator", resolve)
+    monkeypatch.setattr(research, "creator_posts_raw", posts)
+    monkeypatch.setattr(research, "post_detail_raw", detail)
+    return names
+
+
+async def test_multi_benchmark_merge(session, account, llm, multi_research):
+    from mediaflow.domain.models import Job
+
+    job, new = bench.add(session, account, ["穿搭阿A", "通勤小B"], theme="通勤穿搭")
+    assert len(new) == 2 and job.payload["benchmark_ids"] == [b.id for b in new]
+    plan = {**PLAN, "summary": "栏目学A，标题学B", "borrow": [{"aspect": "标题", "from": "通勤小B", "how": "数字+场景"}],
+            "topics": [{"title": "一周通勤不重样", "ref": "A1", "why": "学A"}, {"title": "小个子通勤3件套", "ref": "B2", "why": "学B"},
+                       {"title": "穿搭阿A的爆款0", "ref": "A1", "why": "照抄要丢"}]}
+    llm.push("bench_analyze", PLAYBOOK, PLAYBOOK).push("bench_adapt", plan)
+    out = await bench.run(session, llm, account.id, job.payload["benchmark_ids"], "通勤穿搭")
+    assert out["creators"] == ["穿搭阿A", "通勤小B"] and out["topics"] == 2
+    adapt = llm.prompts_of("bench_adapt")[0]
+    assert "A1｜穿搭阿A的爆款0" in adapt and "B2｜通勤小B的爆款1" in adapt
+    topics = session.exec(select(Topic).where(Topic.source == "benchmark", Topic.status == TopicStatus.new)).all()
+    assert {t.reference["creator"] for t in topics} == {"穿搭阿A", "通勤小B"}
+    session.refresh(account)
+    assert account.bench_plan["summary"] == "栏目学A，标题学B" and account.theme == "通勤穿搭"
+    text = load_context(session, account.id).profile_text()
+    assert "合成打法：栏目学A，标题学B" in text and "穿搭阿A" in text and "通勤小B" in text
+
+    # 上限 3 个；重复的跳过
+    session.exec(select(Job)).first().status = "succeeded"
+    session.commit()
+    with pytest.raises(ValueError, match="已经在对标"):
+        bench.add(session, account, ["穿搭阿A"])
+    with pytest.raises(ValueError, match="最多同时对标 3 个"):
+        bench.add(session, account, ["美妆C", "x", "y"])
+
+    # 删一个：它的选题收起，剩下的重新合成；全删：对标规则和方案撤掉
+    a, b = new
+    for j in session.exec(select(Job)).all():
+        j.status = "succeeded"
+    session.commit()
+    job2 = bench.remove(session, account, a)
+    assert job2 is not None and job2.payload["benchmark_ids"] == []
+    left = session.exec(select(Topic).where(Topic.source == "benchmark", Topic.status == TopicStatus.new)).all()
+    assert {t.reference["creator"] for t in left} == {"通勤小B"}
+    job2.status = "succeeded"
+    session.commit()
+    assert bench.remove(session, account, b) is None
+    session.refresh(account)
+    assert account.bench_plan == {}
+    assert not session.exec(select(Rule).where(Rule.source == RuleSource.benchmark, Rule.active == True)).all()  # noqa: E712
+
+
+async def test_multi_benchmark_one_fails(session, account, llm, multi_research):
+    job, new = bench.add(session, account, ["穿搭阿A", "不存在"], theme="通勤穿搭")
+    llm.push("bench_analyze", PLAYBOOK).push("bench_adapt", PLAN)
+    events = []
+    out = await bench.run(session, llm, account.id, job.payload["benchmark_ids"], "通勤穿搭",
+                          emit=lambda st, m, d=None: events.append((st, m)))
+    assert out["creators"] == ["穿搭阿A"]
+    session.refresh(new[1])
+    assert new[1].status == BenchmarkStatus.failed
+    assert any(st == "warning" and "没拆成" in m for st, m in events)
+
+
+async def test_find_candidates(session, account, llm, monkeypatch, multi_research):
+    async def hot(platform, kw):
+        return [{"user_id": UID_A, "name": "穿搭阿A", "avatar": "http://a", "native": f"{UID_A}|t", "title": "通勤穿搭公式", "likes": "2万", "url": "u1"},
+                {"user_id": UID_B, "name": "通勤小B", "avatar": "", "native": f"{UID_B}|t", "title": "小个子通勤", "likes": "5000", "url": "u2"},
+                {"user_id": UID_C, "name": "美妆C", "avatar": "", "native": f"{UID_C}|t", "title": "偶尔一篇穿搭", "likes": "9万", "url": "u3"},
+                {"user_id": UID_A, "name": "穿搭阿A", "avatar": "", "native": f"{UID_A}|t", "title": "通勤一周", "likes": "1万", "url": "u4"}]
+
+    monkeypatch.setattr(research, "hot_authors_raw", hot)
+    llm.push("bench_pick", {"picks": [{"no": 1, "fit": 9, "level": "腰部", "reason": "通勤公式化标题"},
+                                      {"no": 2, "fit": 2, "reason": "主要做美妆"}]})
+    out = await bench.find_candidates(llm, "通勤穿搭", exclude=["通勤小B"])
+    names = [c["name"] for c in out["candidates"]]
+    assert names == ["穿搭阿A"]  # 通勤小B 已在对标被排除；美妆C 不同领域被筛掉
+    c = out["candidates"][0]
+    assert c["reason"] == "通勤公式化标题" and len(c["hits"]) == 2 and c["median_likes"] and UID_A in c["url"]
+    assert any("不做这个方向" in n for n in out["notes"])
+    pick_prompt = llm.prompts_of("bench_pick")[0]
+    assert "穿搭阿A" in pick_prompt and "通勤小B" not in pick_prompt
+
+    from mediaflow.agents.manager import _for_model
+    brief = _for_model("find_benchmarks", {"ok": True, **out})
+    assert "avatar" not in brief["candidates"][0] and brief["candidates"][0]["no"] == 1

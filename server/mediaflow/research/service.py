@@ -216,6 +216,11 @@ async def post_detail_raw(platform: str, native: str) -> PostDetail:
     return await _throttled(platform, ("pd", platform, native), lambda: fn(native))
 
 
+async def hot_authors_raw(platform: str, keyword: str) -> list[dict]:
+    fn = _need(platform, "search_hot_authors", "按领域找博主")
+    return await _throttled(platform, ("ha", platform, keyword), lambda: fn(keyword))
+
+
 def _norm(s: str) -> str:
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 

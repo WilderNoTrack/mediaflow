@@ -4,13 +4,12 @@ from sqlmodel import Session, col, func, select
 from mediaflow.api.deps import current_user_id, owned_account
 from mediaflow.db import get_session
 from mediaflow.domain.models import (
-    Account, Benchmark, Draft, DraftStatus, Job, JobKind, JobStatus, Note, Rule, Topic, TopicStatus, utcnow,
+    Account, Benchmark, Draft, DraftStatus, Job, JobKind, JobStatus, Note, Rule, utcnow,
 )
 from mediaflow.domain.schemas import (
-    AccountDetail, AccountIn, AccountOut, AccountPatch, AccountSummary, BenchmarkIn, BenchmarkOut, JobOut, NoteOut,
-    RuleIn, RuleOut,
+    AccountDetail, AccountIn, AccountOut, AccountPatch, AccountSummary, BenchmarkIn, BenchmarkOut, CandidatesIn,
+    CandidatesOut, JobOut, NoteOut, RemoveBenchmarkOut, RuleIn, RuleOut,
 )
-from mediaflow.jobs.queue import JobConflict, active_write_job, enqueue
 from mediaflow.llm.client import get_llm
 from mediaflow.services import benchmark as bench
 
@@ -21,10 +20,9 @@ def _detail(s: Session, acc: Account) -> AccountDetail:
     rules = s.exec(select(Rule).where(Rule.account_id == acc.id, Rule.active == True)  # noqa: E712
                    .order_by(col(Rule.created_at))).all()
     notes = s.exec(select(Note).where(Note.account_id == acc.id).order_by(col(Note.created_at).desc())).all()
-    b = bench.latest(s, acc.id)
     return AccountDetail(**acc.model_dump(), rules=[RuleOut(**r.model_dump()) for r in rules],
                          notes=[NoteOut(**n.model_dump()) for n in notes],
-                         benchmark=BenchmarkOut(**b.model_dump()) if b else None)
+                         benchmarks=[BenchmarkOut(**b.model_dump()) for b in bench.listing(s, acc.id)])
 
 
 @router.get("", response_model=list[AccountSummary])
@@ -119,34 +117,30 @@ def remove_note(note_id: str, acc: Account = Depends(owned_account), s: Session 
 
 @router.post("/{account_id}/benchmark", response_model=JobOut, status_code=201)
 def clone_benchmark(body: BenchmarkIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
-    """复刻一个对标账号：后台拆解打法、按新主题出方案，完成后同步到账号定位、规则和选题库。"""
+    """加 1-3 个对标账号：后台逐个拆解打法，再和已有的对标合成一套、换成你的主题，同步到账号定位、规则和选题库。"""
     get_llm()  # 没配模型直接报错，不白跑抓取
-    if not (body.theme.strip() or acc.theme):
-        raise ValueError("先说一下你想做什么主题，比如「职场新人理财」")
-    existing = active_write_job(s, acc.id, JobKind.clone_creator)
-    if existing:
-        raise JobConflict(existing)
-    b = Benchmark(user_id=acc.user_id, account_id=acc.id, platform=body.platform, target=body.target.strip(),
-                  theme=body.theme.strip())
-    s.add(b)
-    s.commit()
-    job = enqueue(s, JobKind.clone_creator, user_id=acc.user_id, account_id=acc.id, payload={"benchmark_id": b.id})
+    job, _ = bench.add(s, acc, [*body.targets, body.target], theme=body.theme, platform=body.platform)
     return JobOut(**job.model_dump())
 
 
-@router.delete("/{account_id}/benchmark/{benchmark_id}", status_code=204)
+@router.post("/{account_id}/benchmark/candidates", response_model=CandidatesOut)
+async def find_candidates(body: CandidatesIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """按方向找同领域、有爆款的小红书博主，给出数据和值得学的地方，供用户勾选对标。大约半分钟到一分钟。"""
+    have = [x for b in bench.listing(s, acc.id) for x in (b.creator_name, b.target) if x]
+    out = await bench.find_candidates(get_llm(), body.query.strip() or acc.theme, prefer=body.prefer,
+                                      keywords=acc.keywords, exclude=have)
+    return CandidatesOut(**out)
+
+
+@router.delete("/{account_id}/benchmark/{benchmark_id}", response_model=RemoveBenchmarkOut)
 def remove_benchmark(benchmark_id: str, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
-    """不再对标：删掉拆解记录，没用过的复刻选题收起；已经同步到账号的定位和规则保留，可以自己改。"""
+    """不再对标某个账号：它的复刻选题收起；还有别的对标就自动重新合成方案（返回任务），一个不剩就撤掉对标规则。
+    已经同步到账号的定位保留，可以自己改。"""
     b = s.get(Benchmark, benchmark_id)
     if b is None or b.account_id != acc.id:
         raise HTTPException(404, "对标记录不存在")
-    for t in s.exec(select(Topic).where(Topic.account_id == acc.id, Topic.source == "benchmark",
-                                        Topic.status == TopicStatus.new)).all():
-        if (t.reference or {}).get("benchmark_id") == b.id:
-            t.status = TopicStatus.dismissed
-            s.add(t)
-    s.delete(b)
-    s.commit()
+    job = bench.remove(s, acc, b)
+    return RemoveBenchmarkOut(job=JobOut(**job.model_dump()) if job else None)
 
 
 _ = AccountOut  # 供 OpenAPI 引用

@@ -189,6 +189,31 @@ def _check(body: dict, what: str) -> dict:
     return body.get("data") or {}
 
 
+async def search_hot_authors(keyword: str, timeout: float = 15) -> list[dict]:
+    """按关键词搜最热的笔记，带出作者（找同领域对标账号用）。每条：作者、头像、定位串、笔记标题和点赞。"""
+    cookies, x = _need_cookie(), _signer()
+    payload = {"keyword": keyword, "page": 1, "page_size": 20, "search_id": x.get_search_id(),
+               "sort": "popularity_descending", "note_type": 0, "ext_flags": [], "geo": "",
+               "image_formats": ["jpg", "webp", "avif"]}
+    async with httpx.AsyncClient(timeout=timeout, headers=_HEADERS) as c:
+        r = await _post(c, "/api/sns/web/v1/search/notes", payload, cookies, x_rap=True)
+    if r.status_code in (461, 471):
+        raise RuntimeError("小红书触发了验证码风控，稍后再试或重新扫码登录")
+    out = []
+    for it in _check(r.json(), "搜笔记").get("items") or []:
+        card = it.get("note_card") or {}
+        u = card.get("user") or {}
+        title = " ".join((card.get("display_title") or "").split())
+        if it.get("model_type") != "note" or not u.get("user_id") or not title:
+            continue
+        out.append({"user_id": u["user_id"], "name": u.get("nickname") or u.get("nick_name") or "",
+                    "avatar": u.get("avatar", ""), "native": f"{u['user_id']}|{u.get('xsec_token', '')}",
+                    "title": title[:60], "likes": str((card.get("interact_info") or {}).get("liked_count", "")),
+                    "url": f"https://www.xiaohongshu.com/explore/{it['id']}?xsec_token={it.get('xsec_token', '')}"
+                           "&xsec_source=pc_search"})
+    return out
+
+
 async def search_creators(name: str, limit: int = 5, timeout: float = 15):
     from mediaflow.research.types import Creator
 

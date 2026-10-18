@@ -117,6 +117,8 @@ class Account(SQLModel, table=True):
     image_style: str = ""
     topic_type: str = ""
     keywords: list[str] = json_col()
+    # 多个对标账号合成后的方案：借鉴了谁的什么、栏目、起号建议、同步了哪些东西
+    bench_plan: dict = json_obj_col()
     # 自动模式
     auto_enabled: bool = False
     auto_frequency: AutoFrequency = AutoFrequency.daily
@@ -153,7 +155,7 @@ class BenchmarkStatus(str, Enum):
 
 
 class Benchmark(SQLModel, table=True):
-    """对标账号：拆解出来的打法（playbook）+ 爆款样本。每个账号以最新一条 ready 的为准。"""
+    """对标账号：一个博主一条，存拆解出来的打法（playbook）和爆款样本。一个账号最多同时对标 3 个，合成方案存在 Account.bench_plan。"""
 
     id: str = Field(default_factory=_id, primary_key=True)
     user_id: str = Field(index=True, foreign_key="user.id")

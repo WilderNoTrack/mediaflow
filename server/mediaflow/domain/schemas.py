@@ -84,9 +84,25 @@ class BenchmarkOut(BaseModel):
 
 
 class BenchmarkIn(BaseModel):
-    target: str = Field(min_length=1, max_length=500, description="对标账号：主页链接、笔记链接、名字或小红书号")
+    targets: list[str] = Field(default=[], max_length=3, description="要对标的账号（1-3 个）：主页链接、笔记链接、名字或小红书号")
+    target: str = Field("", max_length=500, description="只对标一个时也可以用这个字段")
     theme: str = Field("", max_length=100, description="想换成的主题，留空用账号现有主题")
     platform: str = "xiaohongshu"
+
+
+class CandidatesIn(BaseModel):
+    query: str = Field("", max_length=100, description="方向，留空用账号主题")
+    prefer: str = Field("", max_length=200, description="额外要求，如「粉丝少一点」「做通勤穿搭」")
+
+
+class CandidatesOut(BaseModel):
+    theme: str
+    candidates: list[dict]
+    notes: list[str] = []
+
+
+class RemoveBenchmarkOut(BaseModel):
+    job: "JobOut | None" = None
 
 
 class CreatorOut(BaseModel):
@@ -100,7 +116,8 @@ class CreatorOut(BaseModel):
 class AccountDetail(AccountOut):
     rules: list[RuleOut]
     notes: list[NoteOut] = []
-    benchmark: BenchmarkOut | None = None
+    benchmarks: list[BenchmarkOut] = []
+    bench_plan: dict = {}
 
 
 class RuleIn(BaseModel):
@@ -239,3 +256,6 @@ class SystemStatus(BaseModel):
     image_configured: bool
     weibo_cookie_configured: bool
     data_dir: str
+
+
+RemoveBenchmarkOut.model_rebuild()
