@@ -86,6 +86,7 @@ class BenchmarkOut(BaseModel):
 class BenchmarkIn(BaseModel):
     targets: list[str] = Field(default=[], max_length=3, description="要对标的账号（1-3 个）：主页链接、笔记链接、名字或小红书号")
     target: str = Field("", max_length=500, description="只对标一个时也可以用这个字段")
+    names: list[str] = Field(default=[], max_length=3, description="可选：和 targets 一一对应的博主名字（从候选里选时带上，拆解前就能显示）")
     theme: str = Field("", max_length=100, description="想换成的主题，留空用账号现有主题")
     platform: str = "xiaohongshu"
 

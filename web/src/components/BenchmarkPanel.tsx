@@ -160,10 +160,10 @@ function BenchCard({ account, bench: b, busy }: { account: Account; bench: Bench
   return (
     <div className={cn("group relative rounded-xl border-2 bg-card p-4", failed && "border-red-200 bg-red-50/40")}>
       <div className="flex items-center gap-3">
-        {avatar ? <img src={avatar} alt="" referrerPolicy="no-referrer" className="size-10 rounded-full object-cover" /> : <Avatar name={b.creator_name || b.target || "?"} size="sm" />}
+        {avatar ? <img src={avatar} alt="" referrerPolicy="no-referrer" className="size-10 rounded-full object-cover" /> : <Avatar name={b.creator_name || (b.target.startsWith("http") ? "红" : b.target) || "?"} size="sm" />}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="truncate font-medium">{b.creator_name || b.target}</span>
+            <span className="truncate font-medium">{b.creator_name || (b.target.startsWith("http") ? "小红书账号" : b.target)}</span>
             {b.creator_url && <a href={b.creator_url} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground" aria-label="主页"><ExternalLink className="size-3" /></a>}
           </div>
           <div className="truncate text-xs text-muted-foreground">

@@ -83,7 +83,7 @@ export function CandidatePicker({ account, candidates, compact, onStarted }: {
           {slots <= 0 ? `已经对标 ${MAX_BENCH} 个了，先在「对标」页删掉一个` : `已选 ${picked.length}，这次最多选 ${slots} 个`}
         </span>
         <Button variant="gradient" className={cn(!compact && "ml-auto")} disabled={!picked.length} loading={clone.isPending}
-          onClick={() => clone.mutate({ targets: picked }, { onSuccess: () => { setStarted((s) => [...s, ...picked]); setPicked([]); onStarted?.(); } })}>
+          onClick={() => clone.mutate({ targets: picked, names: picked.map((u) => candidates.find((c) => c.url === u)?.name ?? "") }, { onSuccess: () => { setStarted((s) => [...s, ...picked]); setPicked([]); onStarted?.(); } })}>
           {!clone.isPending && <Wand2 />}学习选中的{picked.length ? ` ${picked.length} 个` : ""}
         </Button>
       </div>

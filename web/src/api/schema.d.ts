@@ -730,6 +730,12 @@ export interface components {
              */
             target: string;
             /**
+             * Names
+             * @description 可选：和 targets 一一对应的博主名字（从候选里选时带上，拆解前就能显示）
+             * @default []
+             */
+            names: string[];
+            /**
              * Theme
              * @description 想换成的主题，留空用账号现有主题
              * @default

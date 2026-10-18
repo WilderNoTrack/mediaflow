@@ -77,9 +77,9 @@ export function useClone(id: string) {
   const qc = useQueryClient();
   const inv = useInvalidateAccount(id);
   return useMutation({
-    mutationFn: ({ accountId, targets, theme = "" }: { targets: string[]; theme?: string; accountId?: string }) =>
+    mutationFn: ({ accountId, targets, names = [], theme = "" }: { targets: string[]; names?: string[]; theme?: string; accountId?: string }) =>
       unwrap(api.POST("/api/accounts/{account_id}/benchmark", {
-        params: { path: { account_id: accountId ?? id } }, body: { targets, target: "", theme, platform: "xiaohongshu" },
+        params: { path: { account_id: accountId ?? id } }, body: { targets, names, target: "", theme, platform: "xiaohongshu" },
       })),
     onSettled: (_d, _e, v) => { qc.invalidateQueries({ queryKey: ["jobs", v.accountId ?? id] }); inv(); },
   });

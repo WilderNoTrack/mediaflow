@@ -192,7 +192,7 @@ function Bubble({ role, text }: { role: string; text: string }) {
       <div className={cn(
         "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
         mine ? "bg-brand-gradient text-white" : "border bg-card shadow-sm",
-      )}>{text}</div>
+      )}>{mine ? text : text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/^#{1,4}\s+/gm, "")}</div>
     </div>
   );
 }

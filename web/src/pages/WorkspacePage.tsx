@@ -79,7 +79,7 @@ export function WorkspacePage() {
       <div className="flex min-h-0 flex-1">
         <main className="min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
-            <JobStrip jobs={jobs} />
+            <JobStrip jobs={jobs} hide={tab === "bench" ? ["clone_creator"] : []} />
             {tab === "contents" && <ContentsPanel account={account} busy={writing} onGoTopics={() => setTab("topics")} />}
             {tab === "topics" && <TopicsPanel account={account} busy={writing} onGoConfig={() => setTab("config")} />}
             {tab === "bench" && <BenchmarkPanel account={account} jobs={jobs} onGoTopics={() => setTab("topics")} onOpenChat={() => setChatOpen(true)} />}

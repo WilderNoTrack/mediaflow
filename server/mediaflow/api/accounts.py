@@ -119,7 +119,8 @@ def remove_note(note_id: str, acc: Account = Depends(owned_account), s: Session 
 def clone_benchmark(body: BenchmarkIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
     """加 1-3 个对标账号：后台逐个拆解打法，再和已有的对标合成一套、换成你的主题，同步到账号定位、规则和选题库。"""
     get_llm()  # 没配模型直接报错，不白跑抓取
-    job, _ = bench.add(s, acc, [*body.targets, body.target], theme=body.theme, platform=body.platform)
+    job, _ = bench.add(s, acc, [*body.targets, body.target], theme=body.theme, platform=body.platform,
+                       names=dict(zip(body.targets, body.names)))
     return JobOut(**job.model_dump())
 
 

@@ -12,7 +12,7 @@ const HIDDEN_KEY = "mf.hiddenJobs";
 const finishedAt = (j: Job) => (j.finished_at ? new Date(/Z|[+-]\d\d:\d\d$/.test(j.finished_at) ? j.finished_at : j.finished_at + "Z").getTime() : 0);
 
 /** 工作台顶部的任务条：进行中的写稿显示步骤，刚写完的给一个入口，失败的说原因。不再用浮层挡内容。 */
-export function JobStrip({ jobs }: { jobs: Job[] }) {
+export function JobStrip({ jobs, hide: hideKinds = [] }: { jobs: Job[]; hide?: string[] }) {
   const [hidden, setHidden] = useState<string[]>(() => JSON.parse(sessionStorage.getItem(HIDDEN_KEY) || "[]"));
   const hide = (id: string) => {
     const next = [...hidden, id];
@@ -20,6 +20,7 @@ export function JobStrip({ jobs }: { jobs: Job[] }) {
     sessionStorage.setItem(HIDDEN_KEY, JSON.stringify(next));
   };
   const shown = jobs.filter((j) => {
+    if (hideKinds.includes(j.kind)) return false;
     if (isActive(j)) return true;
     if (!["write_draft", "clone_creator"].includes(j.kind) || hidden.includes(j.id)) return false; // 配图任务结束后在草稿页看结果即可
     return Date.now() - finishedAt(j) < 10 * 60_000;

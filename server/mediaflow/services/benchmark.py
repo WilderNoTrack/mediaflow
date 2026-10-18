@@ -94,7 +94,8 @@ def latest(s: Session, account_id: str, *, ready_only: bool = False) -> Benchmar
 # ── 加对标 / 删对标 ──────────────────────────────────────────────────────
 
 
-def add(s: Session, acc: Account, targets: list[str], *, theme: str = "", platform: str = "xiaohongshu"):
+def add(s: Session, acc: Account, targets: list[str], *, theme: str = "", platform: str = "xiaohongshu",
+        names: dict[str, str] | None = None):
     """登记要对标的账号并派一个后台任务去拆。返回 (job, 新加的 Benchmark 列表)。重复的跳过，超出上限报错。"""
     from mediaflow.jobs.queue import JobConflict, active_write_job, enqueue
 
@@ -122,8 +123,8 @@ def add(s: Session, acc: Account, targets: list[str], *, theme: str = "", platfo
     if theme.strip() and theme.strip() != acc.theme:
         acc.theme, acc.updated_at = theme.strip(), utcnow()
         s.add(acc)
-    new = [Benchmark(user_id=acc.user_id, account_id=acc.id, platform=platform, target=t, theme=theme.strip())
-           for t in fresh]
+    new = [Benchmark(user_id=acc.user_id, account_id=acc.id, platform=platform, target=t, theme=theme.strip(),
+                     creator_name=(names or {}).get(t, "")[:60]) for t in fresh]
     s.add_all(new)
     s.commit()
     job = enqueue(s, JobKind.clone_creator, user_id=acc.user_id, account_id=acc.id,
