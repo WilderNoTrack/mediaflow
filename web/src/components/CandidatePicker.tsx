@@ -29,15 +29,15 @@ export function CandidatePicker({ account, candidates, compact, onStarted }: {
 
   if (!candidates.length) return <p className="text-sm text-muted-foreground">这次没找到合适的同领域账号，换个说法或说说要求再找一次。</p>;
   return (
-    <div className="space-y-3">
-      <div className={cn("grid gap-3", !compact && "sm:grid-cols-2")}>
+    <div className="min-w-0 space-y-3">
+      <div className={cn("grid grid-cols-1 gap-3", !compact && "sm:grid-cols-2")}>
         {candidates.map((c) => {
           const done = started.includes(c.url) || isBenchmarked(account, c);
           const on = picked.includes(c.url);
           const full = !on && picked.length >= slots;
           return (
             <div key={c.url} onClick={() => !done && toggle(c.url)}
-              className={cn("relative flex cursor-pointer flex-col rounded-xl border-2 bg-card p-4 transition-all",
+              className={cn("relative flex min-w-0 cursor-pointer flex-col rounded-xl border-2 bg-card p-4 transition-all",
                 done ? "cursor-default opacity-70" : on ? "border-indigo-400 shadow-md ring-2 ring-indigo-100" : "hover:border-indigo-300 hover:shadow-md",
                 full && !done && "opacity-60")}>
               <div className="mb-2 flex items-center gap-3">
