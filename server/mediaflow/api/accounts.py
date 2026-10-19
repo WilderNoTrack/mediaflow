@@ -1,4 +1,7 @@
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from sqlmodel import Session, col, func, select
 
 from mediaflow.api.deps import current_user_id, owned_account
@@ -11,6 +14,7 @@ from mediaflow.domain.schemas import (
     JobOut, NoteOut, RemoveBenchmarkOut, RuleIn, RuleOut,
 )
 from mediaflow.llm.client import get_llm
+from mediaflow.services import bench_report
 from mediaflow.services import benchmark as bench
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -130,6 +134,20 @@ def find_candidates(body: CandidatesIn, acc: Account = Depends(owned_account), s
     对标页按小红书的样子展示，用户勾选后再调 POST /benchmark。"""
     get_llm()
     return JobOut(**bench.start_find(s, acc, body.query, body.prefer).model_dump())
+
+
+@router.get("/{account_id}/benchmark/report", response_class=PlainTextResponse,
+            responses={200: {"content": {"text/markdown": {}}}})
+def benchmark_report(download: bool = False, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """完整的对标报告（Markdown）：合成方案、已经改好的设定、每个对标账号的拆解和爆款。download=true 时作为 .md 下载。"""
+    benches = bench.ready(s, acc.id)
+    if not benches:
+        raise HTTPException(404, "还没有拆好的对标账号")
+    headers = {}
+    if download:
+        name = quote(f"对标报告-{acc.name}.md")
+        headers["Content-Disposition"] = f"attachment; filename=\"report.md\"; filename*=UTF-8''{name}"
+    return PlainTextResponse(bench_report.markdown(acc, benches), media_type="text/markdown; charset=utf-8", headers=headers)
 
 
 @router.delete("/{account_id}/benchmark/{benchmark_id}", response_model=RemoveBenchmarkOut)

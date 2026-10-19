@@ -1,6 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import {
-  AlertCircle, ArrowRight, CheckCircle2, Copy, ExternalLink, Flame, Image as ImageIcon, Layers, Lightbulb,
-  KeyRound, ListOrdered, MessageSquareQuote, Plus, RefreshCw, Search, Sparkles, Target, Trash2, Type, UserRound, Wand2,
+  AlertCircle, ArrowRight, CheckCircle2, Copy, Download, ExternalLink, FileText, Flame, KeyRound, Layers, Lightbulb,
+  Plus, RefreshCw, Search, Sparkles, Trash2, Wand2, X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Account, Benchmark, Candidate, Job, JobEvent } from "../api/client";
@@ -9,16 +10,14 @@ import { cn } from "../lib/utils";
 import { MAX_BENCH } from "./CandidatePicker";
 import { CandidateGallery, FindProgress, NoteGrid, uniqNotes } from "./CreatorGallery";
 import { QrLogin } from "./QrLogin";
-import { Avatar, Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Label, Pills, Spinner, Textarea } from "./ui";
+import { Markdown } from "./Markdown";
+import { Avatar, Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Label, Modal, Pills, Spinner, Textarea } from "./ui";
 
 type Dict = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : String(v)).replace(/\*\*/g, "");
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const fmt = (v: unknown) => (Number(v) >= 10000 ? `${(Number(v) / 10000).toFixed(1)}万` : str(v));
 
-const FIELD_LABEL: Record<string, string> = {
-  theme: "账号主题", audience: "目标受众", content_style: "文案风格", image_style: "配图风格", topic_type: "选题方向", keywords: "关键词",
-};
 
 export function BenchmarkPanel({ account, jobs, onGoTopics, onOpenChat }: {
   account: Account; jobs: Job[]; onGoTopics: () => void; onOpenChat?: () => void;
@@ -72,7 +71,7 @@ export function BenchmarkPanel({ account, jobs, onGoTopics, onOpenChat }: {
     <div className="space-y-6">
       <Card>
         <CardHead icon={<Layers />} title={<>对标账号 <span className="font-normal text-muted-foreground">{live.length}/{MAX_BENCH}</span></>}
-          desc={ready.length > 1 ? "几个账号的打法已经合成一套，每一块学谁的见下方" : "最多同时对标 3 个，多个会自动合成一套打法"}
+          desc={ready.length > 1 ? "几个账号的打法已经合成一套，每一块学谁写在完整报告里" : "最多同时对标 3 个，多个会自动合成一套打法"}
           action={live.length < MAX_BENCH && !job && !adding && <Button size="sm" variant="outline" onClick={() => setAdding(true)}><Plus />加对标账号</Button>} />
         <CardBody className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {benches.map((b) => <BenchCard key={b.id} account={account} bench={b} busy={!!job} />)}
@@ -82,9 +81,9 @@ export function BenchmarkPanel({ account, jobs, onGoTopics, onOpenChat }: {
       {(live.length < MAX_BENCH || findJob) && finding}
       {adding && !findJob && <AddBenchmark account={account} onCancel={() => setAdding(false)} onStarted={() => setAdding(false)} />}
       {ready.length > 0 && Object.keys(plan).length > 0 && (
-        <MergedPlan account={account} plan={plan} benches={ready} onGoTopics={onGoTopics} />
+        <PlanBrief account={account} plan={plan} benches={ready} onGoTopics={onGoTopics} />
       )}
-      {ready.length > 0 && <CreatorDetails benches={ready} />}
+      {ready.length > 0 && <Hits benches={ready} />}
     </div>
   );
 }
@@ -200,6 +199,7 @@ function BenchCard({ account, bench: b, busy }: { account: Account; bench: Bench
   const info = b.creator_info as Dict;
   const avatar = str(info.avatar);
   const failed = b.status === "failed";
+  const crossed = (arr((account.bench_plan as Dict).fit) as Fit[]).some((f) => f.benchmark_id === b.id);
   return (
     <div className={cn("group relative rounded-xl border-2 bg-card p-4", failed && "border-red-200 bg-red-50/40")}>
       <div className="flex items-center gap-3">
@@ -217,6 +217,9 @@ function BenchCard({ account, bench: b, busy }: { account: Account; bench: Bench
           </div>
         </div>
       </div>
+      {str((b.playbook as Dict).domain) && (
+        <div className="mt-2"><Badge className={crossed ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}>做{str((b.playbook as Dict).domain)}{crossed && " · 和你不是一个领域"}</Badge></div>
+      )}
       {failed && <p className="mt-2 flex items-start gap-1 text-xs text-red-600"><AlertCircle className="mt-0.5 size-3 shrink-0" />{b.error || "未知错误"}</p>}
       <div className="mt-3 flex gap-1.5 border-t pt-2">
         {failed && (
@@ -271,198 +274,90 @@ function Analyzing({ job }: { job: Job }) {
   );
 }
 
-// ─── 合成方案 ──────────────────────────────────────────────────────────────
+// ─── 学完了：三行摘要 + 完整报告 ──────────────────────────────────────────
 
-function MergedPlan({ account, plan, benches, onGoTopics }: { account: Account; plan: Dict; benches: Benchmark[]; onGoTopics: () => void }) {
+type Fit = { benchmark_id: string; creator: string; domain?: string; note?: string };
+
+function PlanBrief({ account, plan, benches, onGoTopics }: { account: Account; plan: Dict; benches: Benchmark[]; onGoTopics: () => void }) {
+  const [open, setOpen] = useState(false);
   const applied = (plan.applied ?? {}) as Dict;
-  const profile = (applied.profile ?? {}) as Dict;
-  const borrow = arr(plan.borrow) as Dict[];
-  const pillars = arr(plan.pillars) as Dict[];
-  const steps = arr(plan.steps).map(str);
+  const nProfile = Object.keys((applied.profile ?? {}) as Dict).length;
+  const nRules = arr(applied.rules).length;
+  const nTopics = arr(applied.topics).length;
+  const first = str(arr(plan.steps)[0]);
+  const fit = arr(plan.fit) as Fit[];
+  const theme = str(plan.theme) || account.theme;
+  const changed = [nProfile && `账号定位 ${nProfile} 项`, nRules && `${nRules} 条写法规则`, nTopics && `${nTopics} 个复刻选题`].filter(Boolean).join("、");
+  const rows = [
+    { icon: <Lightbulb />, t: "学到了什么", d: str(plan.summary) },
+    { icon: <CheckCircle2 />, t: "已经帮你改好", d: changed ? `${changed}，以后写稿都会照着来` : "" },
+    { icon: <ArrowRight />, t: "先做这一步", d: first },
+  ].filter((r) => r.d);
   return (
-    <div className="space-y-6">
-      {str(plan.summary) && (
-        <div className="rounded-xl bg-brand-gradient p-5 text-white">
-          <div className="mb-1 flex items-center gap-1.5 text-xs opacity-80"><Flame className="size-3.5" />{benches.length > 1 ? `合成了 ${benches.length} 个账号的打法` : `学「${benches[0]?.creator_name}」的打法`}</div>
-          <div className="font-medium leading-relaxed">{str(plan.summary)}</div>
+    <Card className="border-indigo-200">
+      <CardHead icon={<Flame />} title={benches.length > 1 ? `学完了 ${benches.length} 个账号，合成了一套打法` : `学完了「${benches[0]?.creator_name}」`}
+        desc={`已按「${theme}」换好；详细拆解都在报告里，想看再看`}
+        action={<Button size="sm" variant="gradient" onClick={onGoTopics}>去写复刻选题<ArrowRight /></Button>} />
+      <CardBody className="space-y-3">
+        {rows.map((r) => (
+          <div key={r.t} className="flex gap-3 text-sm">
+            <span className="mt-0.5 text-indigo-500 [&_svg]:size-4">{r.icon}</span>
+            <div className="min-w-0"><span className="font-medium">{r.t}：</span><span className="text-slate-700">{r.d}</span></div>
+          </div>
+        ))}
+        {fit.map((f) => (
+          <div key={f.benchmark_id} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+            <span>「{f.creator}」{f.domain ? `主要做${f.domain}，` : ""}和「{theme}」不是一个领域。{(f.note || "能学标题、结构和封面，选题要换成你领域里的事").replace(/[。；;，,\s]+$/, "")}。想学得更像，可以再找个同领域的号。</span>
+          </div>
+        ))}
+        <div className="flex flex-wrap gap-2 border-t pt-3">
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}><FileText />查看完整报告</Button>
+          <a href={reportUrl(account.id, true)} download className="inline-flex"><Button size="sm" variant="ghost"><Download />下载 .md</Button></a>
         </div>
-      )}
-      {borrow.length > 0 && (
-        <Section icon={<Layers />} title="每一块学谁">
-          <div className="grid gap-2 sm:grid-cols-2">
-            {borrow.map((x, i) => (
-              <div key={i} className="rounded-lg border-2 px-3 py-2.5">
-                <div className="mb-0.5 flex items-center gap-2">
-                  <span className="font-medium">{str(x.aspect)}</span>
-                  <Badge className="bg-fuchsia-50 text-fuchsia-700">学 {str(x.from)}</Badge>
-                </div>
-                <p className="text-xs leading-relaxed text-muted-foreground">{str(x.how)}</p>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-      <Card className="border-indigo-200">
-        <CardHead icon={<CheckCircle2 />} title={`已按「${str(profile.theme) || str(plan.theme) || account.theme}」同步到你的账号`}
-          desc="写稿、质检、找选题都会按这套打法来；不满意可以去「账号设定」里改，或跟小媒说"
-          action={<Button size="sm" variant="gradient" onClick={onGoTopics}>去写复刻选题<ArrowRight /></Button>} />
-        <CardBody className="grid gap-6 md:grid-cols-2">
-          <div className="space-y-2.5">
-            <div className="text-xs font-medium text-muted-foreground">账号定位</div>
-            {Object.entries(profile).map(([k, v]) => (
-              <div key={k} className="text-sm"><span className="text-muted-foreground">{FIELD_LABEL[k] ?? k}：</span>{Array.isArray(v) ? v.join("、") : str(v)}</div>
-            ))}
-          </div>
-          <div className="space-y-4">
-            <div>
-              <div className="mb-2 text-xs font-medium text-muted-foreground">写法规则（每篇都遵守）</div>
-              <ol className="space-y-1.5 text-sm">
-                {arr(applied.rules).map((r, i) => <li key={i} className="flex gap-2"><span className="text-indigo-500">{i + 1}.</span>{str(r)}</li>)}
-              </ol>
-            </div>
-            <div className="text-sm"><span className="text-muted-foreground">复刻选题：</span>{arr(applied.topics).length} 个已放进选题库，写稿时会参考对应的原爆款结构</div>
-          </div>
-          {pillars.length > 0 && (
-            <div className="md:col-span-2">
-              <div className="mb-2 text-xs font-medium text-muted-foreground">你的内容栏目</div>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {pillars.map((x, i) => (
-                  <div key={i} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                    <div className="flex items-center justify-between gap-2"><span className="font-medium">{str(x.name)}</span>{str(x.share) && <span className="text-xs text-indigo-600">{str(x.share)}</span>}</div>
-                    {str(x.from) && <div className="text-xs text-muted-foreground">学：{str(x.from)}</div>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {steps.length > 0 && (
-            <div className="md:col-span-2">
-              <div className="mb-2 text-xs font-medium text-muted-foreground">起号建议</div>
-              <ul className="grid gap-2 sm:grid-cols-2">
-                {steps.map((s, i) => <li key={i} className="rounded-lg bg-indigo-50/60 px-3 py-2 text-sm">{s}</li>)}
-              </ul>
-            </div>
-          )}
-        </CardBody>
-      </Card>
-    </div>
+      </CardBody>
+      {open && <ReportDialog account={account} onClose={() => setOpen(false)} />}
+    </Card>
   );
 }
 
-// ─── 各对标账号的拆解详情 ──────────────────────────────────────────────────
+const reportUrl = (id: string, download = false) => `/api/accounts/${id}/benchmark/report${download ? "?download=true" : ""}`;
 
-function CreatorDetails({ benches }: { benches: Benchmark[] }) {
-  const [sel, setSel] = useState(benches[0]?.id ?? "");
-  const b = benches.find((x) => x.id === sel) ?? benches[0];
-  if (!b) return null;
+function ReportDialog({ account, onClose }: { account: Account; onClose: () => void }) {
+  const { data, error, isLoading } = useQuery({
+    queryKey: ["bench-report", account.id, (account.bench_plan as Dict).updated_at],
+    queryFn: async () => {
+      const r = await fetch(reportUrl(account.id));
+      if (!r.ok) throw new Error(`报告没打开（${r.status}）`);
+      return r.text();
+    },
+  });
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <h3 className="font-semibold">拆解详情</h3>
-        {benches.length > 1 && <Pills value={b.id} onChange={setSel} items={benches.map((x) => ({ value: x.id, label: x.creator_name || x.target }))} />}
+    <Modal className="max-w-3xl" onClose={onClose}>
+      <div className="flex items-center justify-between gap-3 border-b px-5 py-3">
+        <div className="flex items-center gap-2 font-semibold"><FileText className="size-4 text-indigo-500" />对标报告</div>
+        <div className="flex items-center gap-1">
+          <a href={reportUrl(account.id, true)} download><Button size="sm" variant="ghost"><Download />下载 .md</Button></a>
+          <button onClick={onClose} className="cursor-pointer rounded-lg p-1.5 text-muted-foreground hover:bg-muted" aria-label="关闭"><X className="size-4" /></button>
+        </div>
       </div>
-      <CreatorDetail bench={b} />
-    </div>
+      <div className="max-h-[75vh] overflow-y-auto px-6 py-5">
+        {isLoading ? <Spinner /> : error ? <ErrorText error={error} /> : <Markdown text={data ?? ""} />}
+      </div>
+    </Modal>
   );
 }
 
-function CreatorDetail({ bench: b }: { bench: Benchmark }) {
-  const p = b.playbook as Dict;
-  const hits = uniqNotes(b.samples as Dict[]).map((x) => ({
+function Hits({ benches }: { benches: Benchmark[] }) {
+  const hits = uniqNotes(benches.flatMap((b) => b.samples as Dict[])).slice(0, 12).map((x) => ({
     title: str(x.title), url: str(x.url), cover: str(x.cover), kind: str(x.kind), date: str(x.date),
     likes: x.likes ? str(x.likes) : "",
   }));
-  const myPillars: Dict[] = [];
-  return (
-    <div className="space-y-6">
-      {str(p.summary) && (
-        <div className="rounded-xl border-2 border-indigo-200 bg-indigo-50/50 p-4">
-          <div className="mb-1 flex items-center gap-1.5 text-xs text-indigo-600"><Flame className="size-3.5" />「{b.creator_name}」靠什么火</div>
-          <div className="text-sm font-medium leading-relaxed">{str(p.summary)}</div>
-        </div>
-      )}
-      <div className="grid gap-6 md:grid-cols-2">
-        <Section icon={<UserRound />} title="人设与受众">
-          {str(p.persona) && <p><b className="font-medium">人设：</b>{str(p.persona)}</p>}
-          {str(p.audience) && <p className="mt-2"><b className="font-medium">受众：</b>{str(p.audience)}</p>}
-        </Section>
-        <Section icon={<Target />} title="节奏与标签">
-          {str(p.cadence) && <p><b className="font-medium">更新：</b>{str(p.cadence)}</p>}
-          {str(p.tags) && <p className="mt-2"><b className="font-medium">标签：</b>{str(p.tags)}</p>}
-        </Section>
-      </div>
-
-      <Section icon={<ListOrdered />} title="内容栏目">
-        <div className="grid gap-3 sm:grid-cols-2">
-          {(arr(p.pillars) as Dict[]).map((x, i) => {
-            const mine = myPillars.find((m) => str(m.from) && str(x.name).includes(str(m.from)) || str(m.from).includes(str(x.name)));
-            return (
-              <div key={i} className="rounded-xl border-2 p-4">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="font-medium">{str(x.name)}</span>
-                  {str(x.share) && <Badge className="bg-indigo-100 text-indigo-700">{str(x.share)}</Badge>}
-                </div>
-                <p className="text-xs leading-relaxed text-muted-foreground">{str(x.desc)}</p>
-                {arr(x.examples).length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1">{arr(x.examples).slice(0, 3).map((e, j) => <span key={j} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{str(e)}</span>)}</div>
-                )}
-                {mine && <p className="mt-2 text-xs text-fuchsia-700">→ 你的栏目：{str(mine.name)}</p>}
-              </div>
-            );
-          })}
-        </div>
-      </Section>
-
-      <Section icon={<Type />} title="标题公式">
-        <div className="space-y-2">
-          {(arr(p.title_formulas) as Dict[]).map((f, i) => (
-            <div key={i} className="flex flex-col gap-0.5 rounded-lg bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:gap-3">
-              <span className="font-medium text-indigo-700">{str(f.formula)}</span>
-              {str(f.example) && <span className="text-xs text-muted-foreground">例：{str(f.example)}</span>}
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      <div className="grid gap-6 md:grid-cols-2">
-        <Section icon={<MessageSquareQuote />} title="开头钩子">
-          <ul className="space-y-1.5">{arr(p.hooks).map((h, i) => <li key={i}>· {str(h)}</li>)}</ul>
-        </Section>
-        <Section icon={<ListOrdered />} title="正文结构">
-          <p className="whitespace-pre-wrap">{str(p.structure)}</p>
-        </Section>
-      </div>
-
-      <div className="grid gap-6 md:grid-cols-2">
-        <Section icon={<ImageIcon />} title="封面与配图"><p>{str(p.visual)}</p></Section>
-        <Section icon={<Flame />} title="爆款规律">
-          <p>{str(p.hit_pattern)}</p>
-          {arr(p.audience_needs).length > 0 && <>
-            <div className="mb-1 mt-3 text-xs font-medium text-muted-foreground">评论区在关心</div>
-            <ul className="space-y-1">{arr(p.audience_needs).map((n, i) => <li key={i}>· {str(n)}</li>)}</ul>
-          </>}
-        </Section>
-      </div>
-
-      {arr(p.not_copyable).length > 0 && (
-        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          <Lightbulb className="mt-0.5 size-4 shrink-0 text-amber-500" />
-          <div><div className="mb-1 font-medium">这些别照搬</div><ul className="space-y-0.5">{arr(p.not_copyable).map((n, i) => <li key={i}>· {str(n)}</li>)}</ul></div>
-        </div>
-      )}
-
-      <Section icon={<Flame />} title={`TA 的爆款（${hits.length}）`}>
-        <NoteGrid notes={hits} className="sm:grid-cols-4 lg:grid-cols-6" />
-      </Section>
-    </div>
-  );
-}
-
-function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+  if (!hits.length) return null;
   return (
     <Card>
-      <CardHead icon={icon} title={title} />
-      <CardBody className="pt-4 text-sm leading-relaxed">{children}</CardBody>
+      <CardHead icon={<Flame />} title={benches.length > 1 ? "TA 们的爆款" : "TA 的爆款"} desc="复刻选题就是照着这些来的，点开能看原帖" />
+      <CardBody className="pt-4"><NoteGrid notes={hits} className="sm:grid-cols-4 lg:grid-cols-6" /></CardBody>
     </Card>
   );
 }

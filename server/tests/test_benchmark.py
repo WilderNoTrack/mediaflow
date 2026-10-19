@@ -337,3 +337,41 @@ async def test_find_candidates_skips_video_creators(session, account, llm, monke
     out = await bench.find_candidates(llm, "通勤穿搭")
     assert [c["name"] for c in out["candidates"]] == ["穿搭阿A"]  # 小B 只有视频爆款；美妆C 主页全是视频
     assert any("视频" in n for n in out["notes"])
+
+
+async def test_report_markdown_and_cross_domain(session, account, llm, fake_research, client):
+    b = Benchmark(user_id=account.user_id, account_id=account.id, target="程十安", theme="职场新人理财")
+    session.add(b)
+    session.commit()
+    llm.push("bench_analyze", PLAYBOOK | {"domain": "美妆"}).push("bench_adapt", PLAN | {"fit": [
+        {"from": "程十安an", "same_domain": False, "note": "学标题和结构，选题自己换"}]})
+    await bench.analyze(session, llm, b.id)
+    session.refresh(account)
+    assert account.bench_plan["fit"] == [{"benchmark_id": b.id, "creator": "程十安an", "domain": "美妆",
+                                          "note": "学标题和结构，选题自己换"}]
+
+    r = client.get(f"/api/accounts/{account.id}/benchmark/report")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/markdown")
+    md = r.text
+    for part in ("# 对标报告：小鹿穿搭", "跨领域提醒", "主要做美妆", "## 已经帮你改好的", "1. 标题用「干货｜结果」公式",
+                 "## 拆解：程十安an", "### 标题公式", "**干货｜结果+效果词**", "### TA 的爆款", "[干货 | 真正裸感底妆的打造](https://x/n1)"):
+        assert part in md, part
+    d = client.get(f"/api/accounts/{account.id}/benchmark/report?download=true")
+    assert "attachment" in d.headers["content-disposition"] and "UTF-8''" in d.headers["content-disposition"]
+
+
+def test_duplicate_ready_benchmarks_collapse(session, account, client):
+    url = "https://www.xiaohongshu.com/user/profile/562ef75ae00dd861d410784a"
+    for t in (url, "程十安an"):
+        session.add(Benchmark(user_id=account.user_id, account_id=account.id, target=t, creator_name="程十安an",
+                              creator_url=url, status=BenchmarkStatus.ready))
+        session.commit()
+    assert len(bench.listing(session, account.id)) == 1
+    assert len(session.exec(select(Benchmark)).all()) == 1
+    assert client.get(f"/api/accounts/{account.id}/benchmark/report").status_code == 200
+    assert client.get("/api/accounts/nope/benchmark/report").status_code == 404
+
+
+def test_plan_text_is_for_image_posts():
+    assert bench._no_video("口语化，常说想说的都在视频里了，不端着。") == "口语化，不端着。"
+    assert bench._no_video("视频封面用真人；图文封面用大字") == "图文封面用大字"

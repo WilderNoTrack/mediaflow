@@ -96,8 +96,24 @@ def _uid(url: str) -> str:
 
 
 def listing(s: Session, account_id: str) -> list[Benchmark]:
-    return list(s.exec(select(Benchmark).where(Benchmark.account_id == account_id)
+    """按加入顺序列出对标。同一个博主拆好了两份的（旧版本或并发留下的），只留最早那份，多的直接删掉。"""
+    rows = list(s.exec(select(Benchmark).where(Benchmark.account_id == account_id)
                        .order_by(col(Benchmark.created_at))).all())
+    seen: set[str] = set()
+    out, dup = [], []
+    for b in rows:
+        key = _uid(b.creator_url) or (b.creator_name.strip() if b.status == BenchmarkStatus.ready else "")
+        if key and b.status == BenchmarkStatus.ready and key in seen:
+            dup.append(b)
+            continue
+        if key and b.status == BenchmarkStatus.ready:
+            seen.add(key)
+        out.append(b)
+    if dup:
+        for b in dup:
+            s.delete(b)
+        s.commit()
+    return out
 
 
 def ready(s: Session, account_id: str) -> list[Benchmark]:
@@ -315,8 +331,10 @@ async def _synthesize(s: Session, llm: LLM, acc: Account, theme: str, emit: Emit
         )},
     ], temperature=0.6)
     applied = _apply(s, benches, acc, plan, theme)
+    plan["steps"] = [re.sub(r"[（(]?(?:套|对应|参考)?\s*[A-C]\d{1,2}[)）]?(?!\d)", "", _no_video(str(x))).strip()
+                     for x in plan.get("steps") or [] if str(x).strip()]
     acc.bench_plan = {k: plan.get(k) for k in ("summary", "borrow", "pillars", "steps") if plan.get(k)} | {
-        "theme": theme, "applied": applied, "creators": [b.creator_name for b in benches],
+        "theme": theme, "applied": applied, "fit": _fit(benches, plan.get("fit")), "creators": [b.creator_name for b in benches],
         "updated_at": utcnow().isoformat()}
     s.add(acc)
     s.commit()
@@ -324,6 +342,23 @@ async def _synthesize(s: Session, llm: LLM, acc: Account, theme: str, emit: Emit
          {"benchmark_ids": [b.id for b in benches]})
     return {"creators": [b.creator_name for b in benches], "topics": len(applied["topics"]),
             "benchmark_ids": [b.id for b in benches]}
+
+
+def _fit(benches: list[Benchmark], raw: Any) -> list[dict]:
+    """每个对标和新主题是不是一个领域。只留跨领域的，前端拿来提醒「能学什么、学不了什么」。"""
+    out = []
+    for x in raw if isinstance(raw, list) else []:
+        if not isinstance(x, dict) or x.get("same_domain") is not False:
+            continue
+        name = str(x.get("from") or "").strip()
+        b = next((b for b in benches if b.creator_name and (b.creator_name in name or name in b.creator_name)), None)
+        if b is None and len(benches) == 1:
+            b = benches[0]
+        if b is None:
+            continue
+        out.append({"benchmark_id": b.id, "creator": b.creator_name, "domain": str((b.playbook or {}).get("domain") or "")[:20],
+                    "note": str(x.get("note") or "").strip()[:80]})
+    return out
 
 
 def _ref(benches: list[Benchmark], raw: Any) -> tuple[Benchmark | None, dict]:
@@ -342,12 +377,22 @@ def _norm(t: str) -> str:
     return re.sub(r"[\W_]+", "", t).lower()
 
 
+_VIDEO = re.compile(r"视频|口播|vlog|直播|镜头前|拍摄", re.I)
+
+
+def _no_video(text: str) -> str:
+    """我们只做图文：方案里照搬来的视频说法（「想说的都在视频里了」「视频封面」）按分句去掉。"""
+    parts = re.split(r"([，,；;。！!])", text)
+    keep = "".join(a + b for a, b in zip(parts[0::2], parts[1::2] + [""]) if not _VIDEO.search(a))
+    return keep.strip("，,；; ") or text
+
+
 def _apply(s: Session, benches: list[Benchmark], acc: Account, plan: dict, theme: str) -> dict:
     """把方案写进账号：定位字段、写法规则、复刻选题。旧对标留下的规则和没用过的选题先清掉。"""
     prof = plan.get("profile") or {}
     changed: dict[str, Any] = {}
     for k in PROFILE_KEYS[1:]:
-        v = str(prof.get(k) or "").strip()
+        v = _no_video(str(prof.get(k) or "").strip())
         if v:
             setattr(acc, k, v)
             changed[k] = v
@@ -365,7 +410,7 @@ def _apply(s: Session, benches: list[Benchmark], acc: Account, plan: dict, theme
                                        Rule.active == True)).all():  # noqa: E712
         r.active = False
         s.add(r)
-    rules = [str(x).strip()[:300] for x in plan.get("rules") or [] if str(x).strip()][:5]
+    rules = [_no_video(str(x).strip())[:300] for x in plan.get("rules") or [] if str(x).strip()][:5]
     for text in rules:
         s.add(Rule(user_id=acc.user_id, account_id=acc.id, text=text, source=RuleSource.benchmark))
 
