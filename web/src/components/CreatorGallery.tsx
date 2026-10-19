@@ -32,14 +32,14 @@ export function NoteTile({ n, i = 0, small }: { n: NoteCard; i?: number; small?:
           <img src={n.cover} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
             className="size-full object-cover transition-transform duration-300 group-hover:scale-105" />
         ) : (
-          <div className={cn("flex size-full items-center justify-center bg-gradient-to-br p-3 text-center font-medium text-slate-600", GRADIENTS[i % GRADIENTS.length], small ? "text-[10px]" : "text-xs")}>
+          <div className={cn("flex size-full items-center justify-center bg-gradient-to-br p-3 text-center font-semibold leading-relaxed text-slate-700", GRADIENTS[i % GRADIENTS.length], small ? "text-[10px]" : "text-sm")}>
             {n.title}
           </div>
         )}
         {n.kind === "视频" && <PlayCircle className="absolute right-1.5 top-1.5 size-4 text-white drop-shadow" />}
       </div>
       <div className={cn("space-y-1", small ? "p-1.5" : "p-2")}>
-        <div className={cn("line-clamp-2 leading-snug", small ? "text-[11px]" : "text-xs font-medium")}>{n.title}</div>
+        {n.cover && !broken && <div className={cn("line-clamp-2 leading-snug", small ? "text-[11px]" : "text-xs font-medium")}>{n.title}</div>}
         {n.likes && (
           <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground"><Heart className="size-3" />{n.likes}</div>
         )}

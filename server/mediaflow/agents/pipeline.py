@@ -161,6 +161,20 @@ async def _check(llm: LLM, ctx: AccountContext, c: Candidate) -> bool:
         return True
 
 
+def _next_base(cands: list[Candidate]) -> Candidate:
+    """下一轮在哪一版上改：最新一版分数更高、只是带了硬伤（比如标题超字数）时，在它上面把硬伤改掉更容易收敛；
+    否则回到目前最好的一版，免得越改越偏。最终留哪版仍按 rank（没硬伤优先，再看分数）。"""
+    best, last = max(cands, key=lambda x: x.rank()), cands[-1]
+    return last if (last.score or 0) > (best.score or 0) else best
+
+
+def _problems(c: Candidate) -> str:
+    items = [*c.issues, *(f"没遵守：{r[:24]}" for r in c.evaluation.get("violated_rules", []))]
+    if not items:
+        return ""
+    return f"，还有 {len(items)} 处要改（{items[0][:30]}{'…' if len(items) > 1 else ''}）"
+
+
 def _sig(title: str, body: str) -> str:
     import hashlib
     return hashlib.sha1(f"{title}\n{body}".encode()).hexdigest()[:12]
@@ -234,7 +248,7 @@ async def write_draft(
     candidates: list[Candidate] = []
     eval_failed = False
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        base = max(candidates, key=lambda x: x.rank()) if candidates else None
+        base = _next_base(candidates) if candidates else None
         emit("write", "第 1 版写作中…" if base is None else f"按质检意见改第 {attempt - 1} 轮…", {"attempt": attempt})
         try:
             c = (await _generate(llm, ctx, topic, hint, "") if base is None
@@ -248,9 +262,8 @@ async def write_draft(
             eval_failed = True
             emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
         candidates.append(c)
-        problems = len(c.issues) + len(c.evaluation.get("violated_rules", []))
         emit("review", f"{'第 1 版' if base is None else f'改第 {attempt - 1} 轮'}："
-             f"{c.score if c.score is not None else '未评分'} 分" + (f"，还有 {problems} 处要改" if problems else ""),
+             f"{c.score if c.score is not None else '未评分'} 分" + _problems(c),
              {"attempt": attempt, "score": c.score, "issues": c.issues, "evaluation": c.evaluation})
         if c.passed:
             break
@@ -310,8 +323,9 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
     best = cur
     for r in range(rounds):
         emit("write", f"按质检意见再改第 {r + 1} 轮…", {"attempt": start + r})
+        base = _next_base([cur, *tried])
         try:
-            c = await _revise(llm, ctx, best, _feedback_for(best, note if r == 0 else ""))
+            c = await _revise(llm, ctx, base, _feedback_for(base, note))
         except LLMError as e:
             if tried:
                 emit("warning", f"这一轮没改成（{e}），用已经改好的版本", None)
@@ -319,9 +333,8 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
             raise
         await _check(llm, ctx, c)
         tried.append(c)
-        problems = len(c.issues) + len(c.evaluation.get("violated_rules", []))
-        emit("review", f"改第 {r + 1} 轮：{c.score if c.score is not None else '未评分'} 分"
-             + (f"，还有 {problems} 处要改" if problems else ""), {"score": c.score})
+        emit("review", f"改第 {r + 1} 轮：{c.score if c.score is not None else '未评分'} 分" + _problems(c),
+             {"score": c.score, "issues": c.issues})
         if c.rank() > best.rank():
             best = c
         if c.passed:
@@ -342,5 +355,12 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
     session.add(draft)
     session.commit()
     session.refresh(draft)
-    emit("done", ("改好了：" if improved else "这几轮没比原稿更好，保留原稿：") + f"{draft.score} 分", {"draft_id": draft.id})
+    if improved:
+        msg = f"改好了：{cur.score if cur.score is not None else '?'} → {draft.score} 分"
+    else:
+        top = max(tried, key=lambda x: x.score or 0) if tried else None
+        why = (f"改出来最高 {top.score} 分，但还有硬伤（{top.issues[0][:30]}），" if top and top.issues and (top.score or 0) > (cur.score or 0)
+               else "改出来的分数没有更高，")
+        msg = f"{why}所以保留原稿（{draft.score} 分）。可以补一句要求再试，或者自己改"
+    emit("done", msg, {"draft_id": draft.id})
     return draft
