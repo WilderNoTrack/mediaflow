@@ -1,8 +1,9 @@
-import { Bot, Check, ChevronRight, Copy, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Bot, Check, ChevronRight, Copy, ImageIcon, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAccounts, useClone, useCreateAccount, useCredentials, useDeleteAccount, useSystem } from "../api/hooks";
 import { Header } from "../components/Header";
+import { ImageSettingsDialog } from "../components/ImageSettingsDialog";
 import { SourcesDialog } from "../components/SourcesDialog";
 import { Avatar, Badge, Button, Empty, ErrorText, Input, Label, Logo, Modal, Spinner, Textarea } from "../components/ui";
 import { cn, timeAgo } from "../lib/utils";
@@ -14,6 +15,7 @@ export function AccountsPage() {
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [imageOpen, setImageOpen] = useState(false);
   const [form, setForm] = useState({ name: "", theme: "" });
   const [mode, setMode] = useState<"blank" | "clone">("blank");
   const [target, setTarget] = useState("");
@@ -41,12 +43,16 @@ export function AccountsPage() {
             <div className="text-xs text-muted-foreground">账号孵化中台</div>
           </div>
         </>}
-        right={<Button variant="outline" size="sm" onClick={() => setSourcesOpen(true)}><KeyRound />数据来源</Button>}
+        right={<div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setImageOpen(true)}><ImageIcon />AI 配图</Button>
+          <Button variant="outline" size="sm" onClick={() => setSourcesOpen(true)}><KeyRound />数据来源</Button>
+        </div>}
       />
       {sourcesOpen && <SourcesDialog onClose={() => setSourcesOpen(false)} />}
+      {imageOpen && <ImageSettingsDialog onClose={() => setImageOpen(false)} />}
 
       <div className="container mx-auto max-w-5xl px-6 py-10">
-        <Setup onSources={() => setSourcesOpen(true)} />
+        <Setup onSources={() => setSourcesOpen(true)} onImage={() => setImageOpen(true)} />
 
         <div className="mb-8 flex items-end justify-between">
           <div>
@@ -172,7 +178,7 @@ export function AccountsPage() {
 }
 
 /** 首次使用的准备清单：缺什么一目了然，全部就绪后自动消失 */
-function Setup({ onSources }: { onSources: () => void }) {
+function Setup({ onSources, onImage }: { onSources: () => void; onImage: () => void }) {
   const { data: sys } = useSystem();
   const { data: creds = [] } = useCredentials();
   if (!sys) return null;
@@ -180,7 +186,7 @@ function Setup({ onSources }: { onSources: () => void }) {
   const steps = [
     { done: sys.llm_configured, title: "填 DeepSeek API Key", desc: "写稿、对话都靠它。在 server/.env 里填 DEEPSEEK_API_KEY 后重启。", must: true },
     { done: platforms.size >= 2, title: `连接数据来源（已连 ${platforms.size} 个平台）`, desc: "连上小红书、抖音等，选题和对标分析才有真实数据；不连也能用热榜。", action: <Button size="xs" variant="outline" onClick={onSources}>去连接</Button> },
-    { done: sys.image_configured, title: "配图服务（可选）", desc: "不配也能用，只是没有自动配图。" },
+    { done: sys.image_configured, title: "AI 配图（可选）", desc: "填一个生图 Key，写完稿自动出 3:4 配图；不配也能用，只是没有图。", action: <Button size="xs" variant="outline" onClick={onImage}>去配置</Button> },
   ];
   if (steps.every((s) => s.done)) return null;
   return (

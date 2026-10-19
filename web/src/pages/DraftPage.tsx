@@ -7,7 +7,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { DraftDetail, JobEvent, S } from "../api/client";
 import { api, unwrap } from "../api/client";
-import { isActive, useAccount, useActiveJobs, useDraft, useDraftActions, useRevise, useRules } from "../api/hooks";
+import { isActive, useAccount, useActiveJobs, useDraft, useDraftActions, useRevise, useRules, useSystem } from "../api/hooks";
+import { ImageSettingsDialog } from "../components/ImageSettingsDialog";
 import { Badge, Button, Card, CardBody, CardHead, Empty, ErrorText, Segmented, Spinner, Textarea } from "../components/ui";
 import { cn, timeAgo } from "../lib/utils";
 
@@ -149,11 +150,22 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
   const cur = d.images[i];
   const done = d.images.filter((x) => x.status === "done").length;
   const skipped = d.images.length > 0 && d.images.every((x) => x.status === "skipped");
+  const { data: sys } = useSystem();
+  const [setup, setSetup] = useState(false);
   return (
     <Card>
       <CardHead icon={<ImageIcon />} title="配图" action={<span className="text-xs text-muted-foreground">{done}/{d.images.length} 张</span>} />
       <CardBody className="space-y-3">
-        {skipped && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">还没配置配图服务，所以没出图。可以先导出文案，或在 server/.env 里填好配图密钥后点「全部重新生成」。</p>}
+        {setup && <ImageSettingsDialog onClose={() => setSetup(false)} />}
+        {skipped && (sys?.image_configured
+          ? <div className="flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+              <span className="flex-1">AI 配图已经配好了，这篇写的时候还没配，点一下就出图。</span>
+              <Button size="xs" loading={act.images.isPending} onClick={() => act.images.mutate(undefined)}>现在出图</Button>
+            </div>
+          : <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              <span className="flex-1">还没配置 AI 配图，所以没出图。填一个生图 Key 就能自动出图，也可以先导出文案。</span>
+              <Button size="xs" variant="outline" onClick={() => setSetup(true)}>去配置</Button>
+            </div>)}
         {d.images.length > 1 && (
           <div className="flex gap-1.5 overflow-x-auto pb-1">
             {d.images.map((im, k) => (

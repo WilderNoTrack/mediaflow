@@ -573,6 +573,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Image Settings */
+        get: operations["get_image_settings_api_settings_image_get"];
+        /** Update Image Settings */
+        put: operations["update_image_settings_api_settings_image_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/image/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Image
+         * @description 用一句固定的封面描述实际出一张图（会消耗一次生图额度），确认 Key 和模型能用、看看效果。
+         */
+        post: operations["test_image_api_settings_image_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1040,6 +1078,15 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** ImageModelOut */
+        ImageModelOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Desc */
+            desc: string;
+        };
         /** ImageOut */
         ImageOut: {
             /** Id */
@@ -1054,11 +1101,54 @@ export interface components {
             /** Error */
             error: string;
         };
+        /** ImageSettingsIn */
+        ImageSettingsIn: {
+            /**
+             * Api Key
+             * @description null 不改；空字符串清除
+             */
+            api_key?: string | null;
+            /** Model */
+            model?: string | null;
+        };
+        /** ImageSettingsOut */
+        ImageSettingsOut: {
+            /** Configured */
+            configured: boolean;
+            /**
+             * Origin
+             * @description ui=界面里填的；env=来自 .env；空=没配置
+             */
+            origin: string;
+            /** Model */
+            model: string;
+            /** Models */
+            models: components["schemas"]["ImageModelOut"][];
+        };
         /**
          * ImageStatus
          * @enum {string}
          */
         ImageStatus: "pending" | "running" | "done" | "failed" | "skipped";
+        /** ImageTestOut */
+        ImageTestOut: {
+            /** Ok */
+            ok: boolean;
+            /** Model */
+            model: string;
+            /** Seconds */
+            seconds: number;
+            /**
+             * Url
+             * @default
+             */
+            url: string;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+        };
         /**
          * JobKind
          * @enum {string}
@@ -2564,6 +2654,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QrPollOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_image_settings_api_settings_image_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageSettingsOut"];
+                };
+            };
+        };
+    };
+    update_image_settings_api_settings_image_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageSettingsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageSettingsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_image_api_settings_image_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageSettingsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageTestOut"];
                 };
             };
             /** @description Validation Error */

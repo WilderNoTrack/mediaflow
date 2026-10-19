@@ -43,6 +43,9 @@ SPECS: list[CredSpec] = [
              "https://www.bilibili.com/"),
     CredSpec("bilibili_refresh_token", "bilibili", "B站刷新口令", "key", "扫码登录时自动保存，用于续期", "", hidden=True),
     CredSpec("bilibili_refreshed_at", "bilibili", "B站上次续期时间", "key", "", "", hidden=True),
+    CredSpec("image_api_key", "image", "AI 配图 API Key", "key", "grsai 的 API Key", "https://grsai.ai/zh/dashboard/api-keys",
+             hidden=True),  # 配图在单独的「AI 配图」设置里填，不出现在数据来源列表
+    CredSpec("image_model", "image", "配图模型", "key", "", "", hidden=True),
     CredSpec("weibo_cookie", "weibo", "微博 Cookie", "cookie",
              "微博按关键词搜索需要登录。登录 weibo.com 后复制 Cookie（需包含 SUB）。",
              "https://weibo.com/"),

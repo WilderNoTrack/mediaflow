@@ -85,3 +85,28 @@ def test_scheduler_respects_frequency(fresh_db, account):
         assert scheduler.tick(s) == []
         job = s.exec(select(Job)).one()
         assert job.payload["trigger"] == "auto"
+
+
+async def test_grsai_falls_back_to_other_model(monkeypatch):
+    calls = []
+
+    async def one(self, model, prompt):
+        calls.append(model)
+        if model == "gpt-image-2.5":
+            raise images_mod.ImageError("生图失败：busy")
+        return b"png"
+
+    monkeypatch.setattr(images_mod.GrsaiProvider, "_one", one)
+    p = images_mod.GrsaiProvider(key="k", model="gpt-image-2.5")
+    assert await p.generate("x") == b"png" and calls == ["gpt-image-2.5", "nano-banana-2.1"]
+
+    async def bad(self, model, prompt):
+        calls.append(model)
+        raise images_mod.ImageError("违规", retryable=False)
+
+    calls.clear()
+    monkeypatch.setattr(images_mod.GrsaiProvider, "_one", bad)
+    with pytest.raises(images_mod.ImageError):
+        await images_mod.GrsaiProvider(key="k").generate("x")
+    assert calls == ["gpt-image-2.5"]
+    assert images_mod._payload("nano-banana-2.1") == {"aspectRatio": "3:4", "imageSize": "1K"}

@@ -23,9 +23,10 @@ class Settings(BaseSettings):
     # 配图
     image_api_key: str = ""
     image_endpoint: str = "https://grsai.dakka.com.cn/v1/api/generate"
-    image_model: str = "gpt-image-2"
-    image_size: str = "1024x1536"
-    image_timeout: float = 180.0
+    image_model: str = "gpt-image-2.5"
+    image_size: str = "3:4"           # 只对不认识的模型生效；内置模型按各自参数出 3:4 竖图
+    image_timeout: float = 300.0
+    image_concurrency: int = 3
 
     # 选题来源
     weibo_cookie: str = ""

@@ -12,7 +12,7 @@ WRITER_SYSTEM = """你是资深小红书内容创作者，擅长写出让人停�
 - 正文默认 300-800 字（账号规则里对字数另有要求时，以规则为准），分段短句，适度使用 emoji，像真人分享，不要营销腔
 - 不出现极限词（全网第一、顶级、100%有效等）、不导流到站外（微信、vx、加我等）
 - 标签 5-8 个，不带 # 号
-- 配图 3-6 张，每张用一句中文描述具体画面（主体、场景、构图、氛围），第 1 张是封面
+- 配图 3-6 张，每张用一句中文描述具体画面（主体、场景、构图、氛围）；第 1 张是封面，要写清封面上的大字标题（用「」括起来，是笔记标题或它的精简版，不超过 12 个字）；其他张需要文字（步骤、要点）也用「」写明，不需要就不写
 
 账号的长期规则必须全部遵守。只输出 JSON。"""
 
@@ -105,14 +105,17 @@ TOPIC_USER = """【账号定位】
 {{"topics": [{{"title": "选题标题", "angle": "切入角度，一句话", "reason": "为什么这个号适合写",
   "source": "参考的平台（weibo/baidu/bilibili/douyin），没参考热点写 ai", "source_url": ""}}]}}"""
 
-IMAGE_PROMPT_SYSTEM = """You turn a Chinese picture description into one detailed English prompt
-for an image model, for a Xiaohongshu (RED) post. Portrait 3:4. Follow the account's visual style
-exactly. Describe subject, setting, composition, lighting, mood. No text, no watermark, no logo
-in the image. Output only the prompt."""
+IMAGE_PROMPT_SYSTEM = """你把一句中文配图描述扩写成给 AI 生图模型的详细提示词（用中文写），用于小红书图文笔记，竖版 3:4。
+- 严格按账号的配图风格；写清主体、场景、构图、光线、色调、氛围，人物写清年龄感、穿着、动作、表情
+- 描述里要求出现的文字（标题、步骤、要点），一字不改地写进提示词并用「」括起来，说明位置、字号、字体风格和颜色；
+  文字少而大，一张最多 3 处；描述没要求文字就写明「画面里不要任何文字」
+- 封面要一眼抓人：主体突出，大字标题醒目、和背景反差强
+- 不要水印、不要真实品牌 logo、不要真实卡号证件号、不要手机或 App 界面元素
+只输出提示词本身，不要解释。"""
 
-IMAGE_PROMPT_USER = """Account visual style: {image_style}
-Post title: {title}
-Image {idx} of {total}{cover}: {prompt}"""
+IMAGE_PROMPT_USER = """账号配图风格：{image_style}
+笔记标题：{title}
+第 {idx}/{total} 张{cover}：{prompt}"""
 
 LEARN_SYSTEM = """你在帮一个小红书账号总结创作口味。对比 AI 原稿和用户改后的版本（以及用户反馈），
 提炼出以后每篇都该遵守的规则。只总结有普遍性的偏好，不要把这一篇特有的内容写成规则。

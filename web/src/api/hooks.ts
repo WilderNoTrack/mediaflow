@@ -262,3 +262,22 @@ export const useTestSources = () =>
   useMutation({
     mutationFn: (keyword: string) => unwrap(api.POST("/api/settings/sources/test", { body: { keyword } })),
   });
+
+export const useImageSettings = () =>
+  useQuery({ queryKey: ["image-settings"], queryFn: () => unwrap(api.GET("/api/settings/image")) });
+
+export function useSaveImageSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { api_key?: string | null; model?: string | null }) => unwrap(api.PUT("/api/settings/image", { body })),
+    onSuccess: (d) => {
+      qc.setQueryData(["image-settings"], d);
+      qc.invalidateQueries({ queryKey: ["system"] });
+    },
+  });
+}
+
+export const useTestImage = () =>
+  useMutation({
+    mutationFn: (body: { api_key?: string | null; model?: string | null }) => unwrap(api.POST("/api/settings/image/test", { body })),
+  });

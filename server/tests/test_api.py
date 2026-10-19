@@ -105,3 +105,15 @@ def test_topic_search_endpoint(client, llm):
 def test_system_status(client):
     s = client.get("/api/system").json()
     assert s["llm_configured"] and not s["image_configured"]
+
+
+def test_image_settings_saved_from_ui(client):
+    r = client.get("/api/settings/image").json()
+    assert not r["configured"] and r["model"] == "gpt-image-2.5" and {m["id"] for m in r["models"]} >= {"gpt-image-2.5", "nano-banana-2.1"}
+    assert client.put("/api/settings/image", json={"model": "dall-e"}).status_code == 400
+    r = client.put("/api/settings/image", json={"api_key": "sk-test", "model": "nano-banana-2.1"}).json()
+    assert r["configured"] and r["origin"] == "ui" and r["model"] == "nano-banana-2.1"
+    assert client.get("/api/system").json()["image_configured"]
+    assert all(c["key"] != "image_api_key" for c in client.get("/api/settings/credentials").json())
+    r = client.put("/api/settings/image", json={"api_key": "", "model": ""}).json()
+    assert not r["configured"] and r["model"] == "gpt-image-2.5"

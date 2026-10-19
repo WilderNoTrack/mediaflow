@@ -19,11 +19,11 @@ from sqlmodel import Session, col, select
 from mediaflow.agents import prompts
 from mediaflow.agents.checks import body_len, body_range, clean_tags, hard_check
 from mediaflow.agents.context import AccountContext, load_context
-from mediaflow.config import get_settings
 from mediaflow.domain.models import (
     Draft, DraftImage, ImageStatus, Topic, TopicStatus, Trigger, utcnow,
 )
 from mediaflow.llm.client import LLM, LLMError, complete_json
+from mediaflow.services.images import image_configured
 from mediaflow.services.topics import Fetcher, propose_topics
 
 logger = logging.getLogger(__name__)
@@ -292,7 +292,7 @@ async def write_draft(
     )
     session.add(draft)
     session.flush()
-    status = ImageStatus.pending if get_settings().image_configured else ImageStatus.skipped
+    status = ImageStatus.pending if image_configured() else ImageStatus.skipped
     for i, p in enumerate(best.image_prompts):
         session.add(DraftImage(draft_id=draft.id, idx=i, prompt=p, status=status))
     topic.status = TopicStatus.used
