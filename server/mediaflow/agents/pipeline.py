@@ -179,6 +179,10 @@ def user_sentences(original: str, current: str) -> list[str]:
     return [x.strip() for x in _SENT.findall(current) if len(x.strip()) >= 4 and x.strip() not in orig][:30]
 
 
+def _n_problems(c: Candidate) -> int:
+    return len(c.issues) + len(c.evaluation.get("violated_rules") or []) + len(c.must)
+
+
 def _unchanged(a: Candidate, b: Candidate) -> bool:
     return (a.title, a.body, a.tags, a.image_prompts) == (b.title, b.body, b.tags, b.image_prompts)
 
@@ -453,9 +457,10 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
         tried.append(c)
         emit("review", f"改第 {r + 1} 轮：{c.score if c.score is not None else '未评分'} 分" + _problems(c),
              {"score": c.score, "issues": c.issues})
-        if c.rank() > best.rank():
+        # 更好就换；用户明确提了要求时，只要不比原来差也换（用户要的就是这个改动）
+        if c.rank() > best.rank() or (note.strip() and best is cur and c.rank() >= cur.rank()):
             best = c
-        if c.passed:
+        if c.passed and (not note.strip() or best is c):
             break
     history += _history(tried, start)
     improved = best is not cur
@@ -474,7 +479,12 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
     session.commit()
     session.refresh(draft)
     if improved:
-        msg = f"改好了：{cur.score if cur.score is not None else '?'} → {draft.score} 分"
+        before, after = _n_problems(cur), _n_problems(best)
+        fixed = f"，要改的问题 {before} → {after} 处" if before != after else ""
+        msg = (f"改好了：{cur.score if cur.score is not None else '?'} → {draft.score} 分{fixed}"
+               if (best.score or 0) != (cur.score or 0) or not fixed else f"改好了：分数不变（{draft.score}）{fixed}")
+        if note.strip() and not fixed and (best.score or 0) == (cur.score or 0):
+            msg = f"按你的要求改好了（{draft.score} 分）"
     else:
         top = max(tried, key=lambda x: x.score or 0) if tried else None
         why = (f"改出来最高 {top.score} 分，但还有硬伤（{top.issues[0][:30]}），" if top and top.issues and (top.score or 0) > (cur.score or 0)
