@@ -76,6 +76,8 @@ class JobKind(str, Enum):
     write_draft = "write_draft"
     generate_images = "generate_images"
     clone_creator = "clone_creator"  # 拆解对标账号并生成复刻方案
+    find_benchmarks = "find_benchmarks"  # 按主题找同领域的对标候选
+    revise_draft = "revise_draft"  # 按质检意见再改一轮草稿
 
 
 class JobStatus(str, Enum):
@@ -119,6 +121,8 @@ class Account(SQLModel, table=True):
     keywords: list[str] = json_col()
     # 多个对标账号合成后的方案：借鉴了谁的什么、栏目、起号建议、同步了哪些东西
     bench_plan: dict = json_obj_col()
+    # 最近一次「帮我找同领域的号」的结果：{theme, prefer, candidates, notes, at}，对标页按小红书的样子展示
+    bench_candidates: dict = json_obj_col()
     # 自动模式
     auto_enabled: bool = False
     auto_frequency: AutoFrequency = AutoFrequency.daily

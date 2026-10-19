@@ -39,7 +39,8 @@ class FakeLLM:
     @staticmethod
     def kind_of(messages: list[dict]) -> str:
         system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
-        for kind, marker in (("writer", prompts.WRITER_SYSTEM), ("eval", prompts.EVALUATOR_SYSTEM),
+        for kind, marker in (("writer", prompts.WRITER_SYSTEM), ("reviser", prompts.REVISER_SYSTEM),
+                             ("eval", prompts.EVALUATOR_SYSTEM),
                              ("topic", prompts.TOPIC_SYSTEM), ("image", prompts.IMAGE_PROMPT_SYSTEM),
                              ("learn", prompts.LEARN_SYSTEM), ("manager", MANAGER_PROMPT),
                              ("bench_analyze", prompts.BENCH_ANALYZE_SYSTEM), ("bench_adapt", prompts.BENCH_ADAPT_SYSTEM),
@@ -55,6 +56,8 @@ class FakeLLM:
         kind = self.kind_of(messages)
         self.calls.append((kind, messages))
         q = self.queues[kind]
+        if not q and kind == "reviser":
+            q = self.queues["writer"]  # 没单独准备改稿回复时，沿用写稿的脚本
         if not q:
             if kind == "image":
                 return LLMResponse(content="a detailed english prompt")

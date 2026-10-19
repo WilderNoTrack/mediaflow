@@ -29,16 +29,23 @@ def text_len(s: str) -> int:
     return len((s or "").strip())
 
 
-def hard_check(title: str, body: str, tags: list[str], image_prompts: list[str]) -> list[str]:
+def hard_check(title: str, body: str, tags: list[str], image_prompts: list[str],
+               rules: Iterable[str] = ()) -> list[str]:
+    """平台硬限制 + 账号规则里能用代码判断的部分（目前是正文字数）。"""
     issues: list[str] = []
+    rules = list(rules)
     if not title.strip():
         issues.append("标题为空")
     elif text_len(title) > TITLE_MAX:
         issues.append(f"标题 {text_len(title)} 字，超过小红书上限 {TITLE_MAX} 字")
     n = text_len(body)
-    if n < BODY_MIN:
+    if (rule_len := length_issue(body, rules)):
+        issues.append(rule_len)
+    elif any(body_range(rules)):
+        pass  # 账号自己定了字数，就不再套默认的「至少 150 字」
+    elif n < BODY_MIN:
         issues.append(f"正文只有 {n} 字，太单薄（至少 {BODY_MIN} 字）")
-    elif n > BODY_MAX:
+    if n > BODY_MAX:
         issues.append(f"正文 {n} 字，超过小红书上限 {BODY_MAX} 字")
     if not (TAGS_MIN <= len(tags) <= TAGS_MAX):
         issues.append(f"标签 {len(tags)} 个，应为 {TAGS_MIN}-{TAGS_MAX} 个")
@@ -48,6 +55,47 @@ def hard_check(title: str, body: str, tags: list[str], image_prompts: list[str])
     if hits:
         issues.append("含有违规风险词：" + "、".join(hits))
     return issues
+
+
+def body_len(body: str) -> int:
+    """正文字数：不算空格和换行（和小红书编辑器的直观感受接近）。"""
+    return len(re.sub(r"\s", "", body or ""))
+
+
+_RANGE = re.compile(r"(\d{2,4})\s*(?:到|至|~|～|-|－|—|–)\s*(\d{2,4})\s*字")
+_MAX = re.compile(r"(?:不超过|不要超过|以内|控制在|最多|少于)\D{0,3}(\d{2,4})\s*字|(\d{2,4})\s*字(?:以内|之内)")
+_MIN = re.compile(r"(?:至少|不少于|不低于)\D{0,3}(\d{2,4})\s*字|(\d{2,4})\s*字以上")
+
+
+def body_range(rules: Iterable[str]) -> tuple[int | None, int | None]:
+    """从账号规则里读出正文字数要求（如「正文150到250字」「正文控制在300字以内」），读不出返回 (None, None)。"""
+    lo = hi = None
+    for r in rules:
+        if "正文" in r:
+            seg = r[r.index("正文"):]
+        elif "字数" in r and "标题" not in r:
+            seg = r
+        else:
+            continue
+        if m := _RANGE.search(seg):
+            lo, hi = sorted((int(m.group(1)), int(m.group(2))))
+        if m := _MAX.search(seg):
+            hi = int(m.group(1) or m.group(2))
+        if m := _MIN.search(seg):
+            lo = int(m.group(1) or m.group(2))
+    return lo, hi
+
+
+def length_issue(body: str, rules: Iterable[str]) -> str:
+    """正文字数不符合账号规则时返回问题描述（允许 5% 的误差），否则空串。模型数不准字，这一条交给代码。"""
+    lo, hi = body_range(rules)
+    n = body_len(body)
+    req = f"{lo}–{hi} 字" if lo and hi else f"不超过 {hi} 字" if hi else f"至少 {lo} 字" if lo else ""
+    if hi and n > hi * 1.05:
+        return f"正文 {n} 字，账号规则要求 {req}，需要删掉约 {n - hi} 字"
+    if lo and n < lo * 0.95:
+        return f"正文只有 {n} 字，账号规则要求 {req}，需要补约 {lo - n} 字"
+    return ""
 
 
 def clean_tags(tags: Iterable[str]) -> list[str]:

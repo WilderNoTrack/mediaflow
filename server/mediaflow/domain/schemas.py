@@ -96,6 +96,10 @@ class CandidatesIn(BaseModel):
     prefer: str = Field("", max_length=200, description="额外要求，如「粉丝少一点」「做通勤穿搭」")
 
 
+class ReviseIn(BaseModel):
+    note: str = Field(default="", max_length=300)
+
+
 class CandidatesOut(BaseModel):
     theme: str
     candidates: list[dict]
@@ -119,6 +123,7 @@ class AccountDetail(AccountOut):
     notes: list[NoteOut] = []
     benchmarks: list[BenchmarkOut] = []
     bench_plan: dict = {}
+    bench_candidates: dict = {}
 
 
 class RuleIn(BaseModel):

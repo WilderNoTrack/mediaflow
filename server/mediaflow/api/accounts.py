@@ -8,7 +8,7 @@ from mediaflow.domain.models import (
 )
 from mediaflow.domain.schemas import (
     AccountDetail, AccountIn, AccountOut, AccountPatch, AccountSummary, BenchmarkIn, BenchmarkOut, CandidatesIn,
-    CandidatesOut, JobOut, NoteOut, RemoveBenchmarkOut, RuleIn, RuleOut,
+    JobOut, NoteOut, RemoveBenchmarkOut, RuleIn, RuleOut,
 )
 from mediaflow.llm.client import get_llm
 from mediaflow.services import benchmark as bench
@@ -124,13 +124,12 @@ def clone_benchmark(body: BenchmarkIn, acc: Account = Depends(owned_account), s:
     return JobOut(**job.model_dump())
 
 
-@router.post("/{account_id}/benchmark/candidates", response_model=CandidatesOut)
-async def find_candidates(body: CandidatesIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
-    """按方向找同领域、有爆款的小红书博主，给出数据和值得学的地方，供用户勾选对标。大约半分钟到一分钟。"""
-    have = [x for b in bench.listing(s, acc.id) for x in (b.creator_name, b.target) if x]
-    out = await bench.find_candidates(get_llm(), body.query.strip() or acc.theme, prefer=body.prefer,
-                                      keywords=acc.keywords, exclude=have)
-    return CandidatesOut(**out)
+@router.post("/{account_id}/benchmark/candidates", response_model=JobOut, status_code=202)
+def find_candidates(body: CandidatesIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """按方向找同领域、有爆款的小红书博主（后台任务，大约半分钟到一分钟）。结果存到账号的 bench_candidates，
+    对标页按小红书的样子展示，用户勾选后再调 POST /benchmark。"""
+    get_llm()
+    return JobOut(**bench.start_find(s, acc, body.query, body.prefer).model_dump())
 
 
 @router.delete("/{account_id}/benchmark/{benchmark_id}", response_model=RemoveBenchmarkOut)

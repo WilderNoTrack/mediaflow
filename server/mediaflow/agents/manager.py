@@ -64,7 +64,7 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
 【对标账号】用户想照着别人的路子做（「对标」「复刻」「照着某某做」「按这个博主的路子起号」），一个账号最多同时对标 3 个：
 - 用户给了链接、名字或小红书号：直接 clone_creator（targets 原样传，可以一次传多个）。
 - 用户只说了方向、没指定是谁（「帮我找几个做穿搭的号」）：用 find_benchmarks 找同领域、有爆款的博主。
-  结果会以卡片形式展示给用户勾选，你不用逐个复述，只用两三句话点出最值得学的 1-2 个和理由，
+  结果会以卡片形式展示在对话里，同时按小红书主页的样子（带作品封面）放到「对标」页，你不用逐个复述，只用两三句话点出最值得学的 1-2 个和理由，
   然后说「勾选后点『学习选中的』，或者直接告诉我选哪几个」。用户说「选第 1 和第 3 个」就把对应的 url 传给 clone_creator。
   用户说「再找一批」「要粉丝少一点的」就再调 find_benchmarks，把要求写进 prefer。
 - 默认只找同领域；用户明确要跨领域借鉴（比如「学美妆博主的标题写法」）才放宽，写进 prefer。
@@ -273,6 +273,7 @@ class Toolbox:
         have = [x for b in rows for x in (b.creator_name, b.target) if x]
         out = await bench.find_candidates(self.llm, query.strip() or self.acc.theme, prefer=prefer,
                                           keywords=self.acc.keywords, exclude=have)
+        bench.store_candidates(self.s, self.acc, out, prefer)
         return {"ok": True, **out, "slots_left": bench.MAX_BENCH - len(rows)}
 
     async def t_clone_creator(self, targets: list[str] | str = "", theme: str = "", target: str = "") -> dict:
@@ -386,6 +387,11 @@ def _save(session: Session, acc: Account, role: ChatRole, content: str, tool_nam
     session.commit()
     session.refresh(m)
     return m
+
+
+def post_note(session: Session, acc: Account, text: str) -> ChatMessage:
+    """后台任务做完后，由小媒在对话里留一句话（比如找完对标候选），让对话和页面对得上。"""
+    return _save(session, acc, ChatRole.assistant, text)
 
 
 async def _run_calls(box: Toolbox, calls: list) -> list[dict]:

@@ -53,9 +53,11 @@ async def _post(c: httpx.AsyncClient, path: str, payload: dict, cookies: dict, *
     return r
 
 
-async def _get(c: httpx.AsyncClient, path: str, params: dict, cookies: dict, *, x_rap: bool = False):
+async def _get(c: httpx.AsyncClient, path: str, params: dict, cookies: dict, *, x_rap: bool = False,
+               extra: dict | None = None):
     x = _signer()
     h = x.sign_headers_get(uri=EDITH + path, cookies=cookies, params=params, x_rap=x_rap)
+    h.update(extra or {})
     h["Cookie"] = _cookie_header(cookies)
     # 查询串必须和签名时完全一致（逗号等字符的编码方式），所以用签名库自己拼 URL
     url = x.build_url(base_url=EDITH + path, params=params) if params else EDITH + path
@@ -90,50 +92,89 @@ async def qr_create() -> dict:
     return {"url": d["url"], "key": d["qr_id"]}
 
 
+_RISK = ("小红书要求做一次人机验证才能登录（常见于新设备/主号）。可以换个小号再扫，"
+         "或者在电脑浏览器登录小红书网页版后，把 Cookie 粘贴到下面")
+
+
 async def qr_poll(key: str) -> dict:
     """返回 {status: waiting|scanned|expired|ok|error, message}；ok 时已把 Cookie 存好。
 
-    流程参考 jackwener/xiaohongshu-cli：先用 /api/qrcode/userinfo 轮询扫码状态（codeStatus），
-    确认后再调 login/qrcode/status 换出登录 session（可能要重试几次），最后用 user/me 核对。
+    流程和小红书网页版一致：先用 /api/qrcode/userinfo 轮询扫码状态（codeStatus 0 等待 / 1 已扫 / 2 已确认 / 3 过期），
+    确认后调 login/qrcode/status（带 x-login-mode: qrcode）换出正式 web_session（可能要重试几次），最后用 user/me 核对。
+    偶发的网络或接口错误不直接判失败，连续多次才报错，免得用户刚扫完就被打断。
     """
     st = _pending.get(key)
     if not st:
         return {"status": "expired", "message": "二维码已过期，请刷新"}
     cookies = st["cookies"]
     async with httpx.AsyncClient(timeout=10, headers=_HEADERS) as c:
-        r = await _post(c, "/api/qrcode/userinfo", {"qrId": key, "code": st["code"]}, cookies,
-                        extra={"service-tag": "webcn"})
-        body = r.json()
+        try:
+            r = await _post(c, "/api/qrcode/userinfo", {"qrId": key, "code": st["code"]}, cookies,
+                            extra={"service-tag": "webcn"})
+            body = r.json()
+        except (httpx.HTTPError, ValueError) as e:
+            body = {"success": False, "msg": f"网络错误：{e}"}
         d = body.get("data") or {}
         if not body.get("success"):
-            logger.warning("小红书扫码状态查询失败：%s", str(body)[:300])
-            return {"status": "error", "message": str(body.get("msg") or body.get("code") or "")}
+            st["fails"] = st.get("fails", 0) + 1
+            logger.warning("小红书扫码状态查询失败（第 %s 次）：%s", st["fails"], str(body)[:300])
+            if st["fails"] < 5:
+                return {"status": st.get("last", "waiting"), "message": ""}
+            _pending.pop(key, None)
+            return {"status": "error", "message": f"查不到扫码状态：{body.get('msg') or body.get('code') or '未知错误'}"}
+        st["fails"] = 0
         try:
             code = int(d.get("codeStatus", d.get("code_status", -1)))
         except (TypeError, ValueError):
             code = -1
         status = _POLL.get(code, "waiting")
         if status != "ok":
+            st["last"] = status
             if status == "expired":
                 _pending.pop(key, None)
             return {"status": status, "message": ""}
 
         want = str(d.get("userId") or "")
+        session = ""
+        last = ""
         for _ in range(5):
-            done = await _get(c, "/api/sns/web/v1/login/qrcode/status", {"qr_id": key, "code": st["code"]}, cookies)
-            info = ((done.json().get("data") or {}).get("login_info") or {}) if done.content else {}
+            try:
+                done = await _get(c, "/api/sns/web/v1/login/qrcode/status", {"qr_id": key, "code": st["code"]},
+                                  cookies, extra={"x-login-mode": "qrcode"})
+            except httpx.HTTPError as e:
+                last = f"网络错误：{e}"
+                await asyncio.sleep(1)
+                continue
+            if done.status_code in (461, 471):
+                logger.warning("小红书扫码确认后触发风控：HTTP %s %s", done.status_code, dict(done.headers))
+                _pending.pop(key, None)
+                return {"status": "error", "message": _RISK}
+            try:
+                res = done.json()
+            except ValueError:
+                res = {}
+            info = (res.get("data") or {}).get("login_info") or {}
+            if not res.get("success", True):
+                last = str(res.get("msg") or res.get("code") or "")
             if info.get("session"):
-                cookies["web_session"] = info["session"]
+                session = cookies["web_session"] = info["session"]
             if info.get("secure_session"):
                 cookies["web_session_sec"] = info["secure_session"]
             me = await _me(c, cookies)
             if me.get("user_id") and not me.get("guest") and (not want or me["user_id"] == want):
-                credentials.update({"xhs_cookie": "; ".join(f"{k}={v}" for k, v in cookies.items() if k in _KEEP)})
-                _pending.pop(key, None)
-                return {"status": "ok", "message": ""}
+                break
+            if session and not me:
+                logger.warning("小红书扫码登录：拿到了 session 但 user/me 没返回，按登录成功处理")
+                break
+            logger.info("小红书扫码登录：还没换到登录态 %s / me=%s", str(res)[:300], str(me)[:200])
             await asyncio.sleep(1)
+        else:
+            _pending.pop(key, None)
+            hint = f"（小红书返回：{last}）" if last else ""
+            return {"status": "error", "message": f"手机上已确认，但没换到登录态{hint}，刷新二维码再扫一次；还不行就粘贴 Cookie"}
+    credentials.update({"xhs_cookie": "; ".join(f"{k}={v}" for k, v in cookies.items() if k in _KEEP)})
     _pending.pop(key, None)
-    return {"status": "error", "message": "手机上已确认，但没换到登录态，请刷新二维码重试"}
+    return {"status": "ok", "message": ""}
 
 
 async def search(keyword: str, limit: int, cookie: str, timeout: float = 10) -> list[TrendItem]:
@@ -170,6 +211,15 @@ async def search(keyword: str, limit: int, cookie: str, timeout: float = 10) -> 
 
 
 # ── 调研能力：搜博主 / 博主作品 / 笔记详情 ─────────────────────────────
+
+
+def _cover(card: dict) -> str:
+    c = card.get("cover") or {}
+    url = c.get("url_default") or c.get("url_pre") or c.get("url") or ""
+    if not url:
+        for i in c.get("info_list") or []:
+            url = i.get("url") or url
+    return url.replace("http://", "https://", 1)
 
 
 def _need_cookie() -> dict[str, str]:
@@ -209,6 +259,7 @@ async def search_hot_authors(keyword: str, timeout: float = 15) -> list[dict]:
         out.append({"user_id": u["user_id"], "name": u.get("nickname") or u.get("nick_name") or "",
                     "avatar": u.get("avatar", ""), "native": f"{u['user_id']}|{u.get('xsec_token', '')}",
                     "title": title[:60], "likes": str((card.get("interact_info") or {}).get("liked_count", "")),
+                    "cover": _cover(card), "kind": "视频" if card.get("type") == "video" else "图文",
                     "url": f"https://www.xiaohongshu.com/explore/{it['id']}?xsec_token={it.get('xsec_token', '')}"
                            "&xsec_source=pc_search"})
     return out
@@ -252,9 +303,10 @@ async def creator_posts(native: str, limit: int = 10, timeout: float = 15):
                                       {"num": "30", "cursor": cursor, "user_id": uid, "image_scenes": "FD_WM_WEBP"},
                                       cookies)).json(), "看博主作品")
             notes += data.get("notes") or []
-            cursor = data.get("cursor") or ""
-            if len(notes) >= limit or not data.get("has_more") or not cursor:
+            nxt = data.get("cursor") or ""
+            if len(notes) >= limit or not data.get("has_more") or not nxt or nxt == cursor:
                 break
+            cursor = nxt
     basic = info.get("basic_info") or {}
     inter = {i.get("type"): i.get("count") for i in info.get("interactions") or []}
     creator = Creator(
@@ -265,16 +317,19 @@ async def creator_posts(native: str, limit: int = 10, timeout: float = 15):
                "获赞与收藏": fmt_count((info.get("liked") or 0) + (info.get("collected") or 0)),
                "标签": [t.get("name") for t in info.get("tags") or [] if t.get("name")]},
     )
-    posts = []
+    posts, seen = [], set()
     for n in notes:
-        if not n.get("note_id"):
+        # 翻页时小红书偶尔会把同一页再返回一次，按笔记 ID 去重
+        if not n.get("note_id") or n["note_id"] in seen:
             continue
+        seen.add(n["note_id"])
         posts.append(Post(
             platform="xiaohongshu", title=" ".join((n.get("display_title") or "").split()) or "（无标题）",
             native=f"{n['note_id']}|{n.get('xsec_token', '')}", author=creator.name,
             likes=str((n.get("interact_info") or {}).get("liked_count", "")),
             published=ms_date(n.get("time")), kind="视频" if n.get("type") == "video" else "图文",
             url=f"https://www.xiaohongshu.com/explore/{n['note_id']}?xsec_token={n.get('xsec_token', '')}&xsec_source=pc_user",
+            cover=_cover(n),
         ))
     return creator, posts[:limit]
 

@@ -48,27 +48,31 @@ async def test_hard_issue_triggers_rewrite_with_feedback(session, llm, account):
     llm.push("writer", post(title="这" * 25), post()).push("eval", evaluation(9), evaluation(8))
     d, _ = await run(session, llm, account)
     assert d.attempts == 2 and d.title == "通勤穿搭3个小心机" and d.check_issues == []
-    assert "超过小红书上限" in llm.prompts_of("writer")[1]
+    assert "超过小红书上限" in llm.prompts_of("reviser")[0]
+    assert "这" * 25 in llm.prompts_of("reviser")[0]  # 是在上一版上改，不是重写
 
 
 async def test_low_score_retries_then_keeps_best(session, llm, account):
-    llm.push("writer", post(title="版本一"), post(title="版本二"), post(title="版本三"))
-    llm.push("eval", evaluation(5), evaluation(6.5), evaluation(6))
+    llm.push("writer", post(title="版本一"), post(title="版本二"), post(title="版本三"), post(title="版本四"))
+    llm.push("eval", evaluation(5), evaluation(6.5), evaluation(6), evaluation(6.2))
     d, events = await run(session, llm, account)
-    assert d.attempts == 3 and d.title == "版本二" and d.score == 6.5
+    assert d.attempts == 4 and d.title == "版本二" and d.score == 6.5
+    # 每轮都在目前最好的一版上改
+    assert "标题：版本二" in llm.prompts_of("reviser")[1] and "标题：版本二" in llm.prompts_of("reviser")[2]
+    assert [h["score"] for h in d.evaluation["history"]] == [5, 6.5, 6, 6.2]
     assert d.needs_attention
     assert any("重点检查" in m for _, m in events)
 
 
 async def test_violated_rule_caps_score(session, llm, account):
-    llm.push("writer", post(), post(), post())
-    llm.push("eval", *[evaluation(9, violated=["结尾要引导收藏"])] * 3)
+    llm.push("writer", post(), post(), post(), post())
+    llm.push("eval", *[evaluation(9, violated=["结尾要引导收藏"])] * 4)
     d, _ = await run(session, llm, account)
     assert d.score == 6.0 and d.needs_attention
 
 
 async def test_evaluator_failure_is_flagged_not_hidden(session, llm, account):
-    llm.push("writer", post(), post(), post()).push("eval", fail(), fail(), fail())
+    llm.push("writer", post(), post(), post(), post()).push("eval", fail(), fail(), fail(), fail())
     d, events = await run(session, llm, account)
     assert d.score is None and d.needs_attention
     assert any("质检服务出错" in m for _, m in events)
@@ -123,3 +127,32 @@ async def test_hint_becomes_topic_when_nothing_new(session, llm, account):
     d, _ = await run(session, llm, account, hint="早八快速出门妆")
     t = session.get(Topic, d.topic_id)
     assert t.title == "早八快速出门妆" and t.source == "user"
+
+
+async def test_rule_word_count_checked_by_code(session, llm, account):
+    session.add(Rule(user_id=account.user_id, account_id=account.id, text="正文150到250字，靠图承担教程"))
+    session.commit()
+    llm.push("writer", post(body="字" * 300), post(body="字" * 200)).push("eval", evaluation(8), evaluation(8))
+    d, _ = await run(session, llm, account)
+    assert d.attempts == 2 and d.check_issues == [] and len(d.body) == 200
+    first = llm.prompts_of("reviser")[0]
+    assert "正文 300 字，账号规则要求 150–250 字" in first and "系统统计 300 字" in first
+    assert "系统统计 300 字" in llm.prompts_of("eval")[0]  # 质检拿到的是代码数的字数
+
+
+async def test_revise_draft_keeps_better_version(session, llm, account):
+    from mediaflow.agents.pipeline import revise_draft
+
+    llm.push("writer", post(title="原稿")).push("eval", evaluation(8))
+    d, _ = await run(session, llm, account)
+    # 带了要求：先按现在的版本重新质检，再改
+    llm.push("eval", evaluation(7.2), evaluation(8.5)).push("reviser", post(title="改好的"))
+    d2 = await revise_draft(session, llm, d.id, note="开头更直接")
+    assert d2.title == "改好的" and d2.score == 8.5 and not d2.needs_attention
+    assert "用户的要求：开头更直接" in llm.prompts_of("reviser")[-1]
+    assert [h["score"] for h in d2.evaluation["history"]] == [8, 8.5]
+
+    llm.push("eval", evaluation(8.5), evaluation(5), evaluation(5.5))
+    llm.push("reviser", post(title="更差的"), post(title="还是差"))
+    d3 = await revise_draft(session, llm, d.id, note="再短一点")
+    assert d3.title == "改好的" and d3.score == 8.5  # 没改好就不替换

@@ -275,3 +275,35 @@ async def test_find_candidates(session, account, llm, monkeypatch, multi_researc
     from mediaflow.agents.manager import _for_model
     brief = _for_model("find_benchmarks", {"ok": True, **out})
     assert "avatar" not in brief["candidates"][0] and brief["candidates"][0]["no"] == 1
+
+
+async def test_run_find_stores_candidates_and_tells_chat(session, account, llm, monkeypatch, multi_research):
+    from mediaflow.domain.models import ChatMessage
+
+    async def hot(platform, kw):
+        return [{"user_id": UID_A, "name": "穿搭阿A", "avatar": "", "native": f"{UID_A}|t", "title": "通勤穿搭公式",
+                 "likes": "2万", "url": "u1", "cover": "https://c/1.jpg"}]
+
+    async def creators(platform, kw, n=10):
+        return []
+
+    monkeypatch.setattr(research, "hot_authors_raw", hot)
+    monkeypatch.setattr(research, "creators_raw", creators)
+    llm.push("bench_pick", {"picks": [{"no": 1, "fit": 9, "reason": "公式化标题"}]})
+    events = []
+    out = await bench.run_find(session, llm, account.id, "通勤穿搭", "做图文的",
+                               emit=lambda st, m, d=None: events.append(st))
+    assert out == {"count": 1} and {"search", "probe", "pick", "done"} <= set(events)
+    session.refresh(account)
+    saved = account.bench_candidates
+    assert saved["theme"] == "通勤穿搭" and saved["prefer"] == "做图文的" and saved["candidates"][0]["name"] == "穿搭阿A"
+    assert saved["candidates"][0]["notes"][0]["title"] == "穿搭阿A的爆款0"  # 最火的几篇，带封面字段
+    assert saved["candidates"][0]["hits"][0]["cover"] == "https://c/1.jpg"
+    note = session.exec(select(ChatMessage).where(ChatMessage.account_id == account.id)).all()[-1]
+    assert note.role == "assistant" and "「对标」页" in note.content
+
+
+def test_dedupe_posts():
+    ps = [Post("xiaohongshu", "同一篇", "n1|a", published="2024-05-01"), Post("xiaohongshu", "同一篇", "n1|b", published="2024-05-01"),
+          Post("xiaohongshu", "同一篇", "n2|c", published="2024-05-01"), Post("xiaohongshu", "另一篇", "n3|d")]
+    assert [p.native for p in bench._dedupe(ps)] == ["n1|a", "n3|d"]

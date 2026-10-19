@@ -10,7 +10,7 @@ from mediaflow.domain.models import (
     Account, Draft, DraftImage, DraftStatus, Feedback, ImageStatus, JobKind, utcnow,
 )
 from mediaflow.domain.schemas import (
-    DraftDetail, DraftOut, DraftPatch, FeedbackIn, ImageOut, JobOut, LearnOut, WriteIn,
+    DraftDetail, DraftOut, DraftPatch, FeedbackIn, ImageOut, JobOut, LearnOut, ReviseIn, WriteIn,
 )
 from mediaflow.jobs.queue import enqueue
 from mediaflow.llm.client import get_llm
@@ -68,11 +68,22 @@ def update_draft(body: DraftPatch, d: Draft = Depends(owned_draft), s: Session =
         if v is not None:
             setattr(d, k, v)
     if {"title", "body", "tags"} & data.keys():
-        d.check_issues = hard_check(d.title, d.body, d.tags, [i.prompt for i in _images(s, d.id)])
+        from mediaflow.agents.context import load_context
+        d.check_issues = hard_check(d.title, d.body, d.tags, [i.prompt for i in _images(s, d.id)],
+                                    load_context(s, d.account_id).rules)
     d.updated_at = utcnow()
     s.add(d)
     s.commit()
     return _out(s, d, detail=True)
+
+
+@router.post("/api/drafts/{draft_id}/revise", response_model=JobOut, status_code=202)
+def revise(body: ReviseIn, d: Draft = Depends(owned_draft), s: Session = Depends(get_session)):
+    """按当前质检意见（可以再补一句自己的要求）让 AI 在这篇上再改 1-2 轮；改得更好才替换，否则保留原稿。"""
+    get_llm()
+    job = enqueue(s, JobKind.revise_draft, user_id=d.user_id, account_id=d.account_id,
+                  payload={"draft_id": d.id, "note": body.note.strip()})
+    return JobOut(**job.model_dump())
 
 
 @router.delete("/api/drafts/{draft_id}", status_code=204)

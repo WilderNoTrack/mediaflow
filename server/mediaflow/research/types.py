@@ -34,6 +34,7 @@ class Post:
     published: str = ""    # YYYY-MM-DD
     kind: str = ""         # 图文 / 视频 / 文章
     author_native: str = ""  # 作者的平台内部定位串（详情接口才有），用于从笔记链接反查博主
+    cover: str = ""        # 封面图地址（有的平台才有）
 
 
 @dataclass

@@ -42,6 +42,23 @@ def _noop(stage: str, message: str, data: dict[str, Any] | None = None) -> None:
     pass
 
 
+def _dedupe(posts: list[Post]) -> list[Post]:
+    """同一篇作品只留一次（平台翻页偶尔会重复返回，按 ID、再按标题+日期认）。"""
+    seen: set[str] = set()
+    out = []
+    for p in posts:
+        keys = {p.native.split("|")[0] or p.url, f"{p.title}|{p.published}"}
+        if keys & seen:
+            continue
+        seen |= keys
+        out.append(p)
+    return out
+
+
+def _note(p: Post) -> dict:
+    return {"title": p.title, "likes": p.likes, "url": p.url, "cover": p.cover, "kind": p.kind, "date": p.published}
+
+
 def _score(p: Post) -> float:
     return count_num(p.likes) or count_num(p.views)
 
@@ -221,6 +238,7 @@ async def _analyze_one(s: Session, llm: LLM, b: Benchmark, acc: Account, emit: E
     emit("find", f"{prefix}在{label}上找{what}…", None)
     found = await research.resolve_creator(b.platform, b.target)
     creator, posts = await research.creator_posts_raw(b.platform, found.native, N_POSTS)
+    posts = _dedupe(posts)
     if not posts:
         raise LookupError(f"「{creator.name or b.target}」没有公开作品，换一个对标账号吧")
     url = creator.url or found.url
@@ -250,8 +268,7 @@ async def _analyze_one(s: Session, llm: LLM, b: Benchmark, acc: Account, emit: E
                         "kind": d.kind, "date": d.published, "url": d.url, "content": d.content[:800],
                         "tags": d.tags[:10], "top_comments": d.top_comments[:5]})
     by_title = {d["title"]: d for d in details}
-    b.samples = [by_title.get(p.title) or {"title": p.title, "likes": p.likes, "kind": p.kind,
-                                            "date": p.published, "url": p.url} for p in hits]
+    b.samples = [{**_note(p), **by_title.get(p.title, {}), "cover": p.cover} for p in hits]
 
     emit("analyze", f"{prefix}在拆解「{b.creator_name}」的打法：栏目、标题公式、开头、结构、视觉…", None)
     b.playbook = await complete_json(llm, [
@@ -412,7 +429,8 @@ def plan_text(acc: Account, benches: list[Benchmark], limit: int = 1800) -> str:
 
 
 async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: list[str] | None = None,
-                          exclude: list[str] | None = None, platform: str = "xiaohongshu", limit: int = 6) -> dict:
+                          exclude: list[str] | None = None, platform: str = "xiaohongshu", limit: int = 6,
+                          emit: Emit = _noop) -> dict:
     """按方向搜最热的笔记 → 汇总作者 → 细看几个人的主页数据 → 模型判断同领域贴合度、值得学什么。"""
     theme = theme.strip()
     if not theme:
@@ -422,6 +440,7 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
     authors: dict[str, dict] = {}
     notes: list[str] = []
     for q in queries:
+        emit("search", f"在小红书搜「{q}」的热门笔记…", None)
         try:
             rows = await research.hot_authors_raw(platform, q)
         except Exception as e:  # noqa: BLE001 - 一个词搜失败换下一个
@@ -432,7 +451,8 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
                 continue
             a = authors.setdefault(r["user_id"], {**r, "hits": []})
             if all(h["title"] != r["title"] for h in a["hits"]):
-                a["hits"].append({"title": r["title"], "likes": r["likes"], "url": r["url"]})
+                a["hits"].append({"title": r["title"], "likes": r["likes"], "url": r["url"],
+                                  "cover": r.get("cover", ""), "kind": r.get("kind", "")})
     # 再按领域词搜博主：名字/简介里就是做这个的号，通常比偶尔爆一篇的更值得学
     domain: list[dict] = []
     try:
@@ -449,9 +469,12 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
     pool = [x for pair in zip_longest(by_hits, domain) for x in pair if x]
 
     cands: list[dict] = []
-    for a in pool[:N_PROBE]:
+    probe = pool[:N_PROBE]
+    for i, a in enumerate(probe):
+        emit("probe", f"在看「{a['name']}」的主页和作品数据（{i + 1}/{len(probe)}）…", None)
         try:
             creator, posts = await research.creator_posts_raw(platform, a["native"], 30)
+            posts = _dedupe(posts)
         except Exception as e:  # noqa: BLE001 - 风控时少看几个，如实告诉用户
             notes.append(f"「{a['name']}」主页没打开（{e}）")
             if "风控" in str(e) or "验证码" in str(e):
@@ -470,11 +493,14 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
             "hits": a["hits"][:2],
             "top": [{"title": p.title, "likes": p.likes, "url": p.url}
                     for p in sorted(posts, key=lambda p: -_score(p))[:3]],
+            # 主页按小红书的样子展示：最火的几篇带封面
+            "notes": [_note(p) for p in sorted(posts, key=lambda p: -_score(p))[:6]],
             "recent": [p.title for p in posts[:8]],
         })
     if not cands:
         raise LookupError("；".join(notes) or "候选博主的主页都没打开，稍后再试")
 
+    emit("pick", f"看了 {len(cands)} 个号的数据，在判断谁最值得学…", None)
     try:
         out = await complete_json(llm, [
             {"role": "system", "content": prompts.BENCH_PICK_SYSTEM},
@@ -504,3 +530,37 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
     if notes:
         res["notes"] = notes
     return res
+
+
+def store_candidates(s: Session, acc: Account, res: dict, prefer: str = "") -> None:
+    """把找到的候选存到账号上，对标页按小红书的样子展示（对话里和对标页找的都存这里）。"""
+    acc.bench_candidates = {**res, "prefer": prefer, "at": utcnow().isoformat()}
+    s.add(acc)
+    s.commit()
+
+
+def start_find(s: Session, acc: Account, query: str = "", prefer: str = ""):
+    """排一个「找同领域对标候选」的后台任务，进度在对标页显示。"""
+    from mediaflow.jobs.queue import enqueue
+
+    query = (query or acc.theme).strip()
+    if not query:
+        raise ValueError("先说一下想做什么方向，才能找同领域的对标账号")
+    return enqueue(s, JobKind.find_benchmarks, user_id=acc.user_id, account_id=acc.id,
+                   payload={"query": query, "prefer": prefer.strip()})
+
+
+async def run_find(s: Session, llm: LLM, account_id: str, query: str, prefer: str = "", emit: Emit = _noop) -> dict:
+    acc = s.get(Account, account_id)
+    if acc is None:
+        raise LookupError("账号不存在")
+    have = [x for b in listing(s, acc.id) for x in (b.creator_name, b.target) if x]
+    res = await find_candidates(llm, query, prefer=prefer, keywords=acc.keywords, exclude=have, emit=emit)
+    store_candidates(s, acc, res, prefer)
+    n = len(res["candidates"])
+    from mediaflow.agents.manager import post_note
+    post_note(s, acc, f"按「{query}」在小红书找了 {n} 个同领域的号，放在「对标」页了，能看到各自的数据和最火的几篇。"
+                      "挑 1-3 个点「学习选中的」；想换方向或有特别要求（比如粉丝少一点的、做图文的）直接跟我说。"
+              if n else f"按「{query}」没找到合适的同领域账号，换个说法或者直接贴想对标的号给我。")
+    emit("done", f"找到 {n} 个候选", {"count": n})
+    return {"count": n}
