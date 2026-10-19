@@ -95,12 +95,26 @@ export function useRemoveBenchmark(id: string) {
   });
 }
 
-/** 按方向找同领域的对标候选（半分钟到一分钟） */
-export const useFindCandidates = (id: string) =>
-  useMutation({
+/** 按方向找同领域的对标候选：后台任务（半分钟到一分钟），结果存在 account.bench_candidates */
+export function useFindCandidates(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: ["find-cands", id],
     mutationFn: (body: { query: string; prefer: string }) =>
       unwrap(api.POST("/api/accounts/{account_id}/benchmark/candidates", { params: { path: { account_id: id } }, body })),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["jobs", id] }),
   });
+}
+
+/** 按质检意见让 AI 在这篇上再改一轮（后台任务） */
+export function useRevise(draftId: string, accountId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (note: string) =>
+      unwrap(api.POST("/api/drafts/{draft_id}/revise", { params: { path: { draft_id: draftId } }, body: { note } })),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["jobs", accountId] }),
+  });
+}
 
 export const useFindCreators = () =>
   useMutation({
@@ -196,6 +210,7 @@ export function useActiveJobs(id: string) {
         qc.invalidateQueries({ queryKey: ["draft"] });
         qc.invalidateQueries({ queryKey: ["accounts"] });
         qc.invalidateQueries({ queryKey: ["account", id] });
+        qc.invalidateQueries({ queryKey: ["chat", id] });
       }
       return jobs;
     },

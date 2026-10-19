@@ -1,13 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowLeft, Check, CheckCircle2, ChevronLeft, Copy, Download, Heart, Image as ImageIcon,
-  MessageCircle, RefreshCw, Save, Sparkles, Star, Tag, ThumbsDown, ThumbsUp, Trash2,
+  MessageCircle, RefreshCw, Save, Sparkles, Star, Tag, ThumbsDown, ThumbsUp, Trash2, Wand2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import type { DraftDetail, S } from "../api/client";
+import type { DraftDetail, JobEvent, S } from "../api/client";
 import { api, unwrap } from "../api/client";
-import { useAccount, useDraft, useDraftActions, useRules } from "../api/hooks";
+import { isActive, useAccount, useActiveJobs, useDraft, useDraftActions, useRevise, useRules } from "../api/hooks";
 import { Badge, Button, Card, CardBody, CardHead, Empty, ErrorText, Segmented, Spinner, Textarea } from "../components/ui";
 import { cn, timeAgo } from "../lib/utils";
 
@@ -66,7 +66,7 @@ export function DraftPage() {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 sm:px-5">
           <Link to={back} className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"><ArrowLeft className="size-4" />草稿</Link>
           <div className="hidden text-xs text-muted-foreground sm:block">
-            {d.score != null && `质检 ${d.score.toFixed(1)} · `}改写 {d.attempts} 轮 · {timeAgo(d.created_at)}
+            {d.score != null && `质检 ${d.score.toFixed(1)} · `}{d.attempts > 1 ? `自动改了 ${d.attempts - 1} 轮 · ` : ""}{timeAgo(d.created_at)}
             {d.status === "exported" && <Badge className="ml-2 bg-blue-50 text-blue-600">已导出过</Badge>}
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -92,9 +92,10 @@ export function DraftPage() {
       <div className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[1fr_360px]">
         <div className="min-w-0 space-y-5">
           {d.needs_attention && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              这篇没达到质检合格线（试了 {d.attempts} 轮，留下了最好的一版），发之前看看下面的质检意见。
+            <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <AlertTriangle className="size-4 shrink-0" />
+              <span className="flex-1">AI 自动改了几轮还没完全达标，留下的是最好的一版。发之前看看质检意见，或者让 AI 再改一轮。</span>
+              <a href="#qc" className="shrink-0 font-medium hover:underline">看质检 ↓</a>
             </div>
           )}
           <Card>
@@ -122,11 +123,11 @@ export function DraftPage() {
                 placeholder="标签，用空格隔开"
                 className="min-w-0 flex-1 bg-transparent text-sm text-indigo-700 outline-none placeholder:text-muted-foreground"
               />
-              <span className="shrink-0 text-xs text-muted-foreground">{[...body].length} 字 · {tagList.length} 个标签</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{body.replace(/\s/g, "").length} 字 · {tagList.length} 个标签</span>
             </div>
           </Card>
           <ErrorText error={act.update.error} />
-          <Evaluation d={d} />
+          <Evaluation d={d} dirty={dirty} />
           <FeedbackCard d={d} />
           <div className="pb-4 text-right">
             <button className="cursor-pointer text-xs text-muted-foreground hover:text-red-600" onClick={() => { if (confirm("删除这篇草稿？删了找不回来。")) act.remove.mutate(undefined, { onSuccess: () => nav(back) }); }}>
@@ -187,27 +188,116 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
 
 const DIM: Record<string, string> = { hook: "吸引力", value: "价值感", voice: "人设口吻", fit: "贴合定位", rules: "守规矩" };
 
-function Evaluation({ d }: { d: DraftDetail }) {
-  const ev = d.evaluation as { dimensions?: Record<string, number>; violated_rules?: string[]; issues?: string[]; suggestions?: string[] };
+type Ev = {
+  dimensions?: Record<string, number>; violated_rules?: string[]; issues?: string[]; suggestions?: string[];
+  history?: { attempt: number; score: number | null; problems: number }[];
+};
+const PASS = 7;
+
+/** AI 质检：先说结论（达标没、自动改了几轮、分数怎么变的），再列「必须改 / 可以更好」，建议默认收起；
+ *  没达标就能一键让 AI 按这些意见再改一轮（改得更好才替换）。 */
+function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
+  const ev = d.evaluation as Ev;
   const dims = Object.entries(ev.dimensions ?? {});
+  const { data: jobs = [] } = useActiveJobs(d.account_id);
+  const revise = useRevise(d.id, d.account_id);
+  const [note, setNote] = useState("");
+  const [showTips, setShowTips] = useState(false);
+  const job = jobs.find((j) => j.kind === "revise_draft" && isActive(j) && (j.payload as { draft_id?: string }).draft_id === d.id);
+  const lastJob = jobs.find((j) => j.kind === "revise_draft" && (j.payload as { draft_id?: string }).draft_id === d.id);
   if (!dims.length && !d.check_issues.length) return null;
+
+  const must = [...d.check_issues, ...(ev.violated_rules ?? []).map((r) => `没遵守账号规则：${r}`)];
+  const better = ev.issues ?? [];
+  const tips = ev.suggestions ?? [];
+  const history = (ev.history ?? []).filter((h) => h.score != null);
+  const rounds = Math.max(0, (history.length || d.attempts) - 1);
+  const passed = !d.needs_attention;
+  const last = (job?.events as JobEvent[] | undefined)?.at(-1);
   return (
-    <Card>
-      <CardHead icon={<Sparkles />} title="AI 质检" action={d.score != null && <span className={cn("text-lg font-semibold", d.needs_attention ? "text-amber-600" : "text-indigo-600")}>{d.score.toFixed(1)}<span className="text-xs font-normal text-muted-foreground"> / 10</span></span>} />
-      <CardBody className="space-y-3 text-sm">
+    <Card className={cn(!passed && "border-amber-200")} >
+      <div id="qc" />
+      <CardHead icon={<Sparkles />} title="AI 质检"
+        action={d.score != null && <span className={cn("text-lg font-semibold", passed ? "text-indigo-600" : "text-amber-600")}>{d.score.toFixed(1)}<span className="text-xs font-normal text-muted-foreground"> / 10</span></span>} />
+      <CardBody className="space-y-4 text-sm">
+        <div className={cn("rounded-xl px-4 py-3", passed ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900")}>
+          <div className="font-medium">
+            {passed ? `达标了（${PASS} 分合格），可以直接用` : `还差一点：${PASS} 分合格，现在 ${d.score?.toFixed(1) ?? "未评分"}`}
+          </div>
+          <div className="mt-0.5 text-xs opacity-80">
+            {rounds > 0 ? `写完后 AI 按质检意见自动改了 ${rounds} 轮，留下的是分数最高的一版` : "写完一版就通过了质检"}
+            {!passed && must.length > 0 && `，下面 ${must.length} 处必须改的还没改掉`}
+          </div>
+          {history.length > 1 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">
+              {history.map((h, i) => (
+                <span key={i} className="flex items-center gap-1">
+                  {i > 0 && <span className="opacity-40">→</span>}
+                  <span className={cn("rounded-md px-1.5 py-0.5", h.score === d.score ? "bg-white font-semibold shadow-sm" : "bg-white/50")}>
+                    {i === 0 ? "初稿" : `第${i}轮`} {h.score?.toFixed(1)}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
         {dims.length > 0 && (
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-5">
             {dims.map(([k, v]) => (
               <div key={k}>
                 <div className="mb-1 flex justify-between text-xs"><span className="text-muted-foreground">{DIM[k] ?? k}</span><span className="font-medium">{v}</span></div>
-                <div className="h-1.5 rounded-full bg-muted"><div className="h-full rounded-full bg-brand-gradient" style={{ width: `${Math.min(100, v * 10)}%` }} /></div>
+                <div className="h-1.5 rounded-full bg-muted"><div className={cn("h-full rounded-full", v < 6 ? "bg-amber-400" : "bg-brand-gradient")} style={{ width: `${Math.min(100, v * 10)}%` }} /></div>
               </div>
             ))}
           </div>
         )}
-        {[...d.check_issues, ...(ev.violated_rules ?? []).map((r) => `违反规矩：${r}`)].map((x) => <p key={x} className="text-red-600">⚠ {x}</p>)}
-        {(ev.issues ?? []).map((x) => <p key={x} className="text-amber-700">· {x}</p>)}
-        {(ev.suggestions ?? []).map((x) => <p key={x} className="text-muted-foreground">💡 {x}</p>)}
+
+        {must.length > 0 && (
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-red-600">必须改（{must.length}）</div>
+            <ul className="space-y-1.5">{must.map((x) => <li key={x} className="flex gap-2 text-red-700"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{x}</li>)}</ul>
+          </div>
+        )}
+        {better.length > 0 && (
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-amber-700">可以更好（{better.length}）</div>
+            <ul className="space-y-1.5">{better.map((x) => <li key={x} className="flex gap-2 text-amber-800"><span className="shrink-0">·</span>{x}</li>)}</ul>
+          </div>
+        )}
+        {tips.length > 0 && (
+          <div>
+            <button className="cursor-pointer text-xs font-medium text-indigo-600 hover:underline" onClick={() => setShowTips((v) => !v)}>
+              {showTips ? "收起修改建议" : `看 ${tips.length} 条具体怎么改`}
+            </button>
+            {showTips && <ul className="mt-1.5 space-y-1.5">{tips.map((x) => <li key={x} className="flex gap-2 text-muted-foreground"><span className="shrink-0">💡</span>{x}</li>)}</ul>}
+          </div>
+        )}
+
+        <div className="space-y-2 rounded-xl border-2 border-dashed border-indigo-200 p-3">
+          {job ? (
+            <div className="flex items-center gap-2 text-indigo-700"><Spinner className="size-4" />AI 正在按这些意见改…<span className="truncate text-xs text-muted-foreground">{last?.message}</span></div>
+          ) : (
+            <>
+              <div className="text-xs text-muted-foreground">
+                {passed ? "还想调？说一句要求，AI 在这版上改，改得更好才替换。" : "让 AI 按上面的意见在这版上再改（最多 2 轮，改得更好才替换，不会越改越差）。也可以自己改完点保存。"}
+              </div>
+              <div className="flex gap-2">
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="补充要求（可选），例如：开头更直接、再短一点"
+                  className="min-w-0 flex-1 rounded-lg border bg-card px-3 py-1.5 text-sm outline-none focus:border-indigo-300" />
+                <Button size="sm" variant={passed ? "outline" : "gradient"} loading={revise.isPending} disabled={dirty || (passed && !note.trim())}
+                  title={dirty ? "先保存你的修改" : undefined}
+                  onClick={() => revise.mutate(note, { onSuccess: () => setNote("") })}>
+                  {!revise.isPending && <Wand2 />}{passed ? "按要求改" : "按意见再改一轮"}
+                </Button>
+              </div>
+              {dirty && <p className="text-xs text-amber-600">你有没保存的修改，先保存再让 AI 改</p>}
+              {lastJob?.status === "succeeded" && <p className="text-xs text-emerald-600">{(lastJob.events as JobEvent[]).at(-1)?.message}</p>}
+              {lastJob?.status === "failed" && <p className="text-xs text-red-600">上次没改成：{lastJob.error}</p>}
+              <ErrorText error={revise.error} />
+            </>
+          )}
+        </div>
       </CardBody>
     </Card>
   );

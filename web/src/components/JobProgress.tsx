@@ -22,7 +22,7 @@ export function JobStrip({ jobs, hide: hideKinds = [] }: { jobs: Job[]; hide?: s
   const shown = jobs.filter((j) => {
     if (hideKinds.includes(j.kind)) return false;
     if (isActive(j)) return true;
-    if (!["write_draft", "clone_creator"].includes(j.kind) || hidden.includes(j.id)) return false; // 配图任务结束后在草稿页看结果即可
+    if (!["write_draft", "clone_creator", "find_benchmarks"].includes(j.kind) || hidden.includes(j.id)) return false; // 配图任务结束后在草稿页看结果即可
     return Date.now() - finishedAt(j) < 10 * 60_000;
   }).slice(0, 2);
   if (!shown.length) return null;
@@ -40,6 +40,21 @@ function JobRow({ job, onClose }: { job: Job; onClose: () => void }) {
     return (
       <div className="flex items-center gap-2 rounded-xl border bg-card px-4 py-2.5 text-sm">
         <Loader2 className="size-4 animate-spin text-indigo-500" />正在生成配图<span className="truncate text-xs text-muted-foreground">{last?.message}</span>
+      </div>
+    );
+  }
+  if (job.kind === "find_benchmarks") {
+    const n = (job.result as { count?: number }).count ?? 0;
+    const tone = job.status === "failed" ? "border-red-200 bg-red-50 text-red-700" : active ? "border-indigo-200 bg-card" : "border-emerald-200 bg-emerald-50 text-emerald-800";
+    return (
+      <div className={cn("flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm", tone)}>
+        {active ? <Loader2 className="size-4 animate-spin text-indigo-500" /> : job.status === "failed" ? <XCircle className="size-4 shrink-0" /> : <CheckCircle2 className="size-4 shrink-0" />}
+        <span className="min-w-0 flex-1 truncate">
+          {active ? <>正在找同领域的对标账号<span className="ml-2 text-xs text-muted-foreground">{last?.message}</span></>
+            : job.status === "failed" ? `对标候选没找成：${job.error || "未知错误"}` : `找到 ${n} 个同领域的对标候选`}
+        </span>
+        <Link to={`/accounts/${job.account_id}?tab=bench`} className="shrink-0 font-medium hover:underline">{active ? "去看看" : "去挑选"} →</Link>
+        {!active && <button onClick={onClose} className="cursor-pointer opacity-60 hover:opacity-100" aria-label="关闭"><X className="size-4" /></button>}
       </div>
     );
   }

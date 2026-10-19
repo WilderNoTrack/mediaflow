@@ -123,7 +123,8 @@ export interface paths {
         put?: never;
         /**
          * Find Candidates
-         * @description 按方向找同领域、有爆款的小红书博主，给出数据和值得学的地方，供用户勾选对标。大约半分钟到一分钟。
+         * @description 按方向找同领域、有爆款的小红书博主（后台任务，大约半分钟到一分钟）。结果存到账号的 bench_candidates，
+         *     对标页按小红书的样子展示，用户勾选后再调 POST /benchmark。
          */
         post: operations["find_candidates_api_accounts__account_id__benchmark_candidates_post"];
         delete?: never;
@@ -256,6 +257,26 @@ export interface paths {
         head?: never;
         /** Update Draft */
         patch: operations["update_draft_api_drafts__draft_id__patch"];
+        trace?: never;
+    };
+    "/api/drafts/{draft_id}/revise": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revise
+         * @description 按当前质检意见（可以再补一句自己的要求）让 AI 在这篇上再改 1-2 轮；改得更好才替换，否则保留原稿。
+         */
+        post: operations["revise_api_drafts__draft_id__revise_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/drafts/{draft_id}/feedback": {
@@ -625,6 +646,13 @@ export interface components {
             bench_plan: {
                 [key: string]: unknown;
             };
+            /**
+             * Bench Candidates
+             * @default {}
+             */
+            bench_candidates: {
+                [key: string]: unknown;
+            };
         };
         /** AccountIn */
         AccountIn: {
@@ -810,20 +838,6 @@ export interface components {
              * @default
              */
             prefer: string;
-        };
-        /** CandidatesOut */
-        CandidatesOut: {
-            /** Theme */
-            theme: string;
-            /** Candidates */
-            candidates: {
-                [key: string]: unknown;
-            }[];
-            /**
-             * Notes
-             * @default []
-             */
-            notes: string[];
         };
         /** ChatIn */
         ChatIn: {
@@ -1049,7 +1063,7 @@ export interface components {
          * JobKind
          * @enum {string}
          */
-        JobKind: "write_draft" | "generate_images" | "clone_creator";
+        JobKind: "write_draft" | "generate_images" | "clone_creator" | "find_benchmarks" | "revise_draft";
         /** JobOut */
         JobOut: {
             /** Id */
@@ -1131,6 +1145,14 @@ export interface components {
         /** RemoveBenchmarkOut */
         RemoveBenchmarkOut: {
             job?: components["schemas"]["JobOut"] | null;
+        };
+        /** ReviseIn */
+        ReviseIn: {
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /** RuleIn */
         RuleIn: {
@@ -1617,12 +1639,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CandidatesOut"];
+                    "application/json": components["schemas"]["JobOut"];
                 };
             };
             /** @description Validation Error */
@@ -1957,6 +1979,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DraftDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revise_api_drafts__draft_id__revise_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviseIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
                 };
             };
             /** @description Validation Error */

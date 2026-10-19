@@ -1,7 +1,7 @@
 import { ArrowLeft, Copy, FileText, KeyRound, MessageCircle, Settings, TrendingUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { isActive, useAccount, useActiveJobs, useDrafts, useSendChat, useTopics } from "../api/hooks";
+import { isActive, useAccount, useActiveJobs, useCredentials, useDrafts, useFindCandidates, useTopics } from "../api/hooks";
 import { BenchmarkPanel } from "../components/BenchmarkPanel";
 import { ChatPanel } from "../components/ChatPanel";
 import { ContentsPanel } from "../components/ContentsPanel";
@@ -25,18 +25,19 @@ export function WorkspacePage() {
   const { data: topics = [] } = useTopics(id);
   const [chatOpen, setChatOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
-  const send = useSendChat(id);
+  const find = useFindCandidates(id);
+  const { data: creds } = useCredentials();
   const started = useRef(false);
 
-  // 新建账号选了「对标起号」：进来就让小媒按主题去找同领域的号
+  // 新建账号选了「对标起号」：进来就按主题在小红书上找同领域的号，结果直接铺在「对标」页
   useEffect(() => {
-    if (sp.get("start") !== "bench" || !account || started.current) return;
+    if (sp.get("start") !== "bench" || !account || !creds || started.current) return;
     started.current = true;
     setSp({ tab: "bench" }, { replace: true });
     if (!account.theme) return;
-    send.mutate(`我想对标同领域做得好的小红书账号来起号，主题是「${account.theme}」，帮我找几个看看`);
-    if (window.innerWidth < 1024) setChatOpen(true);
-  }, [account, sp, setSp, send]);
+    if (creds.find((c) => c.key === "xhs_cookie")?.configured) find.mutate({ query: account.theme, prefer: "" });
+    else sessionStorage.setItem(`bench-autostart-${id}`, "1"); // 对标页先让扫码，连上后自动开始
+  }, [account, creds, sp, setSp, find, id]);
 
   if (isLoading) return <div className="flex justify-center py-20"><Spinner className="size-6" /></div>;
   if (!account) return <div className="p-10"><Empty title="找不到这个账号" action={<Link to="/"><Button size="sm">回到账号列表</Button></Link>} /></div>;
@@ -79,7 +80,7 @@ export function WorkspacePage() {
       <div className="flex min-h-0 flex-1">
         <main className="min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
-            <JobStrip jobs={jobs} hide={tab === "bench" ? ["clone_creator"] : []} />
+            <JobStrip jobs={jobs} hide={tab === "bench" ? ["clone_creator", "find_benchmarks", "revise_draft"] : ["revise_draft"]} />
             {tab === "contents" && <ContentsPanel account={account} busy={writing} onGoTopics={() => setTab("topics")} />}
             {tab === "topics" && <TopicsPanel account={account} busy={writing} onGoConfig={() => setTab("config")} />}
             {tab === "bench" && <BenchmarkPanel account={account} jobs={jobs} onGoTopics={() => setTab("topics")} onOpenChat={() => setChatOpen(true)} />}

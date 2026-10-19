@@ -3,6 +3,7 @@ import qrcode from "qrcode-generator";
 import { QrCode, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, unwrap } from "../api/client";
+import { cn } from "../lib/utils";
 import { Button, ErrorText } from "./ui";
 
 type Platform = "bilibili" | "xiaohongshu";
@@ -10,11 +11,11 @@ type Platform = "bilibili" | "xiaohongshu";
 const LABEL: Record<string, string> = {
   scanned: "已扫码，请在手机上点「确认登录」",
   expired: "二维码过期了，点刷新重新生成",
-  error: "登录出错了，刷新重试",
+  error: "登录没成功",
 };
 const WAITING: Record<Platform, string> = {
   bilibili: "用 B站 App 扫一扫（「我的」右上角）",
-  xiaohongshu: "用小红书 App 扫一扫（左上角菜单 → 扫一扫），建议用小号",
+  xiaohongshu: "打开小红书 App，点左上角「≡」→「扫一扫」，扫完在手机上点「确认登录」。建议用小号",
 };
 const OK: Record<Platform, string> = {
   bilibili: "登录成功，已开启自动续期",
@@ -35,11 +36,12 @@ export function QrLogin({ platform, again = false }: { platform: Platform; again
   const qc = useQueryClient();
   const [qr, setQr] = useState<{ url: string; key: string } | null>(null);
   const [status, setStatus] = useState("waiting");
+  const [message, setMessage] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
 
   const start = async () => {
-    setLoading(true); setError(null); setStatus("waiting");
+    setLoading(true); setError(null); setStatus("waiting"); setMessage("");
     try { setQr(await create(platform)); } catch (e) { setError(e); } finally { setLoading(false); }
   };
 
@@ -49,31 +51,43 @@ export function QrLogin({ platform, again = false }: { platform: Platform; again
       try {
         const r = await poll(platform, qr.key);
         setStatus(r.status);
+        setMessage(r.message ?? "");
+        setError(null);
         if (r.status === "ok") qc.invalidateQueries({ queryKey: ["credentials"] });
-      } catch (e) { setError(e); }
+      } catch (e) { setError(e); } // 偶发网络错误：显示出来，但继续轮询
     }, 2000);
     return () => clearInterval(t);
   }, [qr, status, qc, platform]);
 
   const svg = useMemo(() => {
     if (!qr) return "";
-    const q = qrcode(0, "M");
+    // 纠错级别用 L：同样的链接码点更少、每个点更大，手机更容易扫上
+    const q = qrcode(0, "L");
     q.addData(qr.url);
     q.make();
-    return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+    return q.createSvgTag({ cellSize: 6, margin: 4, scalable: true });
   }, [qr]);
 
   if (!qr) {
     return <Button size="sm" variant="outline" loading={loading} onClick={start}>{!loading && <QrCode />}{again ? "重新扫码登录" : "扫码登录"}</Button>;
   }
+  const bad = status === "expired" || status === "error";
   return (
-    <div className="flex items-center gap-4 rounded-lg bg-slate-50 p-3">
-      <div className="size-32 shrink-0 bg-white" dangerouslySetInnerHTML={{ __html: svg }} />
-      <div className="space-y-2 text-xs">
-        <div className={status === "ok" ? "font-medium text-emerald-600" : status === "expired" || status === "error" ? "text-red-500" : "text-muted-foreground"}>
+    <div className="flex flex-col items-center gap-4 rounded-lg bg-slate-50 p-4 sm:flex-row sm:items-start">
+      <div className={cn("relative size-48 shrink-0 rounded-lg bg-white p-1 shadow-sm [&_svg]:size-full", bad && "opacity-30")}
+        dangerouslySetInnerHTML={{ __html: svg }} />
+      <div className="min-w-0 space-y-2 text-sm">
+        <div className={status === "ok" ? "font-medium text-emerald-600" : bad ? "font-medium text-red-500" : status === "scanned" ? "font-medium text-indigo-600" : "text-muted-foreground"}>
           {status === "waiting" ? WAITING[platform] : status === "ok" ? OK[platform] : LABEL[status] ?? status}
         </div>
-        {status !== "ok" && <Button size="sm" variant="ghost" onClick={start}><RefreshCw />刷新二维码</Button>}
+        {message && <p className="text-xs leading-relaxed text-red-500">{message}</p>}
+        {platform === "xiaohongshu" && bad && (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            也可以手动连：电脑浏览器打开 xiaohongshu.com 并登录 → 按 F12 打开「网络 / Network」→ 刷新页面 → 点任意一个请求 →
+            在「请求标头」里把 Cookie 整段复制，粘贴到下面的输入框保存。
+          </p>
+        )}
+        {status !== "ok" && <Button size="sm" variant={bad ? "outline" : "ghost"} onClick={start}><RefreshCw />刷新二维码</Button>}
         <ErrorText error={error} />
       </div>
     </div>

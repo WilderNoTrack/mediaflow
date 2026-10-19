@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { Account, Candidate } from "../api/client";
 import { useClone } from "../api/hooks";
 import { cn } from "../lib/utils";
+import { NoteTile } from "./CreatorGallery";
 import { Avatar, Badge, Button, ErrorText } from "./ui";
 
 export const MAX_BENCH = 3;
@@ -60,7 +61,11 @@ export function CandidatePicker({ account, candidates, compact, onStarted }: {
               </div>
               {c.reason && <p className="mb-2 text-xs leading-relaxed text-indigo-600">💡 {c.reason}</p>}
               {c.learn && <div className="mb-2"><span className="rounded bg-fuchsia-50 px-1.5 py-0.5 text-xs text-fuchsia-700">最该学：{c.learn}</span></div>}
-              <div className="mt-auto space-y-1">
+              {c.notes?.some((n) => n.cover) ? (
+                <div className="mt-auto grid grid-cols-3 gap-1.5">
+                  {c.notes.slice(0, 3).map((n, i) => <NoteTile key={n.url + i} n={n} i={i} small />)}
+                </div>
+              ) : <div className="mt-auto space-y-1">
                 {(c.top?.length ? c.top : c.hits ?? []).slice(0, compact ? 2 : 3).map((h) => (
                   <a key={h.url || h.title} href={h.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
                     className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
@@ -68,7 +73,7 @@ export function CandidatePicker({ account, candidates, compact, onStarted }: {
                     {h.likes && <span className="shrink-0 text-muted-foreground/70">{h.likes}赞</span>}
                   </a>
                 ))}
-              </div>
+              </div>}
               <a href={c.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
                 className="mt-2 flex items-center gap-1 border-t pt-2 text-xs text-muted-foreground hover:text-foreground">
                 <ExternalLink className="size-3" />看主页{c.last_post && <span className="ml-auto">最近更新 {c.last_post}</span>}

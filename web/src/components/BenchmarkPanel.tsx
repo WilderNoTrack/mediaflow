@@ -1,12 +1,14 @@
 import {
   AlertCircle, ArrowRight, CheckCircle2, Copy, ExternalLink, Flame, Image as ImageIcon, Layers, Lightbulb,
-  ListOrdered, MessageSquareQuote, Plus, RefreshCw, Search, Sparkles, Target, Trash2, Type, UserRound, Wand2,
+  KeyRound, ListOrdered, MessageSquareQuote, Plus, RefreshCw, Search, Sparkles, Target, Trash2, Type, UserRound, Wand2,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Account, Benchmark, Candidate, Job, JobEvent } from "../api/client";
-import { isActive, useClone, useFindCandidates, usePendingChat, useRemoveBenchmark } from "../api/hooks";
+import { isActive, useClone, useCredentials, useFindCandidates, usePendingChat, useRemoveBenchmark } from "../api/hooks";
 import { cn } from "../lib/utils";
-import { CandidatePicker, MAX_BENCH } from "./CandidatePicker";
+import { MAX_BENCH } from "./CandidatePicker";
+import { CandidateGallery, FindProgress, NoteGrid, uniqNotes } from "./CreatorGallery";
+import { QrLogin } from "./QrLogin";
 import { Avatar, Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Label, Pills, Spinner, Textarea } from "./ui";
 
 type Dict = Record<string, unknown>;
@@ -23,18 +25,46 @@ export function BenchmarkPanel({ account, jobs, onGoTopics, onOpenChat }: {
 }) {
   const benches = account.benchmarks;
   const plan = account.bench_plan as Dict;
+  const found = account.bench_candidates as { theme?: string; candidates?: Candidate[] };
   const job = jobs.find((j) => j.kind === "clone_creator" && isActive(j));
+  const findJob = jobs.find((j) => j.kind === "find_benchmarks" && isActive(j));
+  const lastFind = jobs.find((j) => j.kind === "find_benchmarks");
+  const findError = lastFind && lastFind.status === "failed" ? lastFind.error : "";
   const chatting = usePendingChat(account.id).some((t) => /对标|找.*号/.test(t));
+  const { data: creds } = useCredentials();
+  const xhsOk = creds?.find((c) => c.key === "xhs_cookie")?.configured ?? true;
+  const find = useFindCandidates(account.id);
   const [adding, setAdding] = useState(false);
   const live = benches.filter((b) => b.status !== "failed");
   const ready = benches.filter((b) => b.status === "ready");
+  const hasFound = !!found.theme;
+
+  // 新建账号选了「对标起号」但还没连小红书：连上之后自动开始找
+  const autoKey = `bench-autostart-${account.id}`;
+  useEffect(() => {
+    if (xhsOk && sessionStorage.getItem(autoKey) && !findJob && !find.isPending) {
+      sessionStorage.removeItem(autoKey);
+      if (account.theme) find.mutate({ query: account.theme, prefer: "" });
+    }
+  }, [xhsOk, autoKey, findJob, find, account.theme]);
+
+  const finding = (
+    <>
+      {!xhsOk && <XhsConnect />}
+      {findError && !findJob && <FindError error={findError} />}
+      {chatting && <ChatHint onOpenChat={onOpenChat} />}
+      {findJob ? <FindProgress job={findJob} />
+        : hasFound ? <CandidateGallery account={account} found={found} collapsed={live.length > 0} />
+        : null}
+    </>
+  );
 
   if (!benches.length && !job) {
     return (
       <div className="space-y-6">
-        <Intro />
-        {chatting && <ChatHint onOpenChat={onOpenChat} />}
-        <AddBenchmark account={account} />
+        {!hasFound && !findJob && <Intro />}
+        {finding}
+        {!findJob && <AddBenchmark account={account} compact={hasFound} />}
       </div>
     );
   }
@@ -48,9 +78,9 @@ export function BenchmarkPanel({ account, jobs, onGoTopics, onOpenChat }: {
           {benches.map((b) => <BenchCard key={b.id} account={account} bench={b} busy={!!job} />)}
         </CardBody>
       </Card>
-      {adding && <AddBenchmark account={account} onCancel={() => setAdding(false)} onStarted={() => setAdding(false)} />}
-      {chatting && <ChatHint onOpenChat={onOpenChat} />}
       {job && <Analyzing job={job} />}
+      {(live.length < MAX_BENCH || findJob) && finding}
+      {adding && !findJob && <AddBenchmark account={account} onCancel={() => setAdding(false)} onStarted={() => setAdding(false)} />}
       {ready.length > 0 && Object.keys(plan).length > 0 && (
         <MergedPlan account={account} plan={plan} benches={ready} onGoTopics={onGoTopics} />
       )}
@@ -59,11 +89,30 @@ export function BenchmarkPanel({ account, jobs, onGoTopics, onOpenChat }: {
   );
 }
 
+function XhsConnect() {
+  return (
+    <Card className="border-amber-200">
+      <CardHead icon={<KeyRound />} title="先连上小红书" desc="找同领域的号、读对方作品都要用小红书登录态；建议用小号扫码，连上后会自动开始找" />
+      <CardBody><QrLogin platform="xiaohongshu" /></CardBody>
+    </Card>
+  );
+}
+
+function FindError({ error }: { error: string }) {
+  const login = /登录|扫码|Cookie/.test(error);
+  return (
+    <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+      <p className="flex items-start gap-2"><AlertCircle className="mt-0.5 size-4 shrink-0" />上次没找成：{error}</p>
+      {login && <QrLogin platform="xiaohongshu" again />}
+    </div>
+  );
+}
+
 function ChatHint({ onOpenChat }: { onOpenChat?: () => void }) {
   return (
     <div className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm text-indigo-700">
       <Spinner className="size-4" />
-      <span className="flex-1">小媒正在小红书上按你的主题找同领域的号，找到后在对话里勾选就行</span>
+      <span className="flex-1">小媒正在小红书上按你说的找同领域的号，找到后会出现在这里，对话里也能直接勾选</span>
       {onOpenChat && <button className="cursor-pointer font-medium hover:underline lg:hidden" onClick={onOpenChat}>去看看</button>}
     </div>
   );
@@ -91,8 +140,8 @@ function Intro() {
 
 // ─── 加对标：帮我找 / 我有链接 ─────────────────────────────────────────────
 
-function AddBenchmark({ account, onCancel, onStarted }: { account: Account; onCancel?: () => void; onStarted?: () => void }) {
-  const [mode, setMode] = useState<"find" | "link">("find");
+function AddBenchmark({ account, onCancel, onStarted, compact }: { account: Account; onCancel?: () => void; onStarted?: () => void; compact?: boolean }) {
+  const [mode, setMode] = useState<"find" | "link">(compact ? "link" : "find");
   const find = useFindCandidates(account.id);
   const clone = useClone(account.id);
   const [query, setQuery] = useState(account.theme);
@@ -101,28 +150,22 @@ function AddBenchmark({ account, onCancel, onStarted }: { account: Account; onCa
   const [theme, setTheme] = useState(account.theme);
   const slots = MAX_BENCH - account.benchmarks.filter((b) => b.status !== "failed").length;
   const targets = links.split(/\n+/).map((x) => x.trim()).filter(Boolean);
-  const candidates = (find.data?.candidates ?? []) as Candidate[];
 
   return (
     <Card className="border-indigo-200">
-      <CardHead icon={<Plus />} title="加对标账号" desc={`还能加 ${slots} 个；默认找同领域的，学得最像`}
+      <CardHead icon={<Plus />} title={compact ? "没有想要的？" : "加对标账号"} desc={compact ? "换个方向再找，或者直接贴你想对标的号" : `还能加 ${slots} 个；默认找同领域的，学得最像`}
         action={onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>取消</Button>} />
       <CardBody className="space-y-4">
         <Pills<"find" | "link"> value={mode} onChange={setMode} items={[
           { value: "find", label: "帮我找同领域的号" }, { value: "link", label: "我有想对标的号" },
         ]} />
         {mode === "find" ? <>
-          <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(e) => { e.preventDefault(); if (query.trim()) find.mutate({ query: query.trim(), prefer }); }}>
+          <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(e) => { e.preventDefault(); if (query.trim()) find.mutate({ query: query.trim(), prefer }, { onSuccess: () => onStarted?.() }); }}>
             <Input value={query} placeholder="方向，例如：通勤穿搭" onChange={(e) => setQuery(e.target.value)} />
             <Input value={prefer} placeholder="额外要求（可选），如：粉丝少一点、做图文的" onChange={(e) => setPrefer(e.target.value)} />
             <Button type="submit" variant="gradient" loading={find.isPending} disabled={!query.trim()}>{!find.isPending && <Search />}找候选</Button>
           </form>
-          {find.isPending && <p className="flex items-center gap-2 text-sm text-indigo-600"><Spinner className="size-4" />正在小红书上搜这个方向的热门笔记和博主、看各自的数据，大约半分钟…</p>}
           <ErrorText error={find.error} />
-          {find.data && <>
-            {arr(find.data.notes).length > 0 && <p className="text-xs text-muted-foreground">{arr(find.data.notes).map(str).join("；")}</p>}
-            <CandidatePicker account={account} candidates={candidates} onStarted={onStarted} />
-          </>}
         </> : <>
           <div>
             <Label hint="每行一个：主页链接、笔记链接、博主名字或小红书号">对标账号</Label>
@@ -143,7 +186,7 @@ function AddBenchmark({ account, onCancel, onStarted }: { account: Account; onCa
             </Button>
           </div>
         </>}
-        <p className="text-xs text-muted-foreground">需要先在「数据来源」里连上小红书。学的是方法，不会照抄对方的句子。</p>
+        <p className="text-xs text-muted-foreground">学的是方法，不会照抄对方的句子。</p>
       </CardBody>
     </Card>
   );
@@ -325,6 +368,10 @@ function CreatorDetails({ benches }: { benches: Benchmark[] }) {
 
 function CreatorDetail({ bench: b }: { bench: Benchmark }) {
   const p = b.playbook as Dict;
+  const hits = uniqNotes(b.samples as Dict[]).map((x) => ({
+    title: str(x.title), url: str(x.url), cover: str(x.cover), kind: str(x.kind), date: str(x.date),
+    likes: x.likes ? str(x.likes) : "",
+  }));
   const myPillars: Dict[] = [];
   return (
     <div className="space-y-6">
@@ -404,19 +451,8 @@ function CreatorDetail({ bench: b }: { bench: Benchmark }) {
         </div>
       )}
 
-      <Section icon={<Flame />} title={`TA 的爆款（${b.samples.length}）`}>
-        <div className="divide-y">
-          {(b.samples as Dict[]).map((x, i) => (
-            <div key={i} className="flex items-center gap-3 py-2.5">
-              <span className="w-5 text-center text-xs font-semibold text-muted-foreground">{i + 1}</span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm">{str(x.title)}</div>
-                <div className="text-xs text-muted-foreground">{[str(x.kind), str(x.date), x.likes && `${str(x.likes)} 赞`, x.collects && `${str(x.collects)} 收藏`].filter(Boolean).join(" · ")}</div>
-              </div>
-              {str(x.url) && <a href={str(x.url)} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground" aria-label="看原帖"><ExternalLink className="size-4" /></a>}
-            </div>
-          ))}
-        </div>
+      <Section icon={<Flame />} title={`TA 的爆款（${hits.length}）`}>
+        <NoteGrid notes={hits} className="sm:grid-cols-4 lg:grid-cols-6" />
       </Section>
     </div>
   );

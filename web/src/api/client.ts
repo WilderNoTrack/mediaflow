@@ -16,9 +16,10 @@ export type Benchmark = S["BenchmarkOut"];
 export type Candidate = {
   name: string; url: string; avatar?: string; fans?: string; desc?: string;
   median_likes?: number; hit_rate?: number; per_week?: number | null; last_post?: string;
-  hits?: { title: string; likes: string; url: string }[]; top?: { title: string; likes: string; url: string }[];
+  hits?: NoteCard[]; top?: NoteCard[]; notes?: NoteCard[];
   fit?: number; level?: string; reason?: string; learn?: string;
 };
+export type NoteCard = { title: string; likes: string; url: string; cover?: string; kind?: string; date?: string };
 export type JobEvent = { at: string; stage: string; message: string; data: Record<string, unknown> };
 
 export class ApiError extends Error {
