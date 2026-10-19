@@ -211,7 +211,7 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
   const better = ev.issues ?? [];
   const tips = ev.suggestions ?? [];
   const history = (ev.history ?? []).filter((h) => h.score != null);
-  const rounds = Math.max(0, (history.length || d.attempts) - 1);
+  const rounds = Math.max(0, d.attempts - 1);
   const passed = !d.needs_attention;
   const last = (job?.events as JobEvent[] | undefined)?.at(-1);
   return (
@@ -225,7 +225,7 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
             {passed ? `达标了（${PASS} 分合格），可以直接用` : `还差一点：${PASS} 分合格，现在 ${d.score?.toFixed(1) ?? "未评分"}`}
           </div>
           <div className="mt-0.5 text-xs opacity-80">
-            {rounds > 0 ? `写完后 AI 按质检意见自动改了 ${rounds} 轮，留下的是分数最高的一版` : "写完一版就通过了质检"}
+            {rounds > 0 ? `AI 按质检意见一共改了 ${rounds} 轮，留下的是分数最高的一版` : "写完一版就通过了质检"}
             {!passed && must.length > 0 && `，下面 ${must.length} 处必须改的还没改掉`}
           </div>
           {history.length > 1 && (
@@ -234,7 +234,7 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
                 <span key={i} className="flex items-center gap-1">
                   {i > 0 && <span className="opacity-40">→</span>}
                   <span className={cn("rounded-md px-1.5 py-0.5", h.score === d.score ? "bg-white font-semibold shadow-sm" : "bg-white/50")}>
-                    {i === 0 ? "初稿" : `第${i}轮`} {h.score?.toFixed(1)}
+                    {(h.attempt ?? i + 1) <= 1 ? "初稿" : `第${(h.attempt ?? i + 1) - 1}轮`} {h.score?.toFixed(1)}
                   </span>
                 </span>
               ))}

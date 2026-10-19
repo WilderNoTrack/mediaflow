@@ -318,6 +318,8 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
         # 用户改过稿子或提了新要求：先按现在的版本重新质检，意见才对得上
         await _check(llm, ctx, cur)
     history = list((draft.evaluation or {}).get("history") or [])
+    if not history and cur.score is not None:  # 老稿子没有记录：把改之前的版本记上，分数变化才看得出来
+        history = [{"attempt": draft.attempts, "score": cur.score, "problems": len(cur.issues)}]
     start = (history[-1]["attempt"] + 1) if history else draft.attempts + 1
     tried: list[Candidate] = []
     best = cur
