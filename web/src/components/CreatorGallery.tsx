@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { Account, Candidate, Job, JobEvent, NoteCard } from "../api/client";
 import { useClone, useFindCandidates } from "../api/hooks";
 import { cn } from "../lib/utils";
-import { isBenchmarked, MAX_BENCH } from "./CandidatePicker";
+import { hitText, isBenchmarked, MAX_BENCH } from "./CandidatePicker";
 import { Avatar, Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Spinner } from "./ui";
 
 const fmt = (n?: number) => (n == null ? "" : n >= 10000 ? `${(n / 10000).toFixed(1)}万` : String(n));
@@ -118,8 +118,8 @@ export function CandidateGallery({ account, found, collapsed }: { account: Accou
                         className="inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"><ExternalLink className="size-3" />主页</a>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      {[c.fans && `${c.fans} 粉丝`, c.median_likes != null && `中位赞 ${fmt(c.median_likes)}`,
-                        c.hit_rate != null && `爆款率 ${Math.round(c.hit_rate * 100)}%`, c.per_week && `每周约 ${c.per_week} 篇`,
+                      {[c.fans && `${c.fans} 粉丝`, c.median_likes != null && `平时点赞 ${fmt(c.median_likes)}`,
+                        c.hit_rate != null && hitText(c.hit_rate), c.per_week && `每周约 ${c.per_week} 篇`,
                         c.last_post && `最近更新 ${c.last_post}`].filter(Boolean).join(" · ")}
                     </div>
                     {c.desc && <div className="line-clamp-1 text-xs text-muted-foreground/80">{c.desc}</div>}
@@ -159,7 +159,7 @@ export function CandidateGallery({ account, found, collapsed }: { account: Accou
 
 const FIND_STEPS = [
   { stage: "search", label: "搜这个方向最热的笔记，看都是谁写的" },
-  { stage: "probe", label: "挨个看博主主页：粉丝、点赞中位数、爆款率、更新频率" },
+  { stage: "probe", label: "挨个看博主主页：粉丝、平时点赞、爆款多不多、更新勤不勤" },
   { stage: "pick", label: "判断是不是同领域、值不值得学、最该学什么" },
 ];
 

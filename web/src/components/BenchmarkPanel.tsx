@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import type { Account, Benchmark, Candidate, Job, JobEvent } from "../api/client";
 import { isActive, useClone, useCredentials, useFindCandidates, usePendingChat, useRemoveBenchmark } from "../api/hooks";
 import { cn } from "../lib/utils";
-import { MAX_BENCH } from "./CandidatePicker";
+import { hitText, MAX_BENCH } from "./CandidatePicker";
 import { CandidateGallery, FindProgress, NoteGrid, uniqNotes } from "./CreatorGallery";
 import { QrLogin } from "./QrLogin";
 import { Markdown } from "./Markdown";
@@ -123,7 +123,7 @@ function Intro() {
       <CardHead icon={<Copy />} title="对标起号" desc="找 1-3 个同领域做起来的小红书账号，学 TA 们的打法，内容换成你的主题" />
       <CardBody className="grid gap-3 sm:grid-cols-3">
         {[
-          { icon: <Search />, t: "找同领域的号", d: "按你的主题搜热门笔记和博主，给出粉丝、点赞中位数、爆款率和值得学的地方，你来挑" },
+          { icon: <Search />, t: "找同领域的号", d: "按你的主题搜热门笔记和博主，给出粉丝、平时点赞、爆款多不多和值得学的地方，你来挑" },
           { icon: <Wand2 />, t: "逐个拆打法", d: "每个账号读 60 篇作品、细看 5 篇爆款：人设、栏目、标题公式、开头、结构、封面、节奏" },
           { icon: <Sparkles />, t: "合成一套给你用", d: "每一块挑最值得学的那个，自动更新账号定位和写法规则，生成对应爆款的复刻选题" },
         ].map((s, i) => (
@@ -210,10 +210,10 @@ function BenchCard({ account, bench: b, busy }: { account: Account; bench: Bench
             {b.creator_url && <a href={b.creator_url} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground" aria-label="主页"><ExternalLink className="size-3" /></a>}
           </div>
           <div className="truncate text-xs text-muted-foreground">
-            {b.status === "analyzing" ? <span className="text-indigo-600">正在拆解…</span>
+            {b.status === "analyzing" ? <span className="text-indigo-600">正在学习…</span>
               : failed ? <span className="text-red-600">没拆成</span>
-              : [info.fans && `${str(info.fans)} 粉`, info.median_likes && `中位赞 ${fmt(info.median_likes)}`,
-                info.hit_rate != null && `爆款率 ${Math.round(Number(info.hit_rate) * 100)}%`].filter(Boolean).join(" · ")}
+              : [info.fans && `${str(info.fans)} 粉`, info.median_likes && `平时点赞 ${fmt(info.median_likes)}`,
+                info.hit_rate != null && hitText(Number(info.hit_rate))].filter(Boolean).join(" · ")}
           </div>
         </div>
       </div>
@@ -241,7 +241,7 @@ function BenchCard({ account, bench: b, busy }: { account: Account; bench: Bench
 const STEPS = [
   { stage: "find", label: "找到博主、读作品" },
   { stage: "detail", label: "细看爆款正文和热评" },
-  { stage: "analyze", label: "拆解打法" },
+  { stage: "analyze", label: "总结打法" },
   { stage: "adapt", label: "合成一套、换成你的主题" },
 ];
 
@@ -296,7 +296,7 @@ function PlanBrief({ account, plan, benches, onGoTopics }: { account: Account; p
   return (
     <Card className="border-indigo-200">
       <CardHead icon={<Flame />} title={benches.length > 1 ? `学完了 ${benches.length} 个账号，合成了一套打法` : `学完了「${benches[0]?.creator_name}」`}
-        desc={`已按「${theme}」换好；详细拆解都在报告里，想看再看`}
+        desc={`已按「${theme}」换好；详细分析都在报告里，想看再看`}
         action={<Button size="sm" variant="gradient" onClick={onGoTopics}>去写复刻选题<ArrowRight /></Button>} />
       <CardBody className="space-y-3">
         {rows.map((r) => (
@@ -323,7 +323,7 @@ function PlanBrief({ account, plan, benches, onGoTopics }: { account: Account; p
 
 const reportUrl = (id: string, download = false) => `/api/accounts/${id}/benchmark/report${download ? "?download=true" : ""}`;
 
-function ReportDialog({ account, onClose }: { account: Account; onClose: () => void }) {
+export function ReportDialog({ account, onClose }: { account: Account; onClose: () => void }) {
   const { data, error, isLoading } = useQuery({
     queryKey: ["bench-report", account.id, (account.bench_plan as Dict).updated_at],
     queryFn: async () => {

@@ -65,7 +65,7 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
           ) : (
             <span>从 {SOURCES.map((s) => PLATFORMS[s].label).join("、")} 搜热点，再按你的定位挑出能写的角度</span>
           )}
-          <button className="ml-auto cursor-pointer text-indigo-600 hover:underline" onClick={() => setSourcesOpen(true)}>管理数据来源</button>
+          <button className="ml-auto cursor-pointer text-indigo-600 hover:underline" onClick={() => setSourcesOpen(true)}>连接平台</button>
         </div>
         {result && !search.isPending && (
           <p className="mt-2 text-xs text-muted-foreground">

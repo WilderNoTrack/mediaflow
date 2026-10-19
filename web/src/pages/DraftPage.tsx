@@ -67,7 +67,7 @@ export function DraftPage() {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 sm:px-5">
           <Link to={back} className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"><ArrowLeft className="size-4" />草稿</Link>
           <div className="hidden text-xs text-muted-foreground sm:block">
-            {d.score != null && `质检 ${d.score.toFixed(1)} · `}{d.attempts > 1 ? `自动改了 ${d.attempts - 1} 轮 · ` : ""}{timeAgo(d.created_at)}
+            {d.score != null && `AI 打分 ${d.score.toFixed(1)} · `}{d.attempts > 1 ? `自动改了 ${d.attempts - 1} 轮 · ` : ""}{timeAgo(d.created_at)}
             {d.status === "exported" && <Badge className="ml-2 bg-blue-50 text-blue-600">已导出过</Badge>}
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -95,8 +95,8 @@ export function DraftPage() {
           {d.needs_attention && (
             <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               <AlertTriangle className="size-4 shrink-0" />
-              <span className="flex-1">AI 自动改了几轮还没完全达标，留下的是最好的一版。发之前看看质检意见，或者让 AI 再改一轮。</span>
-              <a href="#qc" className="shrink-0 font-medium hover:underline">看质检 ↓</a>
+              <span className="flex-1">AI 自动改了几轮还没完全达标，留下的是最好的一版。发之前看看 AI 的修改意见，或者让 AI 再改一轮。</span>
+              <a href="#qc" className="shrink-0 font-medium hover:underline">看意见 ↓</a>
             </div>
           )}
           <Card>
@@ -264,7 +264,7 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
   return (
     <Card className={cn(!passed && "border-amber-200")} >
       <div id="qc" />
-      <CardHead icon={<Sparkles />} title="AI 质检"
+      <CardHead icon={<Sparkles />} title="AI 打分和修改意见"
         action={d.score != null && <span className={cn("text-lg font-semibold", passed ? "text-indigo-600" : "text-amber-600")}>{d.score.toFixed(1)}<span className="text-xs font-normal text-muted-foreground"> / 10</span></span>} />
       <CardBody className="space-y-4 text-sm">
         <div className={cn("rounded-xl px-4 py-3", passed ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900")}>
@@ -272,7 +272,7 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
             {passed ? `达标了（${PASS} 分合格），可以直接用` : `还差一点：${PASS} 分合格，现在 ${d.score?.toFixed(1) ?? "未评分"}`}
           </div>
           <div className="mt-0.5 text-xs opacity-80">
-            {rounds > 0 ? `AI 按质检意见一共改了 ${rounds} 轮，留下的是分数最高的一版` : "写完一版就通过了质检"}
+            {rounds > 0 ? `AI 按意见一共改了 ${rounds} 轮，留下的是分数最高的一版` : "写完一版就达标了"}
             {!passed && must.length > 0 && `，下面 ${must.length} 处必须改的还没改掉`}
           </div>
           {history.length > 1 && (

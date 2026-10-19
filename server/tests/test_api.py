@@ -141,3 +141,14 @@ async def test_images_not_generated_twice_and_recovered_after_restart(client, se
     session.expire_all()
     st = {i.idx: i.status for i in session.exec(select(DraftImage).where(DraftImage.draft_id == d.id)).all()}
     assert st == {0: ImageStatus.failed, 1: ImageStatus.pending}
+
+
+def test_write_from_chat_is_logged_in_chat(client):
+    a = client.post("/api/accounts", json={"name": "宝妈省钱", "theme": "带娃省钱"}).json()
+    j = client.post(f"/api/accounts/{a['id']}/write", json={"from_chat": True}).json()
+    msgs = client.get(f"/api/accounts/{a['id']}/chat").json()
+    assert msgs[-1]["role"] == "tool" and msgs[-1]["tool_name"] == "write_post"
+    assert msgs[-1]["payload"]["result"]["job_id"] == j["id"]
+    b = client.post("/api/accounts", json={"name": "b", "theme": "t"}).json()
+    client.post(f"/api/accounts/{b['id']}/write", json={})
+    assert client.get(f"/api/accounts/{b['id']}/chat").json() == []

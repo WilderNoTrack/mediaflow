@@ -192,8 +192,8 @@ export function useDraftActions(id: string) {
 export function useWrite(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: S["WriteIn"]) =>
-      unwrap(api.POST("/api/accounts/{account_id}/write", { params: { path: { account_id: id } }, body })),
+    mutationFn: (body: Partial<S["WriteIn"]>) =>
+      unwrap(api.POST("/api/accounts/{account_id}/write", { params: { path: { account_id: id } }, body: { hint: "", from_chat: false, ...body } })),
     onSettled: () => qc.invalidateQueries({ queryKey: ["jobs", id] }),
   });
 }

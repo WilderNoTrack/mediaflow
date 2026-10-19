@@ -7,7 +7,7 @@ from mediaflow.agents.learning import suggest_rules
 from mediaflow.api.deps import owned_account, owned_draft
 from mediaflow.db import get_session
 from mediaflow.domain.models import (
-    Account, Draft, DraftImage, DraftStatus, Feedback, ImageStatus, Job, JobKind, utcnow,
+    Account, Draft, DraftImage, DraftStatus, Feedback, ImageStatus, Job, JobKind, Topic, utcnow,
 )
 from mediaflow.domain.schemas import (
     DraftDetail, DraftOut, DraftPatch, FeedbackIn, ImageOut, JobOut, LearnOut, ReviseIn, WriteIn,
@@ -52,7 +52,13 @@ def list_drafts(status: DraftStatus | None = None, acc: Account = Depends(owned_
 @router.post("/api/accounts/{account_id}/write", response_model=JobOut, status_code=202)
 def start_writing(body: WriteIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
     job = enqueue(s, JobKind.write_draft, user_id=acc.user_id, account_id=acc.id,
-                  payload={"topic_id": body.topic_id, "hint": body.hint, "trigger": "manual"})
+                  payload={"topic_id": body.topic_id, "hint": body.hint, "trigger": "chat" if body.from_chat else "manual"})
+    if body.from_chat:
+        from mediaflow.agents.manager import log_tool
+
+        t = s.get(Topic, body.topic_id) if body.topic_id else None
+        log_tool(s, acc, "write_post", {"topic_id": body.topic_id or ""},
+                 {"ok": True, "job_id": job.id, "topic": t.title if t else "", "note": "用户点了「写这篇」"})
     return JobOut(**job.model_dump())
 
 

@@ -230,6 +230,7 @@ class LearnOut(BaseModel):
 class WriteIn(BaseModel):
     topic_id: str | None = None
     hint: str = ""
+    from_chat: bool = Field(False, description="在小媒对话里点的「写这篇」：把这次写稿记进对话，进度和结果卡片留在对话里")
 
 
 class JobOut(BaseModel):

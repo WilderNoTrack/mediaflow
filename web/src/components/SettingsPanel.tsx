@@ -47,7 +47,7 @@ function ProfileCard({ account }: { account: Account }) {
 
   return (
     <Card>
-      <CardHead icon={<Target />} title="账号定位" desc="写稿、质检、找选题都按这里来"
+      <CardHead icon={<Target />} title="账号定位" desc="写稿、打分、找选题都按这里来"
         action={<span className="text-xs text-muted-foreground">已填 {filled}/{FIELDS.length}</span>} />
       <CardBody>
         <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
@@ -84,7 +84,7 @@ function RulesCard({ account }: { account: Account }) {
   const [rule, setRule] = useState("");
   return (
     <Card>
-      <CardHead icon={<ListChecks />} title="文案要求" desc="每篇写稿和质检都会逐条检查" />
+      <CardHead icon={<ListChecks />} title="文案要求" desc="每篇写稿和打分都会逐条检查" />
       <CardBody className="space-y-1.5">
         {account.rules.length === 0 && <p className="pb-1 text-xs text-muted-foreground">还没有。比如「结尾带一个互动提问」「不推荐具体理财产品」。</p>}
         {account.rules.map((r, i) => (

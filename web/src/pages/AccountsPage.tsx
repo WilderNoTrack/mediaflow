@@ -26,7 +26,7 @@ export function AccountsPage() {
   const canCreate = !!form.name.trim() && (!cloneMode || !!form.theme.trim());
   const submit = () => create.mutate({ ...form, audience: "" }, {
     onSuccess: (a) => {
-      if (!cloneMode) return nav(`/accounts/${a.id}?tab=config`);
+      if (!cloneMode) return nav(`/accounts/${a.id}`);
       // 没给对标账号：进工作台后小媒自动按主题去找同领域的号；给了就直接开始学
       if (!targets.length) return nav(`/accounts/${a.id}?start=bench`);
       clone.mutate({ accountId: a.id, targets, theme: form.theme.trim() }, { onSettled: () => nav(`/accounts/${a.id}?tab=bench`) });
@@ -45,7 +45,7 @@ export function AccountsPage() {
         </>}
         right={<div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => setImageOpen(true)}><ImageIcon />AI 配图</Button>
-          <Button variant="outline" size="sm" onClick={() => setSourcesOpen(true)}><KeyRound />数据来源</Button>
+          <Button variant="outline" size="sm" onClick={() => setSourcesOpen(true)}><KeyRound />连接平台</Button>
         </div>}
       />
       {sourcesOpen && <SourcesDialog onClose={() => setSourcesOpen(false)} />}
@@ -185,7 +185,7 @@ function Setup({ onSources, onImage }: { onSources: () => void; onImage: () => v
   const platforms = new Set(creds.filter((c) => c.configured).map((c) => c.platform));
   const steps = [
     { done: sys.llm_configured, title: "填 DeepSeek API Key", desc: "写稿、对话都靠它。在 server/.env 里填 DEEPSEEK_API_KEY 后重启。", must: true },
-    { done: platforms.size >= 2, title: `连接数据来源（已连 ${platforms.size} 个平台）`, desc: "连上小红书、抖音等，选题和对标分析才有真实数据；不连也能用热榜。", action: <Button size="xs" variant="outline" onClick={onSources}>去连接</Button> },
+    { done: platforms.size >= 2, title: `连接平台（已连 ${platforms.size} 个平台）`, desc: "连上小红书、抖音等，选题和对标才有真实数据；不连也能用热榜。", action: <Button size="xs" variant="outline" onClick={onSources}>去连接</Button> },
     { done: sys.image_configured, title: "AI 配图（可选）", desc: "填一个生图 Key，写完稿自动出 3:4 配图；不配也能用，只是没有图。", action: <Button size="xs" variant="outline" onClick={onImage}>去配置</Button> },
   ];
   if (steps.every((s) => s.done)) return null;

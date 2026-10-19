@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Account, Candidate, ChatMessage } from "../api/client";
 import { useChat, usePendingChat, useSendChat } from "../api/hooks";
 import { CandidatePicker } from "./CandidatePicker";
+import { ChatJobCard, TopicCards } from "./ChatCards";
+import { Markdown } from "./Markdown";
 import { cn } from "../lib/utils";
 import { Button, ErrorText, Logo, Spinner, Textarea } from "./ui";
 
@@ -47,22 +49,22 @@ function toolSummary(m: ChatMessage) {
       topic_type: "选题方向", keywords: "关键词", name: "名称" };
     return Object.keys(args).map((k) => keys[k] ?? k).join("、");
   }
-  if (m.tool_name === "find_topics" && Array.isArray(result.topics)) return `${result.topics.length} 个，已放进选题库`;
-  if (m.tool_name === "write_post") return "写好会出现在「草稿」里";
+  if (m.tool_name === "find_topics" && Array.isArray(result.topics)) return `${result.topics.length} 个，点「写这篇」就开始写`;
+  if (m.tool_name === "write_post") return "进度见下方";
   if (m.tool_name === "find_benchmarks" && Array.isArray(result.candidates)) return `${result.candidates.length} 个，在下面勾选`;
-  if (m.tool_name === "clone_creator") return `${Array.isArray(result.added) ? result.added.length : 1} 个，学好会出现在「对标」里`;
+  if (m.tool_name === "clone_creator") return `${Array.isArray(result.added) ? result.added.length : 1} 个，进度见下方`;
   return "";
 }
 
 /** 根据账号状态给几个可以直接点的开场问题 */
 function suggestions(a: Account): string[] {
-  if (!a.theme) return ["我想做一个职场新人理财账号", "帮我想想账号定位", "我想对标几个同领域的号来起号"];
-  if (!a.benchmarks.length) return ["帮我找几个同领域的对标账号", "找几个这周能写的选题", "写一篇试试", "最近的草稿写得怎么样？"];
-  return ["按对标的打法写一篇", "这几个对标账号各学了什么？", "再找几个同领域的对标账号", "找几个这周能写的选题"];
+  if (!a.theme) return ["我是宝妈，想分享带娃省钱经验", "帮我想想账号定位", "帮我找几个做得好的同类账号"];
+  if (!a.benchmarks.length) return ["今天写一篇", "帮我找几个同领域的对标账号", "找几个这周能写的选题", "最近写得怎么样？"];
+  return ["今天写一篇", "找几个这周能写的选题", "最近写得怎么样？", "再找几个对标账号"];
 }
 
 /** 和小媒的对话：工作台右侧常驻，手机上是全屏抽屉 */
-export function ChatPanel({ account, onClose }: { account: Account; onClose?: () => void }) {
+export function ChatPanel({ account, onClose, wide }: { account: Account; onClose?: () => void; wide?: boolean }) {
   const { data: msgs = [], isLoading } = useChat(account.id);
   const send = useSendChat(account.id);
   const [text, setText] = useState("");
@@ -80,29 +82,33 @@ export function ChatPanel({ account, onClose }: { account: Account; onClose?: ()
     send.mutate(v);
   };
 
-  const welcome = `你好！我是小媒，「${account.name}」的账号管家。\n\n定位、选题、写稿直接跟我说，我会边聊边帮你改好左边的设定。\n\n想照着做得好的号起步？说「帮我找几个同领域的对标账号」，我按你的主题去小红书找一批给你挑；有想学的号也可以直接把主页链接发我。最多同时对标 3 个，我会把它们的打法合成一套。`;
+  const welcome = `你好！我是小媒，帮你打理「${account.name}」。\n\n不知道从哪开始？点下面的按钮就行：\n- **找对标账号**：我去小红书找几个做得好的同类账号，学 TA 们的套路\n- **今天写一篇**：选题、文案、配图我来，你看看、改改就能发\n\n有想法也可以直接打字，比如「我是二胎宝妈，想分享带娃省钱经验」。`;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-card">
       <div className="flex items-center gap-2.5 border-b px-4 py-3">
         <MessageCircle className="size-4 text-indigo-500" />
         <div className="min-w-0 flex-1">
-          <div className="font-semibold">账号管家小媒</div>
-          <div className="truncate text-xs text-muted-foreground">{pending ? "正在处理…" : "聊定位 · 改配置 · 找选题 · 写稿，都在这"}</div>
+          <div className="font-semibold">小媒</div>
+          <div className="truncate text-xs text-muted-foreground">{pending ? "正在处理…" : "想做什么直接说：找对标、找选题、写稿、改设定"}</div>
         </div>
         {onClose && <button onClick={onClose} className="cursor-pointer rounded-lg p-1.5 text-muted-foreground hover:bg-muted" aria-label="收起"><X className="size-4" /></button>}
       </div>
 
-      <div ref={box} className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50/50 p-4">
+      <div ref={box} className={cn("min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50/50 p-4", wide && "sm:px-8 sm:py-6")}>
         {isLoading && <Spinner />}
         {!isLoading && msgs.length === 0 && <Bubble role="assistant" text={welcome} />}
         {groupTools(msgs).map((g) =>
           Array.isArray(g) ? (
             <div key={g[0].id} className="space-y-2">
               <ToolGroup items={g} />
-              {g.filter((m) => m.tool_name === "find_benchmarks").map((m) => {
-                const r = (m.payload?.result ?? {}) as { ok?: boolean; candidates?: Candidate[] };
-                return r.ok && r.candidates ? <CandidatePicker key={m.id} account={account} candidates={r.candidates} compact /> : null;
+              {g.map((m) => {
+                const r = (m.payload?.result ?? {}) as { ok?: boolean; candidates?: Candidate[]; job_id?: string; topics?: { id: string; title: string; angle?: string }[] };
+                if (!r.ok) return null;
+                if (m.tool_name === "find_benchmarks" && r.candidates) return <CandidatePicker key={m.id} account={account} candidates={r.candidates} compact />;
+                if ((m.tool_name === "write_post" || m.tool_name === "clone_creator") && r.job_id) return <ChatJobCard key={m.id} account={account} jobId={r.job_id} />;
+                if (m.tool_name === "find_topics" && r.topics?.length) return <TopicCards key={m.id} account={account} topics={r.topics} />;
+                return null;
               })}
             </div>
           ) : <Bubble key={g.id} role={g.role} text={g.content} />,
@@ -115,10 +121,10 @@ export function ChatPanel({ account, onClose }: { account: Account; onClose?: ()
       </div>
 
       <div className="border-t p-3">
-        {!pending && msgs.length < 4 && (
-          <div className="mb-2 flex flex-wrap gap-1.5">
+        {!pending && (
+          <div className="-mx-3 mb-2 flex gap-1.5 overflow-x-auto px-3 pb-0.5">
             {suggestions(account).map((s) => (
-              <button key={s} onClick={() => submit(s)} className="cursor-pointer rounded bg-indigo-50 px-2 py-1 text-xs text-indigo-600 transition-colors hover:bg-indigo-100">{s}</button>
+              <button key={s} onClick={() => submit(s)} className="shrink-0 cursor-pointer rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs text-indigo-600 transition-colors hover:bg-indigo-100">{s}</button>
             ))}
           </div>
         )}
@@ -190,9 +196,9 @@ function Bubble({ role, text }: { role: string; text: string }) {
     <div className={cn("flex items-start gap-2", mine && "flex-row-reverse")}>
       {!mine && <Logo size="sm" />}
       <div className={cn(
-        "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
-        mine ? "bg-brand-gradient text-white" : "border bg-card shadow-sm",
-      )}>{mine ? text : text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/^#{1,4}\s+/gm, "")}</div>
+        "max-w-[85%] break-words rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
+        mine ? "whitespace-pre-wrap bg-brand-gradient text-white" : "border bg-card shadow-sm",
+      )}>{mine ? text : <Markdown text={text} />}</div>
     </div>
   );
 }

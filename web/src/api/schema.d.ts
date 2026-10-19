@@ -1487,6 +1487,12 @@ export interface components {
              * @default
              */
             hint: string;
+            /**
+             * From Chat
+             * @description 在小媒对话里点的「写这篇」：把这次写稿记进对话，进度和结果卡片留在对话里
+             * @default false
+             */
+            from_chat: boolean;
         };
     };
     responses: never;

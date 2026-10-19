@@ -11,13 +11,14 @@ import { SourcesDialog } from "../components/SourcesDialog";
 import { TopicsPanel } from "../components/TopicsPanel";
 import { Avatar, Button, Empty, Spinner, Tabs } from "../components/ui";
 
-export type Tab = "contents" | "topics" | "bench" | "config";
+export type Tab = "chat" | "contents" | "topics" | "bench" | "config";
 
-/** 账号工作台：左边是草稿/选题/设定，右边小媒常驻（手机上是右下角按钮打开的全屏对话）。 */
+/** 账号工作台：默认就是和小媒对话（想做什么直接说，结果以卡片出现在对话里）；
+ * 草稿/选题/对标/设定是旁边的页签，打开它们时小媒在右侧常驻（手机上是右下角按钮）。 */
 export function WorkspacePage() {
   const { id = "" } = useParams();
   const [sp, setSp] = useSearchParams();
-  const tab = (sp.get("tab") as Tab) || "contents";
+  const tab = (sp.get("tab") as Tab) || "chat";
   const setTab = (t: Tab) => setSp({ tab: t });
   const { data: account, isLoading } = useAccount(id);
   const { data: jobs = [] } = useActiveJobs(id);
@@ -50,6 +51,7 @@ export function WorkspacePage() {
       value={tab}
       onChange={setTab}
       items={[
+        { value: "chat", label: "小媒", icon: <MessageCircle /> },
         { value: "contents", label: "草稿", icon: <FileText />, count: pending },
         { value: "topics", label: "选题", icon: <TrendingUp />, count: fresh },
         { value: "bench", label: "对标", icon: <Copy /> },
@@ -71,12 +73,19 @@ export function WorkspacePage() {
             </div>
           </div>
           <div className="ml-auto hidden md:block">{tabs}</div>
-          <Button variant="outline" size="sm" className="ml-auto md:ml-2" onClick={() => setSourcesOpen(true)}><KeyRound /><span className="hidden sm:inline">数据来源</span></Button>
+          <Button variant="outline" size="sm" className="ml-auto md:ml-2" onClick={() => setSourcesOpen(true)}><KeyRound /><span className="hidden sm:inline">连接平台</span></Button>
         </div>
         <div className="overflow-x-auto px-4 pb-3 md:hidden">{tabs}</div>
       </header>
       {sourcesOpen && <SourcesDialog onClose={() => setSourcesOpen(false)} />}
 
+      {tab === "chat" ? (
+        <main className="flex min-h-0 flex-1 justify-center p-0 sm:p-6">
+          <div className="flex min-h-0 w-full max-w-3xl overflow-hidden border-y bg-card sm:rounded-xl sm:border-2">
+            <ChatPanel account={account} wide />
+          </div>
+        </main>
+      ) : (
       <div className="flex min-h-0 flex-1">
         <main className="min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
@@ -93,14 +102,15 @@ export function WorkspacePage() {
           </div>
         </aside>
       </div>
+      )}
 
       {/* 窄屏：小媒收进右下角按钮 */}
-      <button
+      {tab !== "chat" && <button
         onClick={() => setChatOpen(true)}
         className="fixed bottom-5 right-5 z-40 flex cursor-pointer items-center gap-2 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 px-4 py-3 text-sm font-medium text-white shadow-lg shadow-indigo-500/30 lg:hidden"
       >
         <MessageCircle className="size-4" />问小媒
-      </button>
+      </button>}
       {chatOpen && (
         <div className="fixed inset-0 z-[90] flex bg-black/30 lg:hidden" onClick={() => setChatOpen(false)}>
           <div className="ml-auto h-full w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>

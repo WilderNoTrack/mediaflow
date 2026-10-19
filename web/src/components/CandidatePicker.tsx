@@ -12,12 +12,18 @@ const fmt = (n?: number) => (n == null ? "" : n >= 10000 ? `${(n / 10000).toFixe
 const uid = (u: string) => u.match(/\/user\/profile\/([0-9a-zA-Z]{16,32})/)?.[1] ?? "";
 
 /** 已经在对标的账号（按主页 ID 或名字认） */
+/** 爆款率说成人话：「十篇约 3 篇爆款」（爆款 = 点赞超过平时 3 倍） */
+export const hitText = (rate: number) => {
+  const n = Math.round(rate * 10);
+  return n >= 1 ? `十篇约 ${n} 篇爆款` : "爆款较少";
+};
+
 export function isBenchmarked(account: Account, c: Pick<Candidate, "name" | "url">) {
   const id = uid(c.url);
   return account.benchmarks.some((b) => b.creator_name === c.name || (id && (uid(b.creator_url) === id || uid(b.target) === id)));
 }
 
-/** 对标候选卡片：勾选 1-3 个，点「学习选中的」开始拆解。工作台「对标」页和小媒对话里共用。 */
+/** 对标候选卡片：勾选 1-3 个，点「学习选中的」开始学。工作台「对标」页和小媒对话里共用。 */
 export function CandidatePicker({ account, candidates, compact, onStarted }: {
   account: Account; candidates: Candidate[]; compact?: boolean; onStarted?: () => void;
 }) {
@@ -50,8 +56,8 @@ export function CandidatePicker({ account, candidates, compact, onStarted }: {
                     {c.level && <Badge className="shrink-0 bg-indigo-50 text-[10px] text-indigo-600">{c.level}</Badge>}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
-                    {[c.fans && `${c.fans} 粉`, c.median_likes != null && `中位赞 ${fmt(c.median_likes)}`,
-                      c.hit_rate != null && `爆款率 ${Math.round(c.hit_rate * 100)}%`, c.per_week && `周更 ${c.per_week}`].filter(Boolean).join(" · ")}
+                    {[c.fans && `${c.fans} 粉`, c.median_likes != null && `平时点赞 ${fmt(c.median_likes)}`,
+                      c.hit_rate != null && hitText(c.hit_rate), c.per_week && `周更 ${c.per_week}`].filter(Boolean).join(" · ")}
                   </div>
                 </div>
                 {done ? <Badge className="shrink-0 bg-emerald-50 text-emerald-600"><Check className="size-3" />在学了</Badge> : (

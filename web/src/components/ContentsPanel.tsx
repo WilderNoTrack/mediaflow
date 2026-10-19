@@ -106,8 +106,8 @@ function DraftRow({ d, selecting, selected, onClick }: { d: Draft; selecting: bo
         {!selecting && <Badge className={s.cls}>{s.label}</Badge>}
       </div>
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        {d.needs_attention && <Badge className="bg-amber-100 text-[10px] text-amber-700"><AlertTriangle className="size-2.5" />未达质检线</Badge>}
-        {d.score != null && !d.needs_attention && <Badge className="bg-indigo-50 text-[10px] text-indigo-600">质检 {d.score.toFixed(1)}/10</Badge>}
+        {d.needs_attention && <Badge className="bg-amber-100 text-[10px] text-amber-700"><AlertTriangle className="size-2.5" />还差点意思</Badge>}
+        {d.score != null && !d.needs_attention && <Badge className="bg-indigo-50 text-[10px] text-indigo-600">AI 打分 {d.score.toFixed(1)}</Badge>}
         {d.trigger === "auto" && <Badge className="bg-purple-50 text-[10px] text-purple-600">自动运营</Badge>}
       </div>
       <div className="mb-2 flex gap-3">

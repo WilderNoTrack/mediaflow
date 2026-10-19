@@ -24,7 +24,7 @@ export function SourcesDialog({ onClose }: { onClose: () => void }) {
     <Modal className="max-w-xl" onClose={onClose}>
       <div className="flex items-start justify-between border-b px-5 py-4">
         <div>
-          <div className="flex items-center gap-2 font-semibold"><KeyRound className="size-4 text-indigo-500" />数据来源</div>
+          <div className="flex items-center gap-2 font-semibold"><KeyRound className="size-4 text-indigo-500" />连接平台</div>
           <p className="mt-0.5 text-xs text-muted-foreground">连上的平台能按关键词搜、能分析博主；没连的退回热榜。登录信息只存在这台电脑上。</p>
         </div>
         <button onClick={onClose} className="cursor-pointer rounded-lg p-1.5 text-muted-foreground hover:bg-muted" aria-label="关闭"><X className="size-4" /></button>
