@@ -111,8 +111,12 @@ function DraftRow({ d, selecting, selected, onClick }: { d: Draft; selecting: bo
         {d.trigger === "auto" && <Badge className="bg-purple-50 text-[10px] text-purple-600">自动运营</Badge>}
       </div>
       <div className="mb-2 flex gap-3">
-        {d.cover_url && (
+        {d.cover_url ? (
           <div className="h-[75px] w-14 shrink-0 overflow-hidden rounded-lg bg-muted"><img src={d.cover_url} alt="" className="size-full object-cover" /></div>
+        ) : d.images_busy > 0 && (
+          <div className="flex h-[75px] w-14 shrink-0 flex-col items-center justify-center gap-1 rounded-lg bg-indigo-50 text-[10px] text-indigo-600">
+            <Spinner className="size-3" />出图中<span>{d.images_done}/{d.images_total}</span>
+          </div>
         )}
         <p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">{d.body}</p>
       </div>

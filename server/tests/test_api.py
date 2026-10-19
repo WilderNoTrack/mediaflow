@@ -117,3 +117,27 @@ def test_image_settings_saved_from_ui(client):
     assert all(c["key"] != "image_api_key" for c in client.get("/api/settings/credentials").json())
     r = client.put("/api/settings/image", json={"api_key": "", "model": ""}).json()
     assert not r["configured"] and r["model"] == "gpt-image-2.5"
+
+
+async def test_images_not_generated_twice_and_recovered_after_restart(client, session, llm):
+    from mediaflow.domain.models import DraftImage, ImageStatus
+    from mediaflow.jobs.queue import recover_interrupted
+
+    a = make_account(client)
+    d = await _make_draft(session, llm, a["id"])
+    out = client.get(f"/api/drafts/{d.id}").json()
+    assert out["images_total"] == 2 and out["images_busy"] == 0  # 没配 Key：skipped
+    j1 = client.post(f"/api/drafts/{d.id}/images").json()
+    j2 = client.post(f"/api/drafts/{d.id}/images").json()
+    assert j1["id"] == j2["id"]  # 正在出就不再派第二个任务
+    assert client.get(f"/api/accounts/{a['id']}/drafts").json()[0]["images_busy"] == 2
+
+    session.expire_all()
+    img = session.exec(select(DraftImage).where(DraftImage.draft_id == d.id, DraftImage.idx == 0)).one()
+    img.status = ImageStatus.running
+    session.add(img)
+    session.commit()
+    recover_interrupted()  # 任务还在排队：pending 的留给它，running 的标失败
+    session.expire_all()
+    st = {i.idx: i.status for i in session.exec(select(DraftImage).where(DraftImage.draft_id == d.id)).all()}
+    assert st == {0: ImageStatus.failed, 1: ImageStatus.pending}

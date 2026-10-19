@@ -150,6 +150,10 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
   const cur = d.images[i];
   const done = d.images.filter((x) => x.status === "done").length;
   const skipped = d.images.length > 0 && d.images.every((x) => x.status === "skipped");
+  const busy = d.images.filter((x) => x.status === "pending" || x.status === "running").length;
+  const failedImgs = d.images.filter((x) => x.status === "failed");
+  const failed = failedImgs.length;
+  const firstErr = failedImgs[0]?.error?.slice(0, 40);
   const { data: sys } = useSystem();
   const [setup, setSetup] = useState(false);
   return (
@@ -166,6 +170,24 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
               <span className="flex-1">还没配置 AI 配图，所以没出图。填一个生图 Key 就能自动出图，也可以先导出文案。</span>
               <Button size="xs" variant="outline" onClick={() => setSetup(true)}>去配置</Button>
             </div>)}
+        {busy > 0 && (
+          <div className="rounded-lg bg-indigo-50 px-3 py-2.5 text-xs text-indigo-700">
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <Spinner className="size-3" /><span className="flex-1">正在出图：好了 {done}/{d.images.length} 张</span>
+              <span className="text-indigo-500">几张一起出，一般 1-2 分钟</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-indigo-100">
+              <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-700"
+                style={{ width: `${Math.max(6, (done / d.images.length) * 100)}%` }} />
+            </div>
+          </div>
+        )}
+        {failed > 0 && busy === 0 && (
+          <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+            <span className="flex-1">有 {failed} 张没出来{firstErr && `：${firstErr}`}</span>
+            <Button size="xs" variant="outline" loading={act.images.isPending} onClick={() => act.images.mutate(undefined)}>补出这 {failed} 张</Button>
+          </div>
+        )}
         {d.images.length > 1 && (
           <div className="flex gap-1.5 overflow-x-auto pb-1">
             {d.images.map((im, k) => (
@@ -185,13 +207,20 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
             </div>
             <div className="flex items-start gap-2">
               <p className="flex-1 rounded-md bg-input-background px-3 py-2 text-xs leading-relaxed">{cur.prompt}</p>
-              <Button variant="outline" size="sm" className="px-2" title="重新生成这张" loading={act.images.isPending} onClick={() => act.images.mutate(cur.idx)}>
-                {!act.images.isPending && <RefreshCw className="text-indigo-500" />}
+              <Button variant="outline" size="sm" className="px-2" title={cur.status === "running" || cur.status === "pending" ? "这张正在出" : "重新出这张"}
+                disabled={cur.status === "running" || cur.status === "pending"} loading={act.images.isPending && act.images.variables === cur.idx}
+                onClick={() => act.images.mutate(cur.idx)}>
+                {!(act.images.isPending && act.images.variables === cur.idx) && <RefreshCw className="text-indigo-500" />}
               </Button>
             </div>
           </div>
         ) : <p className="text-xs text-muted-foreground">这篇没有配图描述</p>}
-        <Button variant="outline" size="sm" className="w-full" loading={act.images.isPending} onClick={() => act.images.mutate(undefined)}><RefreshCw />全部重新生成</Button>
+        {!skipped && d.images.length > 0 && (
+          <Button variant="outline" size="sm" className="w-full" disabled={busy > 0} loading={act.images.isPending && act.images.variables === "all"}
+            onClick={() => confirm(`${d.images.length} 张全部重新出？会用掉 ${d.images.length} 次生图额度`) && act.images.mutate("all")}>
+            <RefreshCw />{busy > 0 ? "出图中…" : "全部重新出"}
+          </Button>
+        )}
         <ErrorText error={act.images.error} />
       </CardBody>
     </Card>

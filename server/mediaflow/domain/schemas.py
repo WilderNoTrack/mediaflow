@@ -197,6 +197,9 @@ class DraftOut(BaseModel):
     needs_attention: bool
     edited: bool
     cover_url: str | None
+    images_total: int = 0
+    images_done: int = 0
+    images_busy: int = Field(0, description="排队中或正在出的配图张数")
     created_at: datetime
     updated_at: datetime
 

@@ -179,7 +179,15 @@ def recover_interrupted() -> int:
         for j in stuck:
             j.status, j.error, j.finished_at = JobStatus.failed, "程序重启，任务被中断", utcnow()
             s.add(j)
-        from mediaflow.domain.models import Benchmark, BenchmarkStatus
+        from mediaflow.domain.models import Benchmark, BenchmarkStatus, DraftImage, ImageStatus
+        # 出图出到一半重启：没有排队任务接手的配图标成失败，不然草稿页会一直转圈
+        queued = {j.payload.get("draft_id") for j in s.exec(select(Job).where(
+            Job.kind == JobKind.generate_images, Job.status == JobStatus.queued)).all()}
+        for img in s.exec(select(DraftImage).where(col(DraftImage.status).in_((ImageStatus.pending, ImageStatus.running)))).all():
+            if img.status == ImageStatus.running or img.draft_id not in queued:
+                img.status, img.error = ImageStatus.failed, "程序重启，这张没出完，点重新生成就好"
+                img.updated_at = utcnow()
+                s.add(img)
         for b in s.exec(select(Benchmark).where(Benchmark.status == BenchmarkStatus.analyzing)).all():
             b.status, b.error = BenchmarkStatus.failed, "程序重启，拆解被中断，重新试一次就好"
             s.add(b)

@@ -37,9 +37,19 @@ function JobRow({ job, onClose }: { job: Job; onClose: () => void }) {
   const active = isActive(job);
 
   if (job.kind === "generate_images") {
+    const prog = [...events].reverse().find((e) => (e.data as { total?: number })?.total)?.data as { done: number; total: number } | undefined;
+    const imgDraft = (job.payload as { draft_id?: string }).draft_id;
     return (
-      <div className="flex items-center gap-2 rounded-xl border bg-card px-4 py-2.5 text-sm">
-        <Loader2 className="size-4 animate-spin text-indigo-500" />正在生成配图<span className="truncate text-xs text-muted-foreground">{last?.message}</span>
+      <div className="rounded-xl border bg-card px-4 py-2.5 text-sm">
+        <div className="flex items-center gap-2">
+          <Loader2 className="size-4 animate-spin text-indigo-500" />
+          <span className="min-w-0 flex-1 truncate">正在出图{prog && ` ${prog.done}/${prog.total} 张`}<span className="ml-2 text-xs text-muted-foreground">{last?.message}</span></span>
+          {imgDraft && <Link to={`/drafts/${imgDraft}`} className="shrink-0 font-medium text-indigo-600 hover:underline">看稿子 →</Link>}
+        </div>
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-indigo-50">
+          <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-700"
+            style={{ width: `${prog ? Math.max(6, (prog.done / prog.total) * 100) : 6}%` }} />
+        </div>
       </div>
     );
   }

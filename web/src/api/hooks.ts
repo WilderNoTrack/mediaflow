@@ -154,6 +154,7 @@ export const useDrafts = (id: string) =>
   useQuery({
     queryKey: ["drafts", id],
     queryFn: () => unwrap(api.GET("/api/accounts/{account_id}/drafts", { params: { path: { account_id: id } } })),
+    refetchInterval: (q) => (q.state.data?.some((d) => d.images_busy > 0) ? 4000 : false), // 出图中：列表里的封面跟着更新
   });
 
 export const useDraft = (id: string) =>
@@ -178,8 +179,10 @@ export function useDraftActions(id: string) {
     feedback: useMutation({ mutationFn: (body: S["FeedbackIn"]) => unwrap(api.POST("/api/drafts/{draft_id}/feedback", { ...p, body })), onSuccess: inv }),
     learn: useMutation({ mutationFn: () => unwrap(api.POST("/api/drafts/{draft_id}/learn", p)) }),
     images: useMutation({
-      mutationFn: (idx?: number) =>
-        unwrap(api.POST("/api/drafts/{draft_id}/images", { params: { path: { draft_id: id }, query: { idx } } })),
+      mutationFn: (arg?: number | "all") =>
+        unwrap(api.POST("/api/drafts/{draft_id}/images", {
+          params: { path: { draft_id: id }, query: arg === "all" ? { all: true } : { idx: arg } },
+        })),
       onSuccess: inv,
     }),
     remove: useMutation({ mutationFn: () => unwrap(api.DELETE("/api/drafts/{draft_id}", p)), onSuccess: inv }),

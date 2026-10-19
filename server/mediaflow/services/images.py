@@ -194,7 +194,14 @@ async def generate_images(
         emit("warning", "没有配置配图服务（AI 配图 API Key），跳过配图", None)
         return {"done": 0, "failed": 0, "skipped": len(targets)}
 
-    provider = get_provider()
+    try:
+        provider = get_provider()
+    except ImageError as e:
+        for i in targets:
+            i.status, i.error = ImageStatus.failed, str(e)
+            session.add(i)
+        session.commit()
+        raise
     out_dir = get_settings().images_dir / draft_id
     out_dir.mkdir(parents=True, exist_ok=True)
     for img in targets:
@@ -205,24 +212,37 @@ async def generate_images(
     style = account.image_style if account else ""
     counter = {"done": 0, "failed": 0}
 
+    total = len(targets)
+
+    def progress() -> dict:
+        return {"done": counter["done"], "failed": counter["failed"], "total": total}
+
     async def one(img: DraftImage) -> None:
         async with sem:
-            emit("image", f"第 {img.idx + 1}/{len(images)} 张配图生成中…", {"idx": img.idx})
-            img.expanded_prompt = await _expand(llm, style, draft.title, img, len(images))
+            emit("image", f"第 {img.idx + 1} 张出图中…", {"idx": img.idx, **progress()})
             try:
+                img.expanded_prompt = await _expand(llm, style, draft.title, img, len(images))
                 data = await provider.generate(img.expanded_prompt)
                 name = f"{img.idx:02d}-{uuid4().hex[:8]}.png"
                 (out_dir / name).write_bytes(data)
                 img.path, img.status = f"{draft_id}/{name}", ImageStatus.done
                 counter["done"] += 1
-                emit("image", f"第 {img.idx + 1} 张好了", {"idx": img.idx})
+                emit("image", f"第 {img.idx + 1} 张好了", {"idx": img.idx, **progress()})
             except Exception as e:  # noqa: BLE001 - 单张失败不影响其他张
                 img.status, img.error = ImageStatus.failed, str(e)[:300]
                 counter["failed"] += 1
-                emit("warning", f"第 {img.idx + 1} 张配图失败：{e}", {"idx": img.idx})
+                emit("warning", f"第 {img.idx + 1} 张配图失败：{e}", {"idx": img.idx, **progress()})
             img.updated_at = utcnow()
             session.add(img)
             session.commit()
 
-    await asyncio.gather(*(one(i) for i in targets))
+    try:
+        await asyncio.gather(*(one(i) for i in targets))
+    finally:  # 任务被取消/出意外时，别把图留在「生成中」
+        left = [i for i in targets if i.status in (ImageStatus.pending, ImageStatus.running)]
+        for i in left:
+            i.status, i.error = ImageStatus.failed, i.error or "没出完，点重新生成"
+            session.add(i)
+        if left:
+            session.commit()
     return {**counter, "skipped": 0}

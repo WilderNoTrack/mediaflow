@@ -7,12 +7,12 @@ from mediaflow.agents.learning import suggest_rules
 from mediaflow.api.deps import owned_account, owned_draft
 from mediaflow.db import get_session
 from mediaflow.domain.models import (
-    Account, Draft, DraftImage, DraftStatus, Feedback, ImageStatus, JobKind, utcnow,
+    Account, Draft, DraftImage, DraftStatus, Feedback, ImageStatus, Job, JobKind, utcnow,
 )
 from mediaflow.domain.schemas import (
     DraftDetail, DraftOut, DraftPatch, FeedbackIn, ImageOut, JobOut, LearnOut, ReviseIn, WriteIn,
 )
-from mediaflow.jobs.queue import enqueue
+from mediaflow.jobs.queue import ACTIVE, enqueue
 from mediaflow.llm.client import get_llm
 from mediaflow.services.export import build_zip, post_text
 
@@ -30,7 +30,9 @@ def _images(s: Session, draft_id: str) -> list[DraftImage]:
 def _out(s: Session, d: Draft, detail: bool = False) -> DraftOut | DraftDetail:
     imgs = _images(s, d.id)
     cover = next((_img_url(i) for i in imgs if _img_url(i)), None)
-    base = {**d.model_dump(), "edited": d.title != d.original_title or d.body != d.original_body, "cover_url": cover}
+    base = {**d.model_dump(), "edited": d.title != d.original_title or d.body != d.original_body, "cover_url": cover,
+            "images_total": len(imgs), "images_done": sum(i.status == ImageStatus.done for i in imgs),
+            "images_busy": sum(i.status in (ImageStatus.pending, ImageStatus.running) for i in imgs)}
     if not detail:
         return DraftOut(**base)
     return DraftDetail(**base, images=[
@@ -111,13 +113,21 @@ async def learn(d: Draft = Depends(owned_draft), s: Session = Depends(get_sessio
 
 
 @router.post("/api/drafts/{draft_id}/images", response_model=JobOut, status_code=202)
-def regenerate_images(idx: int | None = None, d: Draft = Depends(owned_draft), s: Session = Depends(get_session)):
+def regenerate_images(idx: int | None = None, all: bool = False, d: Draft = Depends(owned_draft),  # noqa: A002
+                      s: Session = Depends(get_session)):
+    """idx=某一张重出；不传 idx 补出没出好的；all=true 全部重出。"""
     imgs = _images(s, d.id)
     if idx is not None and not any(i.idx == idx for i in imgs):
         raise HTTPException(404, "没有这张图")
+    busy = {i.idx for i in imgs if i.status in (ImageStatus.pending, ImageStatus.running)}
+    running = next((j for j in s.exec(select(Job).where(Job.kind == JobKind.generate_images, col(Job.status).in_(ACTIVE))).all()
+                    if j.payload.get("draft_id") == d.id), None)
+    if running and (idx is None or idx in busy):
+        # 已经在出了：别再派一个任务，不然同一张图会出两遍、扣两次额度
+        return JobOut(**running.model_dump())
     for i in imgs:
         if idx is None or i.idx == idx:
-            if idx is not None or i.status != ImageStatus.done:
+            if idx is not None or all or i.status != ImageStatus.done:
                 i.status = ImageStatus.pending
                 s.add(i)
     s.commit()

@@ -322,7 +322,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Regenerate Images */
+        /**
+         * Regenerate Images
+         * @description idx=某一张重出；不传 idx 补出没出好的；all=true 全部重出。
+         */
         post: operations["regenerate_images_api_drafts__draft_id__images_post"];
         delete?: never;
         options?: never;
@@ -989,6 +992,22 @@ export interface components {
             /** Cover Url */
             cover_url: string | null;
             /**
+             * Images Total
+             * @default 0
+             */
+            images_total: number;
+            /**
+             * Images Done
+             * @default 0
+             */
+            images_done: number;
+            /**
+             * Images Busy
+             * @description 排队中或正在出的配图张数
+             * @default 0
+             */
+            images_busy: number;
+            /**
              * Created At
              * Format: date-time
              */
@@ -1037,6 +1056,22 @@ export interface components {
             edited: boolean;
             /** Cover Url */
             cover_url: string | null;
+            /**
+             * Images Total
+             * @default 0
+             */
+            images_total: number;
+            /**
+             * Images Done
+             * @default 0
+             */
+            images_done: number;
+            /**
+             * Images Busy
+             * @description 排队中或正在出的配图张数
+             * @default 0
+             */
+            images_busy: number;
             /**
              * Created At
              * Format: date-time
@@ -2187,6 +2222,7 @@ export interface operations {
         parameters: {
             query?: {
                 idx?: number | null;
+                all?: boolean;
             };
             header?: never;
             path: {
