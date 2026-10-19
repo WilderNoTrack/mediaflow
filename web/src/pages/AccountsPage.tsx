@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useAccounts, useClone, useCreateAccount, useCredentials, useDeleteAccount, useSystem } from "../api/hooks";
 import { Header } from "../components/Header";
 import { ImageSettingsDialog } from "../components/ImageSettingsDialog";
+import { LlmKeyDialog } from "../components/LlmKeyDialog";
 import { SourcesDialog } from "../components/SourcesDialog";
 import { Avatar, Badge, Button, Empty, ErrorText, Input, Label, Logo, Modal, Spinner, Textarea } from "../components/ui";
 import { cn, timeAgo } from "../lib/utils";
@@ -16,6 +17,7 @@ export function AccountsPage() {
   const [open, setOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [imageOpen, setImageOpen] = useState(false);
+  const [llmOpen, setLlmOpen] = useState(false);
   const [form, setForm] = useState({ name: "", theme: "" });
   const [mode, setMode] = useState<"blank" | "clone">("blank");
   const [target, setTarget] = useState("");
@@ -50,9 +52,10 @@ export function AccountsPage() {
       />
       {sourcesOpen && <SourcesDialog onClose={() => setSourcesOpen(false)} />}
       {imageOpen && <ImageSettingsDialog onClose={() => setImageOpen(false)} />}
+      {llmOpen && <LlmKeyDialog onClose={() => setLlmOpen(false)} />}
 
       <div className="container mx-auto max-w-5xl px-6 py-10">
-        <Setup onSources={() => setSourcesOpen(true)} onImage={() => setImageOpen(true)} />
+        <Setup onSources={() => setSourcesOpen(true)} onImage={() => setImageOpen(true)} onLlm={() => setLlmOpen(true)} />
 
         <div className="mb-8 flex items-end justify-between">
           <div>
@@ -178,13 +181,13 @@ export function AccountsPage() {
 }
 
 /** 首次使用的准备清单：缺什么一目了然，全部就绪后自动消失 */
-function Setup({ onSources, onImage }: { onSources: () => void; onImage: () => void }) {
+function Setup({ onSources, onImage, onLlm }: { onSources: () => void; onImage: () => void; onLlm: () => void }) {
   const { data: sys } = useSystem();
   const { data: creds = [] } = useCredentials();
   if (!sys) return null;
   const platforms = new Set(creds.filter((c) => c.configured).map((c) => c.platform));
   const steps = [
-    { done: sys.llm_configured, title: "填 DeepSeek API Key", desc: "写稿、对话都靠它。在 server/.env 里填 DEEPSEEK_API_KEY 后重启。", must: true },
+    { done: sys.llm_configured, title: "填 DeepSeek Key", desc: "写文案、和小媒聊天都靠它，按用量计费。照着弹窗里 3 步做，1 分钟搞定。", must: true, action: <Button size="xs" variant="gradient" onClick={onLlm}>填 Key</Button> },
     { done: platforms.size >= 2, title: `连接平台（已连 ${platforms.size} 个平台）`, desc: "连上小红书、抖音等，选题和对标才有真实数据；不连也能用热榜。", action: <Button size="xs" variant="outline" onClick={onSources}>去连接</Button> },
     { done: sys.image_configured, title: "AI 配图（可选）", desc: "填一个生图 Key，写完稿自动出 3:4 配图；不配也能用，只是没有图。", action: <Button size="xs" variant="outline" onClick={onImage}>去配置</Button> },
   ];

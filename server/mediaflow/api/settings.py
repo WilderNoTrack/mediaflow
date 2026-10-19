@@ -153,6 +153,65 @@ class ImageSettingsIn(BaseModel):
     use_refs: bool | None = None
 
 
+class LlmSettingsOut(BaseModel):
+    configured: bool
+    origin: str = Field(description="ui=界面里填的，env=环境变量，空=没配")
+
+
+class LlmSettingsIn(BaseModel):
+    api_key: str = Field(max_length=200, description="空字符串清除界面里填的 Key")
+
+
+class LlmTestOut(BaseModel):
+    ok: bool
+    seconds: float
+    error: str = ""
+
+
+def _llm_out() -> LlmSettingsOut:
+    stored = credentials._load()
+    origin = "ui" if stored.get("deepseek_api_key") else ("env" if get_settings().deepseek_api_key else "")
+    return LlmSettingsOut(configured=bool(origin), origin=origin)
+
+
+@router.get("/llm", response_model=LlmSettingsOut)
+def get_llm_settings():
+    return _llm_out()
+
+
+@router.put("/llm", response_model=LlmSettingsOut)
+async def update_llm_settings(body: LlmSettingsIn):
+    """先用这个 Key 实际问一句，能用才保存（填错了当场就知道）；空字符串清除。"""
+    key = body.api_key.strip()
+    if key:
+        r = await _try_llm(key)
+        if not r.ok:
+            raise HTTPException(400, r.error)
+    credentials.update({"deepseek_api_key": key})
+    return _llm_out()
+
+
+@router.post("/llm/test", response_model=LlmTestOut)
+async def test_llm(body: LlmSettingsIn):
+    return await _try_llm(body.api_key.strip() or None)
+
+
+async def _try_llm(key: str | None) -> LlmTestOut:
+    from mediaflow.llm.client import DeepSeekLLM, LLMError
+
+    t = time.monotonic()
+    try:
+        await DeepSeekLLM(api_key=key).complete([{"role": "user", "content": "回复「好」"}], temperature=0)
+    except LLMError as e:
+        msg = str(e)
+        if "401" in msg or "auth" in msg.lower() or "invalid" in msg.lower():
+            msg = "Key 不对：去 DeepSeek 后台重新复制一遍（以 sk- 开头）"
+        elif "402" in msg or "balance" in msg.lower():
+            msg = "DeepSeek 账户余额不足，先去充值"
+        return LlmTestOut(ok=False, seconds=round(time.monotonic() - t, 1), error=msg)
+    return LlmTestOut(ok=True, seconds=round(time.monotonic() - t, 1))
+
+
 class ImageTestOut(BaseModel):
     ok: bool
     model: str

@@ -25,8 +25,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     url = f"http://{a.host}:{a.port}"
     print(f"\n  MediaFlow 已启动 → {url}")
-    if not s.llm_configured:
-        print("  ⚠ 还没配置 DEEPSEEK_API_KEY：复制 server/.env.example 为 server/.env 并填写")
+    from mediaflow.llm.client import llm_configured
+
+    if not llm_configured():
+        print("  ⚠ 还没填 DeepSeek API Key：打开页面后在首页「开始之前」里填")
     if not WEB_DIST.exists():
         print("  ⚠ 没找到前端构建产物：先在 web/ 下运行 npm install && npm run build")
     print(f"  数据目录：{s.data_dir}\n")

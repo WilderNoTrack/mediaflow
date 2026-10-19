@@ -152,3 +152,31 @@ def test_write_from_chat_is_logged_in_chat(client):
     b = client.post("/api/accounts", json={"name": "b", "theme": "t"}).json()
     client.post(f"/api/accounts/{b['id']}/write", json={})
     assert client.get(f"/api/accounts/{b['id']}/chat").json() == []
+
+
+def test_llm_key_from_ui(client, monkeypatch):
+    from mediaflow.llm import client as llm_client
+    from mediaflow.llm.client import LLMError
+
+    seen = []
+
+    async def fake_complete(self, messages, **kw):
+        seen.append(self.client.api_key)
+        if self.client.api_key != "sk-good":
+            raise LLMError("DeepSeek 调用失败：Error code: 401 - Authentication Fails")
+        return llm_client.LLMResponse(content="好")
+
+    monkeypatch.setattr(llm_client.DeepSeekLLM, "complete", fake_complete)
+    from mediaflow.config import get_settings
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    get_settings.cache_clear()
+    assert client.get("/api/settings/llm").json()["configured"] is False
+    r = client.put("/api/settings/llm", json={"api_key": "sk-bad"})
+    assert r.status_code == 400 and "Key 不对" in r.json()["detail"]
+    assert client.get("/api/settings/llm").json()["configured"] is False
+    assert client.put("/api/settings/llm", json={"api_key": " sk-good "}).json() == {"configured": True, "origin": "ui"}
+    assert llm_client.llm_key() == "sk-good" and client.get("/api/system").json()["llm_configured"] is True
+    assert client.post("/api/settings/llm/test", json={"api_key": ""}).json()["ok"] is True  # 不传就测已保存的
+    assert seen == ["sk-bad", "sk-good", "sk-good"]
+    assert client.put("/api/settings/llm", json={"api_key": ""}).json()["configured"] is False

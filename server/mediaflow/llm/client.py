@@ -24,7 +24,7 @@ class LLMError(RuntimeError):
 
 class LLMNotConfigured(LLMError):
     def __init__(self) -> None:
-        super().__init__("还没有配置 DEEPSEEK_API_KEY，请在 server/.env 里填写后重启")
+        super().__init__("还没有填 DeepSeek API Key：回到首页，在「开始之前」里点「填 Key」")
 
 
 @dataclass
@@ -95,15 +95,16 @@ async def complete_json(
 
 
 class DeepSeekLLM:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, *, api_key: str | None = None) -> None:
         from openai import AsyncOpenAI
 
         s = settings or get_settings()
-        if not s.deepseek_api_key:
+        key = api_key or llm_key()
+        if not key:
             raise LLMNotConfigured()
         self.model = s.deepseek_model
         self.client = AsyncOpenAI(
-            api_key=s.deepseek_api_key,
+            api_key=key,
             base_url=s.deepseek_base_url,
             timeout=s.llm_timeout,
             max_retries=s.llm_max_retries,
@@ -148,6 +149,17 @@ class DeepSeekLLM:
 
 
 _llm_override: LLM | None = None
+
+
+def llm_key() -> str:
+    """界面里填的 Key 优先，没填用环境变量 DEEPSEEK_API_KEY。"""
+    from mediaflow import credentials
+
+    return credentials.get("deepseek_api_key")
+
+
+def llm_configured() -> bool:
+    return _llm_override is not None or bool(llm_key())
 
 
 def get_llm() -> LLM:

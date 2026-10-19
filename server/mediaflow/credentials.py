@@ -43,6 +43,8 @@ SPECS: list[CredSpec] = [
              "https://www.bilibili.com/"),
     CredSpec("bilibili_refresh_token", "bilibili", "B站刷新口令", "key", "扫码登录时自动保存，用于续期", "", hidden=True),
     CredSpec("bilibili_refreshed_at", "bilibili", "B站上次续期时间", "key", "", "", hidden=True),
+    CredSpec("deepseek_api_key", "llm", "DeepSeek API Key", "key", "写稿、对话用的模型 Key", "https://platform.deepseek.com/api_keys",
+             hidden=True),  # 在首页「开始之前」里单独填
     CredSpec("image_api_key", "image", "AI 配图 API Key", "key", "grsai 的 API Key", "https://grsai.ai/zh/dashboard/api-keys",
              hidden=True),  # 配图在单独的「AI 配图」设置里填，不出现在数据来源列表
     CredSpec("image_model", "image", "配图模型", "key", "", "", hidden=True),

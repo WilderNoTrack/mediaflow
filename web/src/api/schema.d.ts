@@ -596,6 +596,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/llm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Llm Settings */
+        get: operations["get_llm_settings_api_settings_llm_get"];
+        /**
+         * Update Llm Settings
+         * @description 先用这个 Key 实际问一句，能用才保存（填错了当场就知道）；空字符串清除。
+         */
+        put: operations["update_llm_settings_api_settings_llm_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/llm/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Llm */
+        post: operations["test_llm_api_settings_llm_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/image": {
         parameters: {
             query?: never;
@@ -1259,6 +1297,36 @@ export interface components {
             rules: string[];
             /** Summary */
             summary: string;
+        };
+        /** LlmSettingsIn */
+        LlmSettingsIn: {
+            /**
+             * Api Key
+             * @description 空字符串清除界面里填的 Key
+             */
+            api_key: string;
+        };
+        /** LlmSettingsOut */
+        LlmSettingsOut: {
+            /** Configured */
+            configured: boolean;
+            /**
+             * Origin
+             * @description ui=界面里填的，env=环境变量，空=没配
+             */
+            origin: string;
+        };
+        /** LlmTestOut */
+        LlmTestOut: {
+            /** Ok */
+            ok: boolean;
+            /** Seconds */
+            seconds: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
         };
         /** NoteOut */
         NoteOut: {
@@ -2757,6 +2825,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QrPollOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_llm_settings_api_settings_llm_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmSettingsOut"];
+                };
+            };
+        };
+    };
+    update_llm_settings_api_settings_llm_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LlmSettingsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmSettingsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_llm_api_settings_llm_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LlmSettingsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmTestOut"];
                 };
             };
             /** @description Validation Error */

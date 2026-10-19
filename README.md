@@ -25,7 +25,7 @@ cd web && npm install && npm run build && cd ..
 
 # 2. 配置并启动
 cd server
-cp .env.example .env        # 填入 DEEPSEEK_API_KEY；配图密钥可选
+cp .env.example .env        # 可选：DeepSeek Key 也可以打开页面后在首页「开始之前」里填
 uv run mediaflow            # 自动打开 http://127.0.0.1:8765
 ```
 
@@ -35,7 +35,7 @@ uv run mediaflow            # 自动打开 http://127.0.0.1:8765
 
 | 变量 | 必填 | 说明 |
 | --- | --- | --- |
-| `DEEPSEEK_API_KEY` | 是 | 写稿、评审、对话都用 DeepSeek |
+| `DEEPSEEK_API_KEY` | 是 | 写稿、评审、对话都用 DeepSeek；也可以在页面里填（填的时候会先验证能不能用） |
 | `IMAGE_API_KEY` | 否 | AI 配图；不填则只生成文案 |
 | `MEDIAFLOW_DATA_DIR` | 否 | 数据目录，默认 `server/data` |
 | `MEDIAFLOW_PORT` | 否 | 端口，默认 8765 |
