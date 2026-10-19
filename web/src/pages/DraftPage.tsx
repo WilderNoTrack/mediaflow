@@ -229,8 +229,10 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
 
 const DIM: Record<string, string> = { hook: "吸引力", value: "价值感", voice: "人设口吻", fit: "贴合定位", rules: "守规矩" };
 
+type Item = { level: "must" | "nice"; where?: string; quote?: string; problem: string; fix?: string };
 type Ev = {
   dimensions?: Record<string, number>; violated_rules?: string[]; issues?: string[]; suggestions?: string[];
+  items?: Item[]; resolved?: number; edits?: { applied: number; skipped: number; unfixed?: string[] };
   history?: { attempt: number; score: number | null; problems: number }[];
 };
 const PASS = 7;
@@ -248,9 +250,13 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
   const lastJob = jobs.find((j) => j.kind === "revise_draft" && (j.payload as { draft_id?: string }).draft_id === d.id);
   if (!dims.length && !d.check_issues.length) return null;
 
-  const must = [...d.check_issues, ...(ev.violated_rules ?? []).map((r) => `没遵守账号规则：${r}`)];
-  const better = ev.issues ?? [];
-  const tips = ev.suggestions ?? [];
+  const items = ev.items;
+  const hard = [...d.check_issues, ...(ev.violated_rules ?? []).map((r) => `没遵守账号规则：${r}`)];
+  const mustItems = items?.filter((i) => i.level === "must") ?? [];
+  const niceItems = items?.filter((i) => i.level !== "must") ?? [];
+  const must = [...hard, ...mustItems.map((i) => i.problem)];
+  const better = items ? niceItems.map((i) => i.problem) : ev.issues ?? [];
+  const tips = items ? [] : ev.suggestions ?? [];
   const history = (ev.history ?? []).filter((h) => h.score != null);
   const rounds = Math.max(0, d.attempts - 1);
   const passed = !d.needs_attention;
@@ -297,15 +303,22 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
         {must.length > 0 && (
           <div>
             <div className="mb-1.5 text-xs font-medium text-red-600">必须改（{must.length}）</div>
-            <ul className="space-y-1.5">{must.map((x) => <li key={x} className="flex gap-2 text-red-700"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{x}</li>)}</ul>
+            <ul className="space-y-1.5">
+              {hard.map((x) => <li key={x} className="flex gap-2 text-red-700"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{x}</li>)}
+              {mustItems.map((x, k) => <ItemRow key={k} it={x} tone="red" />)}
+            </ul>
           </div>
         )}
         {better.length > 0 && (
           <div>
-            <div className="mb-1.5 text-xs font-medium text-amber-700">可以更好（{better.length}）</div>
-            <ul className="space-y-1.5">{better.map((x) => <li key={x} className="flex gap-2 text-amber-800"><span className="shrink-0">·</span>{x}</li>)}</ul>
+            <div className="mb-1.5 text-xs font-medium text-amber-700">可以更好（{better.length}）<span className="ml-1 font-normal text-muted-foreground">不改也能发</span></div>
+            <ul className="space-y-1.5">
+              {items ? niceItems.map((x, k) => <ItemRow key={k} it={x} tone="amber" />)
+                : better.map((x) => <li key={x} className="flex gap-2 text-amber-800"><span className="shrink-0">·</span>{x}</li>)}
+            </ul>
           </div>
         )}
+        {(ev.resolved ?? 0) > 0 && <p className="text-xs text-emerald-700">✓ 上一轮提的问题已经改好 {ev.resolved} 处</p>}
         {tips.length > 0 && (
           <div>
             <button className="cursor-pointer text-xs font-medium text-indigo-600 hover:underline" onClick={() => setShowTips((v) => !v)}>
@@ -321,7 +334,7 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
           ) : (
             <>
               <div className="text-xs text-muted-foreground">
-                {passed ? "还想调？说一句要求，AI 在这版上改，改得更好才替换。" : "让 AI 按上面的意见在这版上再改（最多 2 轮，改得更好才替换，不会越改越差）。也可以自己改完点保存。"}
+                {passed ? "还想调？说一句要求，AI 只改相关的句子，改得更好才替换。" : "让 AI 照上面的意见逐条改：只动被点名的句子，你亲手改过的句子不会动；改得更好才替换。"}
               </div>
               <div className="flex gap-2">
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="补充要求（可选），例如：开头更直接、再短一点"
@@ -430,5 +443,19 @@ function PhonePreview({ d, title, body, tags, idx, onIdx }: {
         <Heart className="size-4" /><Star className="size-4" /><MessageCircle className="size-4" />
       </div>
     </div>
+  );
+}
+
+/** 一条质检意见：位置 + 原文 + 问题 + 改法 */
+function ItemRow({ it, tone }: { it: Item; tone: "red" | "amber" }) {
+  return (
+    <li className={cn("rounded-lg px-3 py-2", tone === "red" ? "bg-red-50/60 text-red-800" : "bg-amber-50/60 text-amber-900")}>
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        {it.where && <span className={cn("shrink-0 rounded px-1.5 text-[11px] font-medium", tone === "red" ? "bg-red-100" : "bg-amber-100")}>{it.where}</span>}
+        <span>{it.problem}</span>
+      </div>
+      {it.quote && <div className="mt-1 truncate text-xs text-muted-foreground">原文：「{it.quote}」</div>}
+      {it.fix && <div className="mt-0.5 text-xs text-indigo-700">改法：{it.fix}</div>}
+    </li>
   );
 }

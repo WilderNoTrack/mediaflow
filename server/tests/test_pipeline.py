@@ -165,3 +165,37 @@ def test_tag_rule_from_benchmark_does_not_fight_hard_check():
     rules = ["标题和正文都带单一核心话题标签（如#存钱#），不堆砌无关标签"]
     assert not any("标签" in i for i in hard_check("标题", body, ["存钱"], ["封面"], rules))
     assert any("标签" in i for i in hard_check("标题", body, ["存钱"], ["封面"], []))
+
+
+def test_apply_edits_is_surgical_and_keeps_user_sentences():
+    from mediaflow.agents.pipeline import apply_edits, user_sentences
+
+    body = "开头一句话。第二句是用户写的金句！第三句有点水。结尾。"
+    locked = user_sentences("开头一句话。第二句原来是这样。第三句有点水。结尾。", body)
+    assert locked == ["第二句是用户写的金句！"]
+    new, applied, skipped = apply_edits(body, [
+        {"find": "第三句有点水。", "replace": "第三句换成具体数字：每月存 800。"},
+        {"find": "第二句是用户写的金句", "replace": "被改掉"},   # 碰到用户的句子：跳过
+        {"find": "原稿里没有的句子", "replace": "x"},            # 找不到：跳过
+    ], locked)
+    assert new == "开头一句话。第二句是用户写的金句！第三句换成具体数字：每月存 800。结尾。"
+    assert (applied, skipped) == (1, 2)
+
+
+async def test_review_rounds_are_targeted_and_remember_previous_issues(session, llm, account):
+    """主编给出带位置的「必须改」→ 编辑只改那一句 → 主编复核时能看到上一轮自己提了什么。"""
+    body = "宝子们今天聊通勤穿搭。" + "这一段是很有信息量的内容，讲了具体的搭配方法。" * 8 + "开头这句太平淡了。"
+    must = {"hook": 6, "value": 7, "voice": 7, "fit": 7, "rules": 8, "violated_rules": [],
+            "items": [{"level": "must", "where": "结尾", "quote": "开头这句太平淡了。", "problem": "结尾没有互动",
+                       "fix": "改成提问"},
+                      {"level": "nice", "where": "开头", "quote": "宝子们", "problem": "可以更具体", "fix": ""}]}
+    ok = {"hook": 8, "value": 8, "voice": 8, "fit": 8, "rules": 8, "violated_rules": [], "resolved": [1],
+          "items": [{"level": "nice", "where": "标签", "quote": "", "problem": "可以多一个场景标签", "fix": ""}]}
+    llm.push("writer", post(body=body)).push("eval", must, ok)
+    llm.push("reviser", {"edits": [{"find": "开头这句太平淡了。", "replace": "你们通勤最头疼哪一步？评论区告诉我～"}]})
+    d, _ = await run(session, llm, account)
+    assert d.body.endswith("你们通勤最头疼哪一步？评论区告诉我～") and "这一段是很有信息量的内容" in d.body
+    assert d.attempts == 2 and not d.needs_attention  # 只剩「可以更好」：达标
+    rev = llm.prompts_of("reviser")[0]
+    assert "结尾「开头这句太平淡了。」：结尾没有互动｜改法：改成提问" in rev and "可以更好" not in rev  # 只改关键的
+    assert "上一轮你提的问题" in llm.prompts_of("eval")[1] and "结尾没有互动" in llm.prompts_of("eval")[1]

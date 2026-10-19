@@ -31,7 +31,8 @@ MAX_BENCH = 3    # 一个账号最多同时对标几个
 N_POSTS = 60     # 每个对标最多读多少条作品
 N_DETAILS = 5    # 看几篇爆款详情
 N_HITS = 12      # 给模型看的爆款列表长度
-N_PROBE = 8      # 找候选时细看几个博主的主页
+N_PROBE = 10     # 找候选时细看几个博主的主页（会筛掉主要做视频的号，所以多看几个）
+MAX_VIDEO_SHARE = 0.4  # 作品里视频超过这个比例就不当图文对标
 PROFILE_KEYS = ("theme", "audience", "content_style", "image_style", "topic_type")
 LETTERS = string.ascii_uppercase
 
@@ -254,7 +255,10 @@ async def _analyze_one(s: Session, llm: LLM, b: Benchmark, acc: Account, emit: E
     emit("find", f"{prefix}找到「{b.creator_name}」（{b.creator_info.get('fans') or '粉丝数未知'}粉），读了 {len(posts)} 篇作品",
          {"creator": b.creator_name})
 
-    hits = sorted(posts, key=lambda p: -_score(p))[:N_HITS]
+    if (stats.get("video_share") or 0) > MAX_VIDEO_SHARE:
+        emit("warning", f"{prefix}「{b.creator_name}」主要做视频（{int(stats['video_share'] * 100)}%），只拆它的图文笔记", None)
+    pics = [p for p in posts if p.kind != "视频"]
+    hits = sorted(pics or posts, key=lambda p: -_score(p))[:N_HITS]
     details: list[dict] = []
     for i, p in enumerate(hits[:N_DETAILS]):
         emit("detail", f"{prefix}在看「{b.creator_name}」的爆款 {i + 1}/{min(N_DETAILS, len(hits))}：{p.title[:20]}", None)
@@ -265,10 +269,12 @@ async def _analyze_one(s: Session, llm: LLM, b: Benchmark, acc: Account, emit: E
             emit("warning", f"「{p.title[:20]}」详情没拿到（{e}），跳过", None)
             continue
         details.append({"title": d.title, "likes": d.likes, "collects": d.collects, "comments": d.comments,
-                        "kind": d.kind, "date": d.published, "url": d.url, "content": d.content[:800],
-                        "tags": d.tags[:10], "top_comments": d.top_comments[:5]})
+                        "kind": d.kind or p.kind, "date": d.published or p.published, "url": d.url or p.url,
+                        "content": d.content[:800],
+                        "tags": d.tags[:10], "top_comments": d.top_comments[:5], "images": d.images[:9]})
     by_title = {d["title"]: d for d in details}
-    b.samples = [{**_note(p), **by_title.get(p.title, {}), "cover": p.cover} for p in hits]
+    b.samples = [{**_note(p), **by_title.get(p.title, {}), "cover": p.cover or next(iter(by_title.get(p.title, {}).get("images") or []), "")}
+                 for p in hits]
 
     emit("analyze", f"{prefix}在拆解「{b.creator_name}」的打法：栏目、标题公式、开头、结构、视觉…", None)
     b.playbook = await complete_json(llm, [
@@ -276,7 +282,8 @@ async def _analyze_one(s: Session, llm: LLM, b: Benchmark, acc: Account, emit: E
         {"role": "user", "content": prompts.BENCH_ANALYZE_USER.format(
             untrusted_notice=prompts.UNTRUSTED_NOTICE, creator=_creator_line(b), n_posts=len(posts),
             posts="\n".join(f"- {p.title}｜{p.kind}｜{p.likes or '-'}｜{p.published}" for p in posts),
-            details=json.dumps(details, ensure_ascii=False, indent=1) or "（没拿到详情）",
+            details=json.dumps([{k: v for k, v in d.items() if k != "images"} for d in details],
+                               ensure_ascii=False, indent=1) if details else "（没拿到详情）",
         )},
     ], temperature=0.3)
     b.status, b.error, b.updated_at = BenchmarkStatus.ready, "", utcnow()
@@ -376,7 +383,7 @@ def _apply(s: Session, benches: list[Benchmark], acc: Account, plan: dict, theme
         b, ref = _ref(benches, raw.get("ref"))
         if ref and _norm(title) == _norm(str(ref.get("title", ""))):
             continue  # 模型偷懒原样照抄了对方标题（还是对方领域的），不能算复刻选题
-        reference = {k: ref[k] for k in ("title", "likes", "content", "tags", "url") if ref.get(k)}
+        reference = {k: ref[k] for k in ("title", "likes", "content", "tags", "url", "cover", "images") if ref.get(k)}
         if b is not None:
             reference |= {"creator": b.creator_name, "benchmark_id": b.id}
         t = Topic(user_id=acc.user_id, account_id=acc.id, title=title, angle=str(raw.get("angle", ""))[:200],
@@ -449,6 +456,8 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
         for r in rows:
             if r["name"] in skip or r["user_id"] in skip:
                 continue
+            if r.get("kind") == "视频":
+                continue  # 只要图文
             a = authors.setdefault(r["user_id"], {**r, "hits": []})
             if all(h["title"] != r["title"] for h in a["hits"]):
                 a["hits"].append({"title": r["title"], "likes": r["likes"], "url": r["url"],
@@ -469,6 +478,7 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
     pool = [x for pair in zip_longest(by_hits, domain) for x in pair if x]
 
     cands: list[dict] = []
+    videos = 0
     probe = pool[:N_PROBE]
     for i, a in enumerate(probe):
         emit("probe", f"在看「{a['name']}」的主页和作品数据（{i + 1}/{len(probe)}）…", None)
@@ -481,8 +491,12 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
                 break
             continue
         stats = _stats(posts)
+        if (stats.get("video_share") or 0) > MAX_VIDEO_SHARE:
+            videos += 1
+            continue  # 主要做视频的号：我们做图文，学不来
         if (stats.get("median_likes") or 0) < 20 and count_num(creator.fans) < 1e4:
             continue  # 几乎没互动的小号不值得对标
+        posts = [p for p in posts if p.kind != "视频"] or posts
         uid, _, tok = a["native"].partition("|")
         cands.append({
             "name": creator.name or a["name"], "avatar": a["avatar"] or creator.extra.get("avatar", ""),
@@ -497,6 +511,8 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
             "notes": [_note(p) for p in sorted(posts, key=lambda p: -_score(p))[:6]],
             "recent": [p.title for p in posts[:8]],
         })
+    if videos:
+        notes.append(f"筛掉了 {videos} 个主要做视频的号，只留图文博主")
     if not cands:
         raise LookupError("；".join(notes) or "候选博主的主页都没打开，稍后再试")
 

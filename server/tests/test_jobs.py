@@ -90,7 +90,7 @@ def test_scheduler_respects_frequency(fresh_db, account):
 async def test_grsai_falls_back_to_other_model(monkeypatch):
     calls = []
 
-    async def one(self, model, prompt):
+    async def one(self, model, prompt, refs=None):
         calls.append(model)
         if model == "gpt-image-2.5":
             raise images_mod.ImageError("生图失败：busy")
@@ -100,7 +100,7 @@ async def test_grsai_falls_back_to_other_model(monkeypatch):
     p = images_mod.GrsaiProvider(key="k", model="gpt-image-2.5")
     assert await p.generate("x") == b"png" and calls == ["gpt-image-2.5", "nano-banana-2.1"]
 
-    async def bad(self, model, prompt):
+    async def bad(self, model, prompt, refs=None):
         calls.append(model)
         raise images_mod.ImageError("违规", retryable=False)
 
@@ -110,3 +110,45 @@ async def test_grsai_falls_back_to_other_model(monkeypatch):
         await images_mod.GrsaiProvider(key="k").generate("x")
     assert calls == ["gpt-image-2.5"]
     assert images_mod._payload("nano-banana-2.1") == {"aspectRatio": "3:4", "imageSize": "1K"}
+
+
+async def test_images_use_benchmark_originals_as_refs(session, llm, account, with_images, monkeypatch):
+    """对标爆款的原图下载到本地，封面参考对方封面、内页参考对方内页。"""
+    import io
+
+    from PIL import Image
+
+    from mediaflow.domain.models import Benchmark, BenchmarkStatus
+    from mediaflow.services import refs as refs_mod
+
+    buf = io.BytesIO()
+    Image.new("RGB", (60, 80), "red").save(buf, "WEBP")
+    got = []
+
+    class Resp:
+        content = buf.getvalue()
+
+        def raise_for_status(self):
+            pass
+
+    async def fake_get(self, url, **kw):
+        got.append(url)
+        return Resp()
+
+    monkeypatch.setattr(refs_mod.httpx.AsyncClient, "get", fake_get)
+    session.add(Benchmark(user_id=account.user_id, account_id=account.id, target="x", status=BenchmarkStatus.ready,
+                          samples=[{"title": "爆款", "likes": "1万", "kind": "图文", "cover": "https://ci/a/c1!webp",
+                                    "images": ["https://ci/a/c1!webp", "https://ci/a/i2!webp", "https://ci/a/i3!webp"]},
+                                   {"title": "视频", "likes": "9万", "kind": "视频", "cover": "https://ci/a/v!webp"}]))
+    session.commit()
+    llm.push("writer", post(images=["封面", "细节"])).push("eval", evaluation(8))
+    job = enqueue(session, JobKind.write_draft, user_id="local", account_id=account.id, payload={})
+    await run_job(job.id)
+    img_job = session.exec(select(Job).where(Job.kind == JobKind.generate_images)).one()
+    await run_job(img_job.id)
+
+    assert "https://ci/a/v!webp" not in got  # 视频笔记的图不参考
+    by_n = with_images.refs
+    assert len(by_n) == 2 and all(r and r[0].startswith("data:image/jpeg;base64,") for r in by_n)
+    assert sorted(len(r) for r in by_n) == [1, 2]  # 封面 1 张对标封面，内页 2 张对标内页
+    assert "参考图" in llm.prompts_of("image")[0]

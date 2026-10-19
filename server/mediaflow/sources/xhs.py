@@ -222,6 +222,14 @@ def _cover(card: dict) -> str:
     return url.replace("http://", "https://", 1)
 
 
+def _img_url(img: dict) -> str:
+    """详情里一张图的地址：优先 url_default，其次 info_list 里的第一张。"""
+    if not isinstance(img, dict):
+        return ""
+    u = img.get("url_default") or img.get("url") or next((i.get("url") for i in img.get("info_list") or [] if i.get("url")), "")
+    return u.replace("http://", "https://", 1) if u else ""
+
+
 def _need_cookie() -> dict[str, str]:
     from mediaflow.research.types import Unsupported
 
@@ -239,11 +247,14 @@ def _check(body: dict, what: str) -> dict:
     return body.get("data") or {}
 
 
-async def search_hot_authors(keyword: str, timeout: float = 15) -> list[dict]:
-    """按关键词搜最热的笔记，带出作者（找同领域对标账号用）。每条：作者、头像、定位串、笔记标题和点赞。"""
+NOTE_TYPE_IMAGE = 2  # 小红书搜索筛选：0 不限 / 1 视频 / 2 图文
+
+
+async def search_hot_authors(keyword: str, timeout: float = 15, *, note_type: int = NOTE_TYPE_IMAGE) -> list[dict]:
+    """按关键词搜最热的笔记，带出作者（找同领域对标账号用）。默认只搜图文笔记——我们做的是图文号。"""
     cookies, x = _need_cookie(), _signer()
     payload = {"keyword": keyword, "page": 1, "page_size": 20, "search_id": x.get_search_id(),
-               "sort": "popularity_descending", "note_type": 0, "ext_flags": [], "geo": "",
+               "sort": "popularity_descending", "note_type": note_type, "ext_flags": [], "geo": "",
                "image_formats": ["jpg", "webp", "avif"]}
     async with httpx.AsyncClient(timeout=timeout, headers=_HEADERS) as c:
         r = await _post(c, "/api/sns/web/v1/search/notes", payload, cookies, x_rap=True)
@@ -363,6 +374,8 @@ async def post_detail(native: str, comments: int = 8, timeout: float = 15):
         comments=str(it.get("comment_count", "")), collects=str(it.get("collected_count", "")),
         shares=str(it.get("share_count", "")), published=ms_date(card.get("time")),
         kind="视频" if card.get("type") == "video" else "图文",
+        cover=_img_url(((card.get("image_list") or [{}])[0])),
+        images=[u for u in (_img_url(i) for i in card.get("image_list") or []) if u][:9],
         content=(card.get("desc") or "").strip()[:1500],
         tags=[t.get("name") for t in card.get("tag_list") or [] if t.get("name")],
         top_comments=[f"{x.get('like_count', 0)}赞｜{' '.join((x.get('content') or '').split())[:120]}"

@@ -42,6 +42,7 @@ class PostDetail(Post):
     content: str = ""
     tags: list[str] = field(default_factory=list)
     top_comments: list[str] = field(default_factory=list)  # 「点赞数｜内容」
+    images: list[str] = field(default_factory=list)        # 图文笔记的全部配图地址
 
 
 def count_num(v) -> float:

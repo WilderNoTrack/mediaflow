@@ -1145,6 +1145,8 @@ export interface components {
             api_key?: string | null;
             /** Model */
             model?: string | null;
+            /** Use Refs */
+            use_refs?: boolean | null;
         };
         /** ImageSettingsOut */
         ImageSettingsOut: {
@@ -1159,6 +1161,11 @@ export interface components {
             model: string;
             /** Models */
             models: components["schemas"]["ImageModelOut"][];
+            /**
+             * Use Refs
+             * @description 出图时参考对标账号的原图
+             */
+            use_refs: boolean;
         };
         /**
          * ImageStatus

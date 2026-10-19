@@ -61,6 +61,19 @@ export function ImageSettingsDialog({ onClose }: { onClose: () => void }) {
             <p className="mt-1.5 text-xs text-muted-foreground">选中的模型出图失败时，会自动换另一个再试一次。</p>
           </section>
 
+          <section>
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 hover:border-indigo-200">
+              <input type="checkbox" className="mt-0.5 size-4 accent-indigo-500" checked={st.use_refs}
+                onChange={(e) => save.mutate({ use_refs: e.target.checked })} />
+              <span>
+                <span className="font-medium">参考对标账号的原图</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+                  出图时把对标爆款的封面和内页一起传给模型，学它们的版式、配色、字体和构图（不照搬人物和文字）。还没对标账号时不生效。
+                </span>
+              </span>
+            </label>
+          </section>
+
           <section className="rounded-xl bg-slate-50 p-3">
             <div className="flex items-center gap-2">
               <div className="flex-1 text-xs text-muted-foreground">试出一张封面看看效果（会用掉一次生图额度）</div>

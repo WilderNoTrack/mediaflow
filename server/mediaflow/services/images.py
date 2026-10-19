@@ -19,8 +19,10 @@ from sqlmodel import Session, col, select
 from mediaflow import credentials
 from mediaflow.agents import prompts
 from mediaflow.config import Settings, get_settings
-from mediaflow.domain.models import Account, Draft, DraftImage, ImageStatus, utcnow
+from mediaflow.domain.models import Account, Draft, DraftImage, ImageStatus, Topic, utcnow
 from mediaflow.llm.client import LLM, LLMError
+from mediaflow.services.refs import Refs
+from mediaflow.services.refs import collect as collect_refs
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +63,18 @@ def image_configured() -> bool:
     return bool(image_key())
 
 
+def use_refs() -> bool:
+    """出图时要不要把对标账号的原图当参考图传上去（默认要）。"""
+    return credentials.get("image_refs") != "off"
+
+
 def _payload(model: str) -> dict:
     m = _MODELS.get(model)
     return dict(m.payload) if m else {"aspectRatio": get_settings().image_size}
 
 
 class ImageProvider(Protocol):
-    async def generate(self, prompt: str) -> bytes: ...
+    async def generate(self, prompt: str, refs: list[str] | None = None) -> bytes: ...
 
 
 class GrsaiProvider:
@@ -83,23 +90,24 @@ class GrsaiProvider:
         others = [m.id for m in MODELS if m.id != self.model]
         self.fallback = others[0] if fallback and others else None
 
-    async def generate(self, prompt: str) -> bytes:
+    async def generate(self, prompt: str, refs: list[str] | None = None) -> bytes:
         try:
-            return await self._one(self.model, prompt)
+            return await self._one(self.model, prompt, refs)
         except ImageError as e:
             if not self.fallback or not e.retryable:
                 raise
             logger.warning("%s 生图失败（%s），换 %s 再试", self.model, e, self.fallback)
-            return await self._one(self.fallback, prompt)
+            return await self._one(self.fallback, prompt, refs)
 
-    async def _one(self, model: str, prompt: str) -> bytes:
+    async def _one(self, model: str, prompt: str, refs: list[str] | None = None) -> bytes:
         headers = {"Authorization": f"Bearer {self.key}"}
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.s.image_timeout
         async with httpx.AsyncClient(timeout=httpx.Timeout(self.s.image_timeout, connect=15)) as c:
             try:
                 r = await c.post(self.s.image_endpoint, headers=headers, json={
-                    "model": model, "prompt": prompt, "replyType": "json", **_payload(model)})
+                    "model": model, "prompt": prompt, "replyType": "json", **_payload(model),
+                    **({"images": refs} if refs else {})})
             except httpx.HTTPError as e:
                 raise ImageError(f"连不上生图服务：{type(e).__name__}") from e
             if r.status_code in (401, 403):
@@ -155,7 +163,7 @@ def set_provider_factory(f: Callable[[], ImageProvider] | None) -> None:
     _provider_factory = f
 
 
-async def _expand(llm: LLM, image_style: str, title: str, img: DraftImage, total: int) -> str:
+async def _expand(llm: LLM, image_style: str, title: str, img: DraftImage, total: int, n_refs: int = 0) -> str:
     try:
         r = await llm.complete([
             {"role": "system", "content": prompts.IMAGE_PROMPT_SYSTEM},
@@ -163,7 +171,7 @@ async def _expand(llm: LLM, image_style: str, title: str, img: DraftImage, total
                 image_style=image_style or "手机实拍的生活感，自然光",
                 title=title, idx=img.idx + 1, total=total,
                 cover="（封面）" if img.idx == 0 else "", prompt=img.prompt,
-            )},
+            ) + (prompts.IMAGE_REFS_NOTE.format(n=n_refs) if n_refs else "")},
         ], temperature=0.5)
         return r.content.strip() or img.prompt
     except LLMError as e:
@@ -209,6 +217,14 @@ async def generate_images(
         session.add(img)
     session.commit()
     sem = asyncio.Semaphore(max(1, get_settings().image_concurrency))  # 几张一起出，6 张不用排队等
+    refs = Refs()
+    if use_refs():
+        try:
+            refs = await collect_refs(session, draft.account_id, session.get(Topic, draft.topic_id) if draft.topic_id else None)
+        except Exception as e:  # noqa: BLE001 - 参考图出问题不影响出图
+            logger.warning("参考图准备失败：%s", e)
+        if refs:
+            emit("image", f"带上对标账号的 {len(refs.cover)} 张封面、{len(refs.inner)} 张内页当参考图，学它们的版式和配色", None)
     style = account.image_style if account else ""
     counter = {"done": 0, "failed": 0}
 
@@ -221,8 +237,15 @@ async def generate_images(
         async with sem:
             emit("image", f"第 {img.idx + 1} 张出图中…", {"idx": img.idx, **progress()})
             try:
-                img.expanded_prompt = await _expand(llm, style, draft.title, img, len(images))
-                data = await provider.generate(img.expanded_prompt)
+                r = refs.for_image(img.idx)
+                img.expanded_prompt = await _expand(llm, style, draft.title, img, len(images), len(r))
+                try:
+                    data = await provider.generate(img.expanded_prompt, r or None)
+                except ImageError as e:
+                    if not r or not e.retryable:
+                        raise
+                    logger.warning("带参考图出图失败（%s），不带参考图再试", e)
+                    data = await provider.generate(img.expanded_prompt)
                 name = f"{img.idx:02d}-{uuid4().hex[:8]}.png"
                 (out_dir / name).write_bytes(data)
                 img.path, img.status = f"{draft_id}/{name}", ImageStatus.done

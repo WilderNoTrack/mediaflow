@@ -144,11 +144,13 @@ class ImageSettingsOut(BaseModel):
     origin: str = Field(description="ui=界面里填的；env=来自 .env；空=没配置")
     model: str
     models: list[ImageModelOut]
+    use_refs: bool = Field(description="出图时参考对标账号的原图")
 
 
 class ImageSettingsIn(BaseModel):
     api_key: str | None = Field(default=None, description="null 不改；空字符串清除")
     model: str | None = None
+    use_refs: bool | None = None
 
 
 class ImageTestOut(BaseModel):
@@ -162,7 +164,7 @@ class ImageTestOut(BaseModel):
 def _image_out() -> ImageSettingsOut:
     stored = credentials._load()
     origin = "ui" if stored.get("image_api_key") else ("env" if get_settings().image_api_key else "")
-    return ImageSettingsOut(configured=bool(origin), origin=origin, model=images.image_model(),
+    return ImageSettingsOut(configured=bool(origin), origin=origin, model=images.image_model(), use_refs=images.use_refs(),
                             models=[ImageModelOut(id=m.id, label=m.label, desc=m.desc) for m in images.MODELS])
 
 
@@ -175,7 +177,8 @@ def get_image_settings():
 def update_image_settings(body: ImageSettingsIn):
     if body.model is not None and body.model and body.model not in {m.id for m in images.MODELS}:
         raise HTTPException(400, "不支持这个配图模型")
-    credentials.update({"image_api_key": body.api_key, "image_model": body.model})
+    credentials.update({"image_api_key": body.api_key, "image_model": body.model,
+                        "image_refs": None if body.use_refs is None else ("" if body.use_refs else "off")})
     return _image_out()
 
 

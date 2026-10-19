@@ -272,7 +272,8 @@ export const useImageSettings = () =>
 export function useSaveImageSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { api_key?: string | null; model?: string | null }) => unwrap(api.PUT("/api/settings/image", { body })),
+    mutationFn: (body: { api_key?: string | null; model?: string | null; use_refs?: boolean }) =>
+      unwrap(api.PUT("/api/settings/image", { body })),
     onSuccess: (d) => {
       qc.setQueryData(["image-settings"], d);
       qc.invalidateQueries({ queryKey: ["system"] });

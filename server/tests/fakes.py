@@ -101,10 +101,12 @@ class FakeImages:
     def __init__(self, fail_idx: set[int] | None = None) -> None:
         self.fail_idx = fail_idx or set()
         self.n = 0
+        self.refs: list[list[str] | None] = []
 
-    async def generate(self, prompt: str) -> bytes:
+    async def generate(self, prompt: str, refs: list[str] | None = None) -> bytes:
         i = self.n
         self.n += 1
+        self.refs.append(refs)
         if i in self.fail_idx:
             raise RuntimeError("生图服务挂了")
         return b"\x89PNG fake"

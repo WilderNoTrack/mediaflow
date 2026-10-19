@@ -40,12 +40,12 @@ def fake_research(monkeypatch):
                         url="https://www.xiaohongshu.com/user/profile/u1"),
                 [Post(platform=platform, title="普通日常", native="n0|t", likes="800", published="2023-05-01", kind="图文"),
                  Post(platform=platform, title="干货 | 真正裸感底妆的打造", native="n1|t", likes="10万+",
-                      published="2023-05-04", kind="视频", url="https://x/n1"),
+                      published="2023-05-04", kind="图文", url="https://x/n1"),
                  Post(platform=platform, title="顽固闭口实战贴", native="n2|t", likes="5.2万", published="2023-04-14",
                       kind="视频")])
 
     async def detail(platform, native):
-        if native == "n2|t":
+        if native in ("n0|t", "n2|t"):
             raise RuntimeError("风控")
         return PostDetail(platform=platform, title="干货 | 真正裸感底妆的打造" if native == "n1|t" else "普通日常",
                           native=native, likes="10万+", content="又是一个很长但很干的视频", tags=["底妆"],
@@ -72,6 +72,7 @@ async def test_clone_flow(session, account, llm, fake_research):
     assert b.creator_info["fans"] == "776万" and b.creator_info["posts_read"] == 3
     assert b.samples[0]["title"].startswith("干货") and b.samples[0]["content"]  # 按点赞排序，带详情
     assert "content" not in b.samples[1]  # 详情失败的只留列表数据
+    assert all(x["kind"] == "图文" for x in b.samples)  # 视频笔记不拿来拆（我们做图文）
     assert any(st == "warning" for st, _ in events) and events[-1][0] == "done"
     analyze_prompt = llm.prompts_of("bench_analyze")[0]
     assert "external_data" in analyze_prompt and "10万+" in analyze_prompt
@@ -307,3 +308,32 @@ def test_dedupe_posts():
     ps = [Post("xiaohongshu", "同一篇", "n1|a", published="2024-05-01"), Post("xiaohongshu", "同一篇", "n1|b", published="2024-05-01"),
           Post("xiaohongshu", "同一篇", "n2|c", published="2024-05-01"), Post("xiaohongshu", "另一篇", "n3|d")]
     assert [p.native for p in bench._dedupe(ps)] == ["n1|a", "n3|d"]
+
+
+async def test_find_candidates_skips_video_creators(session, account, llm, monkeypatch, multi_research):
+    """我们做图文：视频笔记不算爆款线索，主要做视频的博主直接筛掉。"""
+    async def hot(platform, kw):
+        return [{"user_id": UID_A, "name": "穿搭阿A", "avatar": "", "native": f"{UID_A}|t", "title": "图文爆款", "likes": "2万",
+                 "url": "u1", "kind": "图文"},
+                {"user_id": UID_B, "name": "通勤小B", "avatar": "", "native": f"{UID_B}|t", "title": "视频爆款", "likes": "9万",
+                 "url": "u2", "kind": "视频"},
+                {"user_id": UID_C, "name": "美妆C", "avatar": "", "native": f"{UID_C}|t", "title": "图文", "likes": "1万",
+                 "url": "u3", "kind": "图文"}]
+
+    async def creators(platform, kw, n=10):
+        return []
+
+    async def posts(platform, native, n=60):
+        uid = native.split("|")[0]
+        kind = "视频" if uid == UID_C else "图文"
+        return (Creator(platform=platform, name=multi_research[uid], native=native, fans="10万"),
+                [Post(platform=platform, title=f"{uid}{i}", native=f"{uid}{i}|t", likes="3000", kind=kind,
+                      published=f"2024-05-0{i + 1}") for i in range(4)])
+
+    monkeypatch.setattr(research, "hot_authors_raw", hot)
+    monkeypatch.setattr(research, "creators_raw", creators)
+    monkeypatch.setattr(research, "creator_posts_raw", posts)
+    llm.push("bench_pick", {"picks": [{"no": 1, "fit": 9}]})
+    out = await bench.find_candidates(llm, "通勤穿搭")
+    assert [c["name"] for c in out["candidates"]] == ["穿搭阿A"]  # 小B 只有视频爆款；美妆C 主页全是视频
+    assert any("视频" in n for n in out["notes"])
