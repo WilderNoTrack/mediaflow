@@ -47,14 +47,23 @@ def hard_check(title: str, body: str, tags: list[str], image_prompts: list[str],
         issues.append(f"正文只有 {n} 字，太单薄（至少 {BODY_MIN} 字）")
     if n > BODY_MAX:
         issues.append(f"正文 {n} 字，超过小红书上限 {BODY_MAX} 字")
-    if not (TAGS_MIN <= len(tags) <= TAGS_MAX):
-        issues.append(f"标签 {len(tags)} 个，应为 {TAGS_MIN}-{TAGS_MAX} 个")
+    lo = tags_min(rules)
+    if not (lo <= len(tags) <= TAGS_MAX):
+        issues.append(f"标签 {len(tags)} 个，应为 {lo}-{TAGS_MAX} 个")
     if not (IMAGES_MIN <= len(image_prompts) <= IMAGES_MAX):
         issues.append(f"配图 {len(image_prompts)} 张，应为 {IMAGES_MIN}-{IMAGES_MAX} 张")
     hits = sorted({w for w in RISKY_WORDS if w in title or w in body})
     if hits:
         issues.append("含有违规风险词：" + "、".join(hits))
     return issues
+
+
+_FEW_TAGS = re.compile(r"单一|一个|1\s*个|一两个|1\s*[-~到至]\s*2|少量|少带|不堆砌")
+
+
+def tags_min(rules: Iterable[str]) -> int:
+    """账号规则要求少带标签（比如对标学来的「只带单一核心话题标签」）时，下限放到 1，不和规则打架。"""
+    return 1 if any("标签" in r and _FEW_TAGS.search(r) for r in rules) else TAGS_MIN
 
 
 def body_len(body: str) -> int:

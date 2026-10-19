@@ -156,3 +156,12 @@ async def test_revise_draft_keeps_better_version(session, llm, account):
     llm.push("reviser", post(title="更差的"), post(title="还是差"))
     d3 = await revise_draft(session, llm, d.id, note="再短一点")
     assert d3.title == "改好的" and d3.score == 8.5  # 没改好就不替换
+
+
+def test_tag_rule_from_benchmark_does_not_fight_hard_check():
+    from mediaflow.agents.checks import hard_check
+
+    body = "正文" * 200
+    rules = ["标题和正文都带单一核心话题标签（如#存钱#），不堆砌无关标签"]
+    assert not any("标签" in i for i in hard_check("标题", body, ["存钱"], ["封面"], rules))
+    assert any("标签" in i for i in hard_check("标题", body, ["存钱"], ["封面"], []))
