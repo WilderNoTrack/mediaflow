@@ -2,16 +2,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowLeft, Check, CheckCircle2, ChevronLeft, Copy, Download, Heart, Image as ImageIcon,
   ChevronRight, ExternalLink, Link2, MessageCircle, Pencil, Plus, RefreshCw, Save, Sparkles, Star, Tag, ThumbsDown, ThumbsUp,
-  Trash2, Wand2,
+  Trash2, Type, Wand2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import type { DraftDetail, JobEvent, S } from "../api/client";
-import { api, unwrap } from "../api/client";
+import type { DraftDetail, ImageLayout, ImageMode, JobEvent, S } from "../api/client";
+import { ACCOUNT_IMAGE_MODES, api, IMAGE_MODES, imageModeLabel, unwrap } from "../api/client";
 import { type ImageOp, isActive, useAccount, useActiveJobs, useDraft, useDraftActions, useIsAdmin, useRevise, useRules, useSystem } from "../api/hooks";
 import { ChatPanel } from "../components/ChatPanel";
 import { ImageSettingsDialog } from "../components/ImageSettingsDialog";
-import { Badge, Button, Card, CardBody, CardHead, Empty, ErrorText, Segmented, Spinner, Textarea } from "../components/ui";
+import { Badge, Button, Card, CardBody, CardHead, Empty, ErrorText, Input, Segmented, Spinner, Textarea } from "../components/ui";
 import { cn, timeAgo } from "../lib/utils";
 
 export function DraftPage() {
@@ -263,8 +263,8 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
 function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i: number) => void; onAsk: () => void }) {
   const act = useDraftActions(d.id);
   const cur = d.images[i];
-  // 改描述 / 在这张后面加一张：本地先写好，提交后改过的、新加的马上重新出图
-  const [edit, setEdit] = useState<null | { mode: "update" | "add"; text: string }>(null);
+  // 改描述 / 在这张后面加一张：本地先写好，提交后改过的、新加的马上重新出图；改字（代码排的）当场重排
+  const [edit, setEdit] = useState<null | { mode: "update" | "add"; text: string } | { mode: "text"; lay: TextForm }>(null);
   useEffect(() => setEdit(null), [cur?.id]);
   const run = (ops: ImageOp[], then?: () => void) =>
     act.editImages.mutate({ ops }, { onSuccess: () => { setEdit(null); then?.(); } });
@@ -277,6 +277,10 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
   const { data: sys } = useSystem();
   const [setup, setSetup] = useState(false);
   const admin = useIsAdmin();
+  const { data: acc } = useAccount(d.account_id);
+  const accMode = ACCOUNT_IMAGE_MODES.find((m) => m.value === (acc?.image_mode || "ai"));
+  const coded = (im?: (typeof d.images)[number]) => !!im && im.status === "done" && ["card", "photo", "ai_text"].includes(im.made_by ?? "");
+  const aiCount = d.images.filter((x) => (x.mode || x.made_by || (accMode?.ai ? "ai" : "")).startsWith("ai")).length;
   return (
     <Card>
       <CardHead icon={<ImageIcon />} title="配图" action={<span className="text-xs text-muted-foreground">{done}/{d.images.length} 张</span>} />
@@ -287,9 +291,18 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
               <span className="flex-1">AI 配图已经配好了，这篇写的时候还没配，点一下就出图。</span>
               <Button size="xs" loading={act.images.isPending} onClick={() => act.images.mutate(undefined)}>现在出图</Button>
             </div>
-          : <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              <span className="flex-1">{admin ? "还没配置 AI 配图，所以没出图。填一个生图 Key 就能自动出图，也可以先导出文案。" : "管理员还没配好 AI 配图，所以没出图，可以先导出文案。"}</span>
-              {admin && <Button size="xs" variant="outline" onClick={() => setSetup(true)}>去配置</Button>}
+          : <div className="space-y-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              <div className="flex items-center gap-2">
+                <span className="flex-1">{admin ? "还没配置 AI 配图，所以没出图。填一个生图 Key 就能 AI 画图；不用 Key 也能出：" : "管理员还没配好 AI 配图；不用 AI 也能出图："}</span>
+                {admin && <Button size="xs" variant="outline" onClick={() => setSetup(true)}>去配置</Button>}
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button size="xs" variant="outline" loading={act.editImages.isPending}
+                  onClick={() => run(d.images.map((x) => ({ op: "mode" as const, no: x.idx + 1, mode: "card" as const })))}>做成排版卡片</Button>
+                <Button size="xs" variant="outline" loading={act.editImages.isPending}
+                  onClick={() => run(d.images.map((x) => ({ op: "mode" as const, no: x.idx + 1, mode: x.idx === 0 ? "photo" as const : "card" as const })))}>封面网上找图，其余排版</Button>
+                <span className="text-amber-600">想以后都这样，在「账号设定 → 配图怎么做」里改</span>
+              </div>
             </div>)}
         {busy > 0 && (
           <div className="rounded-lg bg-indigo-50 px-3 py-2.5 text-xs text-indigo-700">
@@ -325,7 +338,8 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
           <div>
             <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
               <span>第 {cur.idx + 1} 张{cur.idx === 0 && "（封面）"}的画面描述
-                {cur.page_type && <Badge className="ml-1.5 bg-indigo-50 font-normal text-indigo-600" >{cur.page_type}</Badge>}</span>
+                {cur.page_type && <Badge className="ml-1.5 bg-indigo-50 font-normal text-indigo-600" >{cur.page_type}</Badge>}
+                {cur.status === "done" && cur.made_by && cur.made_by !== "ai" && <Badge className="ml-1.5 bg-emerald-50 font-normal text-emerald-700">{imageModeLabel(cur.made_by)}</Badge>}</span>
               {cur.status === "failed" && <span className="text-red-500">生成失败</span>}
             </div>
             <div className="flex items-start gap-2">
@@ -354,10 +368,45 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
                     onClick={() => setEdit({ mode: "update", text: cur.prompt })}>
                     <Pencil className="text-indigo-500" />
                   </Button>
+                  {coded(cur) && (
+                    <Button variant="outline" size="sm" className="px-2" title="直接改图上的字（代码排的，马上改好，不用重新出图）" disabled={busy > 0}
+                      onClick={() => setEdit({ mode: "text", lay: toForm(cur.layout as ImageLayout) })}>
+                      <Type className="text-indigo-500" />
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
             {cur.status === "done" && !edit && <ReviewNote r={cur.review as Review} />}
+            {!edit && <SourceNote src={cur.source as Src} made={cur.made_by} />}
+            {!edit && (
+              <div className="mt-2 flex flex-wrap items-center gap-1 text-[11px]">
+                <span className="mr-0.5 text-muted-foreground">这张怎么做：</span>
+                {IMAGE_MODES.map((m) => {
+                  const on = (cur.mode || cur.made_by) === m.value;
+                  const noAi = m.ai && !sys?.image_configured;
+                  return (
+                    <button key={m.value} disabled={busy > 0 || noAi || act.editImages.isPending}
+                      title={noAi ? "还没配置 AI 配图" : on ? "现在就是这样做的" : `换成「${m.label}」重出这张`}
+                      onClick={() => !on && run([{ op: "mode", no: cur.idx + 1, mode: m.value as ImageMode }])}
+                      className={cn("cursor-pointer rounded-full border px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-40",
+                        on ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                      {m.label}
+                    </button>
+                  );
+                })}
+                {cur.mode && (
+                  <button disabled={busy > 0} onClick={() => run([{ op: "mode", no: cur.idx + 1, mode: "" }])}
+                    className="cursor-pointer px-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    title={`不单独指定，跟账号设定走（${accMode?.label ?? "AI 画"}）`}>跟账号设定</button>
+                )}
+              </div>
+            )}
+            {edit?.mode === "text" && (
+              <TextEditor form={edit.lay} kind={(cur.layout as ImageLayout)?.kind ?? "cover"} loading={act.editImages.isPending}
+                onChange={(lay) => setEdit({ mode: "text", lay })} onCancel={() => setEdit(null)}
+                onSave={(layout) => run([{ op: "text", no: cur.idx + 1, layout }])} />
+            )}
             {edit?.mode === "update" && (
               <div className="mt-2 flex justify-end gap-2">
                 <Button variant="ghost" size="xs" onClick={() => setEdit(null)}>取消</Button>
@@ -402,7 +451,7 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
         {d.image_spec && <SpecNote spec={d.image_spec} />}
         {!skipped && d.images.length > 0 && (
           <Button variant="outline" size="sm" className="w-full" disabled={busy > 0} loading={act.images.isPending && act.images.variables === "all"}
-            onClick={() => confirm(`${d.images.length} 张全部重新出？会用掉 ${d.images.length} 次生图额度`) && act.images.mutate("all")}>
+            onClick={() => confirm(`${d.images.length} 张全部重新出？${aiCount ? `要 AI 画的会用掉约 ${aiCount} 次生图额度` : "排版和找图不用生图额度"}`) && act.images.mutate("all")}>
             <RefreshCw />{busy > 0 ? "出图中…" : "全部重新出"}
           </Button>
         )}
@@ -413,6 +462,77 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
 }
 
 type Review = { ok?: boolean; problems?: string[]; redone?: boolean; before?: string[]; skipped?: boolean };
+type Src = { url?: string; link?: string; site?: string; title?: string; query?: string; fallback?: string };
+type TextForm = { title: string; highlight: string; subtitle: string; tag: string; items: string;
+  leftTitle: string; left: string; rightTitle: string; right: string };
+
+const lines = (t: string) => t.split("\n").map((x) => x.trim()).filter(Boolean);
+function toForm(l?: ImageLayout): TextForm {
+  return {
+    title: l?.title ?? "", highlight: l?.highlight ?? "", subtitle: l?.subtitle ?? "", tag: l?.tag ?? "",
+    items: (l?.items ?? []).join("\n"),
+    leftTitle: l?.left?.title ?? "", left: (l?.left?.items ?? []).join("\n"),
+    rightTitle: l?.right?.title ?? "", right: (l?.right?.items ?? []).join("\n"),
+  };
+}
+
+/** 改代码排上去的字：标题、副标题、要点（一行一条）、对比两栏，保存后当场重排 */
+function TextEditor({ form: f, kind, loading, onChange, onCancel, onSave }: {
+  form: TextForm; kind: string; loading: boolean; onChange: (f: TextForm) => void; onCancel: () => void; onSave: (l: ImageLayout) => void;
+}) {
+  const set = (k: keyof TextForm) => (e: { target: { value: string } }) => onChange({ ...f, [k]: e.target.value });
+  const list = kind === "list" || kind === "steps";
+  const save = () => onSave({
+    title: f.title.trim(), highlight: f.highlight.trim(), subtitle: f.subtitle.trim(), tag: f.tag.trim(),
+    ...(list ? { items: lines(f.items).slice(0, 8) } : {}),
+    ...(kind === "compare" ? {
+      left: { title: f.leftTitle.trim().slice(0, 12), items: lines(f.left).slice(0, 6) },
+      right: { title: f.rightTitle.trim().slice(0, 12), items: lines(f.right).slice(0, 6) },
+    } : {}),
+  });
+  return (
+    <div className="mt-2 space-y-2 rounded-lg border border-dashed border-indigo-200 p-2.5">
+      <div className="text-xs font-medium">改图上的字 <span className="font-normal text-muted-foreground">代码排的，保存后马上换好，不用重新出图</span></div>
+      <Input value={f.title} onChange={set("title")} placeholder={kind === "quote" ? "金句" : "大标题"} className="text-xs" />
+      <div className="grid grid-cols-2 gap-2">
+        <Input value={f.highlight} onChange={set("highlight")} placeholder="标题里要高亮的词（可空）" className="text-xs" />
+        <Input value={f.tag} onChange={set("tag")} placeholder="左上角小标签（可空）" className="text-xs" />
+      </div>
+      {!list && kind !== "compare" && <Input value={f.subtitle} onChange={set("subtitle")} placeholder={kind === "quote" ? "署名 / 一句说明（可空）" : "副标题（可空）"} className="text-xs" />}
+      {list && <Textarea rows={4} value={f.items} onChange={set("items")} placeholder="每行一条要点" className="text-xs leading-relaxed" />}
+      {kind === "compare" && (
+        <div className="grid grid-cols-2 gap-2">
+          {(["left", "right"] as const).map((side) => (
+            <div key={side} className="space-y-1.5">
+              <Input value={f[`${side}Title`]} onChange={set(`${side}Title`)} placeholder={side === "left" ? "左栏标题" : "右栏标题"} className="text-xs" />
+              <Textarea rows={3} value={f[side]} onChange={set(side)} placeholder="每行一条" className="text-xs leading-relaxed" />
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" size="xs" onClick={onCancel}>取消</Button>
+        <Button size="xs" loading={loading} disabled={!f.title.trim() && !lines(f.items).length} onClick={save}>改好了</Button>
+      </div>
+    </div>
+  );
+}
+
+/** 网上找的图标出处；没找到图改成了卡片也说一声 */
+function SourceNote({ src, made }: { src?: Src; made?: string }) {
+  if (src?.fallback && made === "card") return (
+    <div className="mt-1.5 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-800">
+      网上没找到合适的图，先做成了排版卡片。可以改改描述再点「网上找图」试试。
+    </div>
+  );
+  if (!src?.site || made !== "photo") return null;
+  return (
+    <div className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+      底图来自 <a href={src.link || src.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">{src.site}</a>
+      {src.query && <>（搜的「{src.query}」）</>}。网上的图版权归原作者，发之前确认能用，商用最好换成自己拍的。
+    </div>
+  );
+}
 
 /** 出图后看图自检的结果：没问题 / 发现问题自动重出过 / 还有问题要人看 */
 function ReviewNote({ r }: { r?: Review }) {

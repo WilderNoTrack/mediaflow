@@ -1,7 +1,8 @@
-import { Bot, BookOpen, ListChecks, Play, Plus, Target, Trash2 } from "lucide-react";
+import { Bot, BookOpen, Image as ImageIcon, ListChecks, Play, Plus, Target, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Account, S } from "../api/client";
-import { useNotes, useRules, useUpdateAccount, useWrite } from "../api/hooks";
+import type { Account, AccountImageMode, S } from "../api/client";
+import { ACCOUNT_IMAGE_MODES } from "../api/client";
+import { useNotes, useRules, useSystem, useUpdateAccount, useWrite } from "../api/hooks";
 import { cn, FREQ_LABEL, timeAgo } from "../lib/utils";
 import { Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Label, Switch, Textarea } from "./ui";
 import { VisualCard } from "./VisualCard";
@@ -23,11 +24,43 @@ export function SettingsPanel({ account, busy }: { account: Account; busy: boole
         这里的内容都可以直接跟右边的小媒说，它会帮你改好；也可以在这里手动改。
       </p>
       <ProfileCard account={account} />
+      <ImageModeCard account={account} />
       <VisualCard account={account} />
       <RulesCard account={account} />
       <NotesCard account={account} />
       <AutoCard account={account} busy={busy} />
     </div>
+  );
+}
+
+/** 配图默认怎么做：AI 画 / AI 画面 + 代码排字 / 排版卡片 / 网上找图 / 自动，点一下就存 */
+function ImageModeCard({ account }: { account: Account }) {
+  const update = useUpdateAccount(account.id);
+  const { data: sys } = useSystem();
+  const cur = (account.image_mode || "ai") as AccountImageMode;
+  const pending = update.isPending ? (update.variables?.image_mode as AccountImageMode | undefined) : undefined;
+  const shown = pending ?? cur;
+  const m = ACCOUNT_IMAGE_MODES.find((x) => x.value === shown);
+  return (
+    <Card>
+      <CardHead icon={<ImageIcon />} title="配图怎么做" desc="每篇配图默认的做法；草稿页里每张也能单独换" />
+      <CardBody className="space-y-2">
+        <div className="flex flex-wrap gap-1.5">
+          {ACCOUNT_IMAGE_MODES.map((x) => (
+            <button key={x.value} disabled={update.isPending} onClick={() => x.value !== cur && update.mutate({ image_mode: x.value })}
+              className={cn("cursor-pointer rounded-full border px-3 py-1 text-xs font-medium transition-all disabled:cursor-wait",
+                x.value === shown ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+              {x.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs leading-relaxed text-muted-foreground">{m?.desc}</p>
+        {m?.ai && sys && !sys.image_configured && (
+          <p className="text-xs text-amber-600">还没配置 AI 配图（生图 Key），配好之前要 AI 画的会跳过或改成排版卡片；「排版卡片」「网上找图」不用 Key。</p>
+        )}
+        <ErrorText error={update.error} />
+      </CardBody>
+    </Card>
   );
 }
 

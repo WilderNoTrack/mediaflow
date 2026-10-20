@@ -577,7 +577,8 @@ export interface paths {
         put?: never;
         /**
          * Edit Images
-         * @description 改配图：改描述 / 加一张 / 删一张 / 调顺序 / 照原描述重出（编号按改之前的顺序）。改过的马上重出，其余不动。
+         * @description 改配图：改描述 / 加一张 / 删一张 / 调顺序 / 照原描述重出 / 换做法 / 直接改代码排的字（编号按改之前的顺序）。
+         *     改过的马上重出（改字的当场重排好，不用等），其余不动。
          */
         post: operations["edit_images_api_drafts__draft_id__images_edit_post"];
         delete?: never;
@@ -960,6 +961,11 @@ export interface components {
             content_style: string;
             /** Image Style */
             image_style: string;
+            /**
+             * Image Mode
+             * @default ai
+             */
+            image_mode: string;
             /** Topic Type */
             topic_type: string;
             /** Keywords */
@@ -1041,6 +1047,8 @@ export interface components {
             content_style?: string | null;
             /** Image Style */
             image_style?: string | null;
+            /** Image Mode */
+            image_mode?: ("ai" | "mixed" | "card" | "photo" | "auto") | null;
             /** Topic Type */
             topic_type?: string | null;
             /** Keywords */
@@ -1063,6 +1071,11 @@ export interface components {
             content_style: string;
             /** Image Style */
             image_style: string;
+            /**
+             * Image Mode
+             * @default ai
+             */
+            image_mode: string;
             /** Topic Type */
             topic_type: string;
             /** Keywords */
@@ -1240,6 +1253,19 @@ export interface components {
          * @enum {string}
          */
         ChatRole: "user" | "assistant" | "tool";
+        /** CompareSide */
+        CompareSide: {
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /**
+             * Items
+             * @default []
+             */
+            items: string[];
+        };
         /** CreatorOut */
         CreatorOut: {
             /** Name */
@@ -1495,6 +1521,30 @@ export interface components {
              */
             regenerate: boolean;
         };
+        /**
+         * ImageLayout
+         * @description 代码排上去的字。kind：cover 封面大字 / list 清单 / steps 步骤 / compare 对比 / quote 金句
+         */
+        ImageLayout: {
+            /** Kind */
+            kind?: ("cover" | "list" | "steps" | "compare" | "quote") | null;
+            /** Title */
+            title?: string | null;
+            /** Subtitle */
+            subtitle?: string | null;
+            /** Tag */
+            tag?: string | null;
+            /** Highlight */
+            highlight?: string | null;
+            /** Items */
+            items?: string[] | null;
+            left?: components["schemas"]["CompareSide"] | null;
+            right?: components["schemas"]["CompareSide"] | null;
+            /** Position */
+            position?: ("top" | "center" | "bottom") | null;
+            /** Palette */
+            palette?: string | null;
+        };
         /** ImageModelOut */
         ImageModelOut: {
             /** Id */
@@ -1510,7 +1560,7 @@ export interface components {
              * Op
              * @enum {string}
              */
-            op: "update" | "add" | "remove" | "move" | "redo";
+            op: "update" | "add" | "remove" | "move" | "redo" | "mode" | "text";
             /**
              * No
              * @description 第几张（按改之前的顺序，从 1 开始）
@@ -1532,6 +1582,13 @@ export interface components {
              * @default
              */
             description: string;
+            /**
+             * Mode
+             * @description mode/add：这张怎么做 ai 整张 AI 画 / ai_text AI 画面 + 代码排字 / card 排版卡片 / photo 网上找图 + 排字，空 = 跟账号设定
+             */
+            mode?: ("" | "ai" | "ai_text" | "card" | "photo") | null;
+            /** @description text：改后的字（只传要改的），马上重排、不重新生图 */
+            layout?: components["schemas"]["ImageLayout"] | null;
         };
         /** ImageOut */
         ImageOut: {
@@ -1565,6 +1622,39 @@ export interface components {
             review: {
                 [key: string]: unknown;
             };
+            /**
+             * Mode
+             * @description 用户给这张指定的做法，空 = 跟账号设定
+             * @default
+             */
+            mode: string;
+            /**
+             * Made By
+             * @description 实际怎么做的：ai / ai_text / card / photo
+             * @default
+             */
+            made_by: string;
+            /**
+             * Layout
+             * @description 代码排上去的字（能直接改）
+             * @default {}
+             */
+            layout: {
+                [key: string]: unknown;
+            };
+            /**
+             * Source
+             * @description 网上找的图的出处：url / link / site / title / query；fallback = 没找到图改成了卡片
+             * @default {}
+             */
+            source: {
+                [key: string]: unknown;
+            };
+            /**
+             * Base Url
+             * @description 没叠字的底图
+             */
+            base_url?: string | null;
         };
         /** ImageSettingsIn */
         ImageSettingsIn: {

@@ -51,7 +51,7 @@ function toolSummary(m: ChatMessage) {
   if (m.tool_name === "save_note") return String(args.title ?? "");
   if (m.tool_name === "add_rule") return String(args.text ?? "");
   if (m.tool_name === "update_profile") {
-    const keys: Record<string, string> = { theme: "主题", audience: "受众", content_style: "文案风格", image_style: "配图风格",
+    const keys: Record<string, string> = { theme: "主题", audience: "受众", content_style: "文案风格", image_style: "配图风格", image_mode: "配图做法",
       topic_type: "选题方向", keywords: "关键词", name: "名称" };
     return Object.keys(args).map((k) => keys[k] ?? k).join("、");
   }
@@ -62,7 +62,9 @@ function toolSummary(m: ChatMessage) {
   if (m.tool_name === "edit_images") {
     const ch = Array.isArray(result.changed) ? (result.changed as number[]) : [];
     const rm = Number(result.removed ?? 0);
-    return [ch.length ? `第 ${ch.join("、")} 张重新出` : "", rm ? `删了 ${rm} 张` : "", `现在共 ${result.total ?? "?"} 张`].filter(Boolean).join("，");
+    const tx = Array.isArray(result.retexted) ? (result.retexted as number[]) : [];
+    return [ch.length ? `第 ${ch.join("、")} 张重新出` : "", tx.length ? `第 ${tx.join("、")} 张改了字` : "", rm ? `删了 ${rm} 张` : "",
+      `现在共 ${result.total ?? "?"} 张`].filter(Boolean).join("，");
   }
   if (m.tool_name === "find_benchmarks" && Array.isArray(result.candidates)) return `${result.candidates.length} 个，在下面勾选`;
   if (m.tool_name === "clone_creator") return `${Array.isArray(result.added) ? result.added.length : 1} 个，进度见下方`;
