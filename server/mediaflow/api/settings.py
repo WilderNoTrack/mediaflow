@@ -146,7 +146,7 @@ class ImageSettingsOut(BaseModel):
     origin: str = Field(description="ui=界面里填的；env=来自 .env；空=没配置")
     model: str
     models: list[ImageModelOut]
-    use_refs: bool = Field(description="出图时参考对标账号的原图")
+    use_refs: bool = Field(description="出图时照着参考帖的原图做版式")
 
 
 class ImageSettingsIn(BaseModel):

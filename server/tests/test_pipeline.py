@@ -232,13 +232,21 @@ async def test_pick_reference_from_benchmark(session, llm, account):
     t = Topic(user_id="local", account_id=account.id, title="秋季通勤叠穿公式")
     session.add(t)
     session.commit()
-    llm.push("ref_pick", {"no": 2, "why": "同样是公式型清单"})
+    llm.push("ref_pick", {"no": 2, "also": [1, 2, 7], "why": "同样是公式型清单"})
     ref, _ = await refpost.pick(session, llm, account.id, t)
     assert ref["title"] == "通勤公式" and ref["why"] == "同样是公式型清单" and ref["creator"] == "小A"
+    assert [x["title"] for x in ref["extra"]] == ["高赞"] and "images" not in ref["extra"][0]  # 文案参考不带图
     assert "高赞" in llm.prompts_of("ref_pick")[0]
     llm.push("ref_pick", {"no": 9})
     ref, _ = await refpost.pick(session, llm, account.id, t)
-    assert ref["title"] == "高赞"
+    assert ref["title"] == "高赞" and [x["title"] for x in ref["extra"]] == ["通勤公式"]
+
+    # 选题自带原爆款：它当主参考帖，对标爆款只挑文案参考
+    t2 = Topic(user_id="local", account_id=account.id, title="复刻", reference={"title": "高赞", "likes": "5万"})
+    session.add(t2)
+    session.commit()
+    ref, _ = await refpost.pick(session, llm, account.id, t2)
+    assert ref["source"] == "topic" and [x["title"] for x in ref["extra"]] == ["通勤公式"]
 
 
 async def test_deepseek_stream_accumulates_tool_calls():

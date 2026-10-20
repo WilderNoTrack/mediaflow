@@ -218,7 +218,8 @@ class Draft(SQLModel, table=True):
     check_issues: list[str] = json_col()  # 代码硬检查没通过的项
     attempts: int = 1
     needs_attention: bool = False  # 质检失败/有硬伤时提醒用户重点看
-    reference: dict = json_obj_col()  # 这篇照着哪篇帖子写、出图（标题、链接、博主、点赞、原图）
+    reference: dict = json_obj_col()  # 这篇照着哪些帖子写：主参考帖（配图照它，含原图缓存）+ extra（只给文案参考）
+    image_spec: str = ""  # 这套配图统一的视觉规范（重出某张时沿用）
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

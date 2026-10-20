@@ -419,7 +419,7 @@ export interface paths {
         get?: never;
         /**
          * Set Reference
-         * @description 换一篇参考帖：读这篇笔记、缓存原图。之后点「全部重新出」就照着它一张对一张出图（文案不动）。
+         * @description 换配图照着的那篇参考帖：读这篇笔记、缓存原图。之后点「全部重新出」就照着它一张对一张出图（文案不动）。
          */
         put: operations["set_reference_api_drafts__draft_id__reference_put"];
         post?: never;
@@ -585,6 +585,26 @@ export interface paths {
         put?: never;
         /** Send Chat */
         post: operations["send_chat_api_accounts__account_id__chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/chat/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stream Chat
+         * @description 和 POST /chat 一样，但用 SSE 边做边推事件（见 manager.chat_events）。断开连接不影响这一轮跑完、存好。
+         */
+        post: operations["stream_chat_api_accounts__account_id__chat_stream_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1236,12 +1256,18 @@ export interface components {
             images_busy: number;
             /**
              * Reference
-             * @description 这篇照着哪篇帖子写、出图：title/url/creator/likes/why/local(原图本地路径)
+             * @description 这篇照着哪些帖子写：主参考帖 title/url/creator/likes/why/local(原图本地路径)，配图只照它；extra 是只给文案参考的其他帖子
              * @default {}
              */
             reference: {
                 [key: string]: unknown;
             };
+            /**
+             * Image Spec
+             * @description 这套配图统一的视觉规范
+             * @default
+             */
+            image_spec: string;
             /**
              * Created At
              * Format: date-time
@@ -1309,12 +1335,18 @@ export interface components {
             images_busy: number;
             /**
              * Reference
-             * @description 这篇照着哪篇帖子写、出图：title/url/creator/likes/why/local(原图本地路径)
+             * @description 这篇照着哪些帖子写：主参考帖 title/url/creator/likes/why/local(原图本地路径)，配图只照它；extra 是只给文案参考的其他帖子
              * @default {}
              */
             reference: {
                 [key: string]: unknown;
             };
+            /**
+             * Image Spec
+             * @description 这套配图统一的视觉规范
+             * @default
+             */
+            image_spec: string;
             /**
              * Created At
              * Format: date-time
@@ -1411,7 +1443,7 @@ export interface components {
             models: components["schemas"]["ImageModelOut"][];
             /**
              * Use Refs
-             * @description 出图时参考对标账号的原图
+             * @description 出图时照着参考帖的原图做版式
              */
             use_refs: boolean;
         };
@@ -1602,7 +1634,7 @@ export interface components {
         ReferenceIn: {
             /**
              * Url
-             * @description 小红书笔记链接（也支持 xhslink 短链、整段分享文字）
+             * @description 配图照着的那篇小红书图文笔记链接（也支持 xhslink 短链、整段分享文字）
              */
             url: string;
         };
@@ -1877,7 +1909,7 @@ export interface components {
             from_chat: boolean;
             /**
              * Reference Url
-             * @description 照着这篇小红书笔记写、出图（不填就自动挑）
+             * @description 照着这些小红书笔记写（可以多个链接/分享文字，第一篇图文笔记当配图模板；不填就自动挑）
              * @default
              */
             reference_url: string;
@@ -3120,6 +3152,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatMessageOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_chat_api_accounts__account_id__chat_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

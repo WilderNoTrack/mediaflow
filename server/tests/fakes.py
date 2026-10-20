@@ -41,7 +41,7 @@ class FakeLLM:
         system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
         for kind, marker in (("writer", prompts.WRITER_SYSTEM), ("reviser", prompts.REVISER_SYSTEM),
                              ("eval", prompts.EVALUATOR_SYSTEM),
-                             ("topic", prompts.TOPIC_SYSTEM), ("image", prompts.IMAGE_PROMPT_SYSTEM),
+                             ("topic", prompts.TOPIC_SYSTEM), ("image", prompts.IMAGE_SET_SYSTEM),
                              ("learn", prompts.LEARN_SYSTEM), ("manager", MANAGER_PROMPT),
                              ("bench_analyze", prompts.BENCH_ANALYZE_SYSTEM), ("bench_adapt", prompts.BENCH_ADAPT_SYSTEM),
                              ("bench_pick", prompts.BENCH_PICK_SYSTEM), ("ref_pick", prompts.REF_PICK_SYSTEM)):
@@ -60,7 +60,7 @@ class FakeLLM:
             q = self.queues["writer"]  # 没单独准备改稿回复时，沿用写稿的脚本
         if not q:
             if kind == "image":
-                return LLMResponse(content="a detailed english prompt")
+                return LLMResponse(content=json.dumps({"spec": "奶油白底、圆润粗黑体、同一个短发女生", "prompts": []}))
             if kind == "topic":
                 return LLMResponse(content=json.dumps({"topics": [
                     {"title": "秋季通勤叠穿公式", "angle": "三件单品搞定", "reason": "换季刚需", "source": "weibo"}]}))
@@ -97,6 +97,16 @@ async def fake_fetch(keyword: str, limit: int) -> SourceReport:
     )
 
 
+def _png() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (30, 40), "purple").save(buf, "PNG")
+    return buf.getvalue()
+
+
 class FakeImages:
     def __init__(self, fail_idx: set[int] | None = None) -> None:
         self.fail_idx = fail_idx or set()
@@ -109,4 +119,4 @@ class FakeImages:
         self.refs.append(refs)
         if i in self.fail_idx:
             raise RuntimeError("生图服务挂了")
-        return b"\x89PNG fake"
+        return _png()

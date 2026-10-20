@@ -66,9 +66,9 @@ export function ImageSettingsDialog({ onClose }: { onClose: () => void }) {
               <input type="checkbox" className="mt-0.5 size-4 accent-indigo-500" checked={st.use_refs}
                 onChange={(e) => save.mutate({ use_refs: e.target.checked })} />
               <span>
-                <span className="font-medium">参考对标账号的原图</span>
+                <span className="font-medium">照着参考帖的原图出图</span>
                 <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
-                  出图时把对标爆款的封面和内页一起传给模型，学它们的版式、配色、字体和构图（不照搬人物和文字）。还没对标账号时不生效。
+                  每篇的配图一张对一张照着它的参考帖（同一篇）的原图做版式，内容和文字换成本篇的（不照搬人物和文字）。关掉就只按账号的配图风格出。不管开不开，一套图都用同一份视觉规范，保证统一。
                 </span>
               </span>
             </label>

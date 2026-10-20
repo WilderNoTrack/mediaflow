@@ -110,16 +110,24 @@ async def _pick_topic(
 def _reference_block(ref: dict) -> str:
     if not ref.get("title"):
         return ""
-    body = " ".join(str(ref.get("content", "")).split())[:600]
+    posts = [ref, *[x for x in ref.get("extra") or [] if x.get("title")]]
+
+    def one(i: int, p: dict) -> str:
+        body = " ".join(str(p.get("content", "")).split())[:600]
+        tag = "（主参考帖，配图也照它）" if i == 0 and len(posts) > 1 else ""
+        return (f"{i + 1}. {tag}{p.get('creator') or '同领域博主'}，{p.get('likes') or '?'}赞\n标题：{p['title']}\n"
+                + (f"正文：{body}\n" if body else "")
+                + (f"标签：{'、'.join(p.get('tags') or [])}\n" if p.get("tags") else ""))
+
     n = len(ref.get("local") or []) or len(ref.get("images") or [])
-    imgs = (f"\n\n【配图要和参考帖一个模子】参考帖有 {n} 张图，image_prompts 也写 {n} 张，第 i 张对应参考帖第 i 张"
-            "（封面对封面，内页对内页）：出图时会把那张原图当模板，照着它的版式、文字位置、配色和装饰重做一张，"
+    imgs = (f"\n\n【配图要和主参考帖一个模子】主参考帖有 {n} 张图，image_prompts 也写 {n} 张，第 i 张对应它的第 i 张"
+            "（封面对封面，内页对内页）：出图时会把那张原图当模板，照着它的版式、文字位置、配色和装饰重做，整套用同一份视觉规范，"
             "所以每张只写清「这一张放本篇的什么内容、图上写哪几个字」，信息量和原图那张相当。") if n > 1 else ""
+    learn = ("学它们共同的标题公式、开头钩子、结构节奏和信息密度（以主参考帖为主）" if len(posts) > 1
+             else "学它的标题公式、开头钩子、结构节奏和信息密度")
     return ("\n\n" + prompts.UNTRUSTED_NOTICE + "\n<external_data>\n"
-            f"【参考帖（{ref.get('creator') or '同领域博主'}，{ref.get('likes') or '?'}赞）】\n标题：{ref['title']}\n"
-            + (f"正文：{body}\n" if body else "")
-            + (f"标签：{'、'.join(ref.get('tags') or [])}\n" if ref.get("tags") else "")
-            + "</external_data>\n学它的标题公式、开头钩子、结构节奏和信息密度，内容必须换成本账号主题，不照抄任何句子。" + imgs)
+            f"【参考帖（{len(posts)} 篇）】\n" + "\n".join(one(i, p) for i, p in enumerate(posts))
+            + "</external_data>\n" + learn + "，内容必须换成本账号主题，不照抄任何句子。" + imgs)
 
 
 async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feedback: str,
@@ -144,10 +152,10 @@ async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feed
 
 
 async def _pick_reference(session: Session, llm: LLM, ctx: AccountContext, topic: Topic, url: str, emit: Emit) -> dict:
-    """这篇照着哪篇帖子写、出图。用户给的链接用不了直接报错（不能悄悄换成别的帖子）；自动挑的挑不到就不用。"""
+    """这篇照着哪些帖子写（配图只照主参考帖）。用户给的链接用不了直接报错（不能悄悄换成别的帖子）；自动挑的挑不到就不用。"""
     from mediaflow.services import refpost
 
-    emit("reference", "找一篇照着做的帖子…" if not url else "读你给的参考帖…", None)
+    emit("reference", "找照着做的参考帖…" if not url else "读你给的参考帖…", None)
     try:
         ref, why_none = await refpost.pick(session, llm, ctx.account_id, topic, url=url)
     except refpost.RefError as e:
@@ -157,9 +165,12 @@ async def _pick_reference(session: Session, llm: LLM, ctx: AccountContext, topic
         ref, why_none = {}, f"参考帖没找到（{e}）"
     if ref:
         n = len(ref.get("local") or [])
-        emit("reference", f"照着「{ref['title'][:24]}」（{ref.get('creator') or '同领域博主'}，{ref.get('likes') or '?'}赞）写，"
-             + (f"{n} 张图一张对一张照着原图做" if n else "原图没拿到，配图按账号风格出"),
-             {"reference": {k: ref.get(k) for k in ("title", "url", "creator", "likes")}})
+        extra = ref.get("extra") or []
+        emit("reference", f"照着「{ref['title'][:24]}」（{ref.get('creator') or '同领域博主'}，{ref.get('likes') or '?'}赞）"
+             + (f"等 {1 + len(extra)} 篇" if extra else "") + "写；"
+             + (f"配图统一照这篇，{n} 张一张对一张照着原图做" if n else "这篇原图没拿到，配图按账号风格统一出"),
+             {"reference": {k: ref.get(k) for k in ("title", "url", "creator", "likes")},
+              "extra": [x.get("title", "") for x in extra]})
     else:
         emit("warning", f"{why_none}，这篇按账号的配图风格出图；想照着某篇做，在草稿页贴它的链接", None)
     return ref

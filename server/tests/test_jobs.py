@@ -162,3 +162,68 @@ async def test_images_mold_reference_post(session, llm, account, with_images, mo
     session.expire_all()
     imgs = session.exec(select(DraftImage).where(DraftImage.draft_id == d.id).order_by(DraftImage.idx)).all()
     assert [i.ref_path for i in imgs] == d.reference["local"]
+
+
+async def test_image_set_is_unified(session, llm, account, monkeypatch):
+    """没有参考帖：整套用同一份视觉规范，先出封面、其余带上封面当风格参照；重出某一张沿用规范和封面。"""
+    from mediaflow.agents import prompts
+    from mediaflow.services.images import generate_images
+
+    monkeypatch.setenv("IMAGE_API_KEY", "x")
+    get_settings.cache_clear()
+    fake = FakeImages()
+    images_mod.set_provider_factory(lambda: fake)
+    llm.push("writer", post(images=["封面大字", "第一步", "第二步"])).push("eval", evaluation(8))
+    llm.push("image", {"spec": "奶油白底#F5EFE6、圆润粗黑体、同一个短发女生", "prompts": [
+        {"idx": 1, "prompt": "封面：大字「3步」"}, {"idx": 2, "prompt": "第一步特写"}, {"idx": 3, "prompt": "第二步特写"}]})
+    job = enqueue(session, JobKind.write_draft, user_id="local", account_id=account.id, payload={})
+    await run_job(job.id)
+    d = session.exec(select(Draft)).one()
+    assert d.reference == {}
+    await generate_images(session, llm, d.id)
+    session.refresh(d)
+    assert d.image_spec.startswith("奶油白底")
+    assert len(llm.prompts_of("image")) == 1  # 一整套一次写，不是每张各写各的
+    assert fake.refs[0] is None and all(r and len(r) == 1 for r in fake.refs[1:])  # 封面先出，其余带封面
+    imgs = session.exec(select(DraftImage).where(DraftImage.draft_id == d.id).order_by(DraftImage.idx)).all()
+    assert all("奶油白底#F5EFE6" in i.expanded_prompt for i in imgs)
+    assert "同一套里已经出好的第 1 张" in imgs[2].expanded_prompt and imgs[0].status == ImageStatus.done
+
+    llm.push("image", {"spec": "完全不同的新规范", "prompts": [{"idx": 3, "prompt": "第二步重画"}]})
+    await generate_images(session, llm, d.id, only_idx=2)
+    session.refresh(d)
+    assert d.image_spec.startswith("奶油白底")  # 只重出一张：规范沿用，不让模型改
+    assert prompts.IMAGE_SPEC_FIXED.split("\n")[1][:10] in llm.prompts_of("image")[-1]
+    assert len(fake.refs[-1]) == 1 and fake.refs[-1][0] == fake.refs[1][0]  # 还是拿封面当参照
+
+
+async def test_mold_regen_one_keeps_style(session, llm, account, monkeypatch):
+    """照着参考帖出：重出某一张时带两张参考图（原帖那张当版式模板 + 同套封面当风格参照）。"""
+    import io
+
+    from PIL import Image
+
+    from mediaflow.services.images import generate_images
+
+    monkeypatch.setenv("IMAGE_API_KEY", "x")
+    get_settings.cache_clear()
+    fake = FakeImages()
+    images_mod.set_provider_factory(lambda: fake)
+    d_dir = get_settings().images_dir / "_refs"
+    d_dir.mkdir(parents=True, exist_ok=True)
+    for n in ("a", "b"):
+        buf = io.BytesIO()
+        Image.new("RGB", (30, 40), "red").save(buf, "JPEG")
+        (d_dir / f"{n}.jpg").write_bytes(buf.getvalue())
+    d = Draft(user_id="local", account_id=account.id, title="t", body="b", original_title="t", original_body="b",
+              reference={"title": "原帖", "local": ["_refs/a.jpg", "_refs/b.jpg"]})
+    session.add(d)
+    session.commit()
+    session.add_all([DraftImage(draft_id=d.id, idx=k, prompt=f"第{k}张") for k in range(3)])
+    session.commit()
+    await generate_images(session, llm, d.id)
+    assert all(len(r) == 1 for r in fake.refs)  # 整套一起出：每张只带原帖对应那张
+    await generate_images(session, llm, d.id, only_idx=2)
+    assert len(fake.refs[-1]) == 2
+    img = session.exec(select(DraftImage).where(DraftImage.draft_id == d.id, DraftImage.idx == 2)).one()
+    assert img.ref_path == "_refs/b.jpg" and img.expanded_prompt.startswith("参考图 1 是版式模板")

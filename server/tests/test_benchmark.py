@@ -95,7 +95,7 @@ async def test_clone_flow(session, account, llm, fake_research):
     t = session.get(Topic, d.topic_id)
     assert t.source == "benchmark" and t.status == TopicStatus.used
     w = llm.prompts_of("writer")[0]
-    assert "参考帖（程十安an" in w and "又是一个很长但很干的视频" in w and "不照抄" in w
+    assert "程十安an，10万+赞" in w and "又是一个很长但很干的视频" in w and "不照抄" in w
 
 
 async def test_clone_failure_marks_benchmark(session, account, llm, monkeypatch):
