@@ -51,6 +51,11 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    find_topics 的结果也会以卡片列在对话里（每个都有「写这篇」按钮），不要逐条复述，挑 1-2 个说说为什么值得写即可。
 5. 工具结果里有失败或降级（比如热点来源没抓到），必须如实告诉用户，不能装作正常。
 6. 不要在聊天里写整篇文案，那是 write_post 的事。
+7. 配图是怎么来的（如实说）：每篇都会挑一篇「参考帖」——用户给的链接 > 选题来源的原帖 > 对标账号里结构最像的爆款 > 小红书上这个选题最热的图文；
+   写稿学它的结构，配图一张对一张把它的原图当模板，照着版式、文字位置、配色重做，内容和文字换成本篇的（不搬原图里的字、人脸和水印）。
+   草稿页能看到照的是哪篇、每张对的是原帖哪张。用户说「照着这篇写/出图」并给了链接，就 write_post 并把链接放进 reference_url；
+   想给已有草稿换参考帖，告诉他在草稿页「照着这篇帖子」里贴链接，再点全部重新出。没有对标、也没连小红书时找不到参考帖，就按账号的配图风格出。
+8. AI 写完会自己挑问题、自己按意见改好，不用让用户去逐条改；草稿页列着改了哪些地方。
 
 【调研】用户想了解某个博主、某类爆款、某个话题在各平台的情况时，用 research_* 工具查真实数据。
 - 先宽后窄：research_search 看话题全貌，或 research_creators 先确认是哪位博主（重名时挑名字最吻合、粉丝最多的，拿不准就问用户），
@@ -129,9 +134,10 @@ TOOLS = [
     _tool("find_topics", "搜热点并按账号定位出几个选题，存进选题库", {
         "direction": {"type": "string", "description": "可选：用户指定的方向"},
     }),
-    _tool("write_post", "派一个后台任务写一篇稿子（选题→写→质检→配图），写好进草稿待审核", {
+    _tool("write_post", "派一个后台任务写一篇稿子（选题→挑参考帖→写→AI 自己挑问题自己改→照着参考帖原图出图），写好进草稿待审核", {
         "topic_id": {"type": "string", "description": "可选：选题库里的选题 ID"},
         "hint": {"type": "string", "description": "可选：方向或额外要求"},
+        "reference_url": {"type": "string", "description": "可选：用户指定要照着做的小红书笔记链接（原样传，含分享文字也行）"},
     }),
     _tool("set_auto", "开关自动模式（按频率自动写稿进待审核）", {
         "enabled": {"type": "boolean"},
@@ -260,10 +266,11 @@ class Toolbox:
             out["source_note"] = p.source_note
         return out
 
-    async def t_write_post(self, topic_id: str = "", hint: str = "") -> dict:
+    async def t_write_post(self, topic_id: str = "", hint: str = "", reference_url: str = "") -> dict:
         try:
             job = enqueue(self.s, JobKind.write_draft, user_id=self.acc.user_id, account_id=self.acc.id,
-                          payload={"topic_id": topic_id or None, "hint": hint, "trigger": Trigger.chat.value})
+                          payload={"topic_id": topic_id or None, "hint": hint, "trigger": Trigger.chat.value,
+                                   "reference_url": reference_url.strip()[:500]})
         except JobConflict as e:
             return {"ok": False, "error": str(e), "job_id": e.job.id}
         return {"ok": True, "job_id": job.id, "note": "已开始在后台写，1-3 分钟后在草稿里能看到"}

@@ -77,6 +77,22 @@ async def _fetch(c: httpx.AsyncClient, url: str) -> bytes | None:
     return data
 
 
+async def cache_local(urls: list[str]) -> list[str]:
+    """把原图下载缓存到 data/images/_refs，返回相对 data/images 的路径（拿不到的跳过）。"""
+    out: list[str] = []
+    async with httpx.AsyncClient(timeout=15, headers=_HEADERS, follow_redirects=True) as c:
+        for u in urls:
+            if u and await _fetch(c, u):
+                out.append(f"_refs/{_key(u)}.jpg")
+    return out
+
+
+def local_uri(rel: str) -> str | None:
+    """_refs/xxx.jpg → data URI（给生图模型当参考图）。"""
+    path = get_settings().images_dir / rel
+    return _uri(path.read_bytes()) if rel.startswith("_refs/") and path.exists() else None
+
+
 def _uri(data: bytes) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(data).decode()
 

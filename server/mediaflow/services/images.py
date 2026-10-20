@@ -23,6 +23,7 @@ from mediaflow.domain.models import Account, Draft, DraftImage, ImageStatus, Top
 from mediaflow.llm.client import LLM, LLMError
 from mediaflow.services.refs import Refs
 from mediaflow.services.refs import collect as collect_refs
+from mediaflow.services.refs import local_uri
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,13 @@ class GrsaiProvider:
 _provider_factory: Callable[[], ImageProvider] | None = None
 
 
+def mold_slot(local: list[str], idx: int) -> int:
+    """新图第 idx 张照着原帖第几张（0 起）：一张对一张；新图比原帖多时，多出来的轮流用原帖内页。"""
+    if idx < len(local):
+        return idx
+    return 1 + (idx - 1) % (len(local) - 1) if len(local) > 1 else 0
+
+
 def get_provider() -> ImageProvider:
     if _provider_factory is not None:
         return _provider_factory()
@@ -163,7 +171,8 @@ def set_provider_factory(f: Callable[[], ImageProvider] | None) -> None:
     _provider_factory = f
 
 
-async def _expand(llm: LLM, image_style: str, title: str, img: DraftImage, total: int, n_refs: int = 0) -> str:
+async def _expand(llm: LLM, image_style: str, title: str, img: DraftImage, total: int, n_refs: int = 0,
+                  mold: tuple[str, int] | None = None) -> str:
     try:
         r = await llm.complete([
             {"role": "system", "content": prompts.IMAGE_PROMPT_SYSTEM},
@@ -171,7 +180,8 @@ async def _expand(llm: LLM, image_style: str, title: str, img: DraftImage, total
                 image_style=image_style or "手机实拍的生活感，自然光",
                 title=title, idx=img.idx + 1, total=total,
                 cover="（封面）" if img.idx == 0 else "", prompt=img.prompt,
-            ) + (prompts.IMAGE_REFS_NOTE.format(n=n_refs) if n_refs else "")},
+            ) + (prompts.IMAGE_MOLD_NOTE.format(ref_title=mold[0][:30], ref_idx=mold[1]) if mold
+                 else prompts.IMAGE_REFS_NOTE.format(n=n_refs) if n_refs else "")},
         ], temperature=0.5)
         return r.content.strip() or img.prompt
     except LLMError as e:
@@ -218,7 +228,11 @@ async def generate_images(
     session.commit()
     sem = asyncio.Semaphore(max(1, get_settings().image_concurrency))  # 几张一起出，6 张不用排队等
     refs = Refs()
-    if use_refs():
+    ref = draft.reference or {}
+    local = [p for p in ref.get("local") or [] if (get_settings().images_dir / p).exists()]
+    if use_refs() and local:
+        emit("image", f"照着参考帖「{ref.get('title', '')[:20]}」的 {len(local)} 张原图出图，一张对一张学版式", None)
+    elif use_refs():
         try:
             refs = await collect_refs(session, draft.account_id, session.get(Topic, draft.topic_id) if draft.topic_id else None)
         except Exception as e:  # noqa: BLE001 - 参考图出问题不影响出图
@@ -237,8 +251,15 @@ async def generate_images(
         async with sem:
             emit("image", f"第 {img.idx + 1} 张出图中…", {"idx": img.idx, **progress()})
             try:
-                r = refs.for_image(img.idx)
-                img.expanded_prompt = await _expand(llm, style, draft.title, img, len(images), len(r))
+                mold = None
+                if use_refs() and local:
+                    k = mold_slot(local, img.idx)
+                    img.ref_path = local[k]
+                    r = [u for u in [local_uri(local[k])] if u]
+                    mold = (ref.get("title", ""), k + 1) if r else None
+                else:
+                    r = refs.for_image(img.idx)
+                img.expanded_prompt = await _expand(llm, style, draft.title, img, len(images), len(r), mold)
                 try:
                     data = await provider.generate(img.expanded_prompt, r or None)
                 except ImageError as e:

@@ -179,6 +179,7 @@ class ImageOut(BaseModel):
     status: ImageStatus
     url: str | None
     error: str
+    ref_url: str | None = Field(None, description="这张照着参考帖哪张原图出的（本地缓存地址）")
 
 
 class DraftOut(BaseModel):
@@ -200,6 +201,7 @@ class DraftOut(BaseModel):
     images_total: int = 0
     images_done: int = 0
     images_busy: int = Field(0, description="排队中或正在出的配图张数")
+    reference: dict = Field(default={}, description="这篇照着哪篇帖子写、出图：title/url/creator/likes/why/local(原图本地路径)")
     created_at: datetime
     updated_at: datetime
 
@@ -231,6 +233,11 @@ class WriteIn(BaseModel):
     topic_id: str | None = None
     hint: str = ""
     from_chat: bool = Field(False, description="在小媒对话里点的「写这篇」：把这次写稿记进对话，进度和结果卡片留在对话里")
+    reference_url: str = Field("", max_length=500, description="照着这篇小红书笔记写、出图（不填就自动挑）")
+
+
+class ReferenceIn(BaseModel):
+    url: str = Field(max_length=500, description="小红书笔记链接（也支持 xhslink 短链、整段分享文字）")
 
 
 class JobOut(BaseModel):

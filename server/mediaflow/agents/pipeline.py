@@ -107,19 +107,23 @@ async def _pick_topic(
     return t
 
 
-def _reference_block(topic: Topic) -> str:
-    ref = topic.reference or {}
+def _reference_block(ref: dict) -> str:
     if not ref.get("title"):
         return ""
     body = " ".join(str(ref.get("content", "")).split())[:600]
+    n = len(ref.get("local") or []) or len(ref.get("images") or [])
+    imgs = (f"\n\n【配图要和参考帖一个模子】参考帖有 {n} 张图，image_prompts 也写 {n} 张，第 i 张对应参考帖第 i 张"
+            "（封面对封面，内页对内页）：出图时会把那张原图当模板，照着它的版式、文字位置、配色和装饰重做一张，"
+            "所以每张只写清「这一张放本篇的什么内容、图上写哪几个字」，信息量和原图那张相当。") if n > 1 else ""
     return ("\n\n" + prompts.UNTRUSTED_NOTICE + "\n<external_data>\n"
-            f"【参考爆款（{ref.get('creator', '对标账号')}，{ref.get('likes', '?')}赞）】\n标题：{ref['title']}\n"
+            f"【参考帖（{ref.get('creator') or '同领域博主'}，{ref.get('likes') or '?'}赞）】\n标题：{ref['title']}\n"
             + (f"正文：{body}\n" if body else "")
             + (f"标签：{'、'.join(ref.get('tags') or [])}\n" if ref.get("tags") else "")
-            + "</external_data>\n学它的标题公式、开头钩子、结构节奏和信息密度，内容必须换成本账号主题，不照抄任何句子。")
+            + "</external_data>\n学它的标题公式、开头钩子、结构节奏和信息密度，内容必须换成本账号主题，不照抄任何句子。" + imgs)
 
 
-async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feedback: str) -> Candidate:
+async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feedback: str,
+                    ref: dict | None = None) -> Candidate:
     data = await complete_json(llm, [
         {"role": "system", "content": prompts.WRITER_SYSTEM},
         {"role": "user", "content": prompts.WRITER_USER.format(
@@ -129,7 +133,7 @@ async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feed
             topic_angle=topic.angle or "自行决定",
             hint_block=f"用户补充要求：{hint}\n" if hint else "",
             feedback_block=f"\n【上一版的问题，这次必须改掉】\n{feedback}\n" if feedback else "",
-        ) + _reference_block(topic)},
+        ) + _reference_block(ref or (topic.reference or {}))},
     ], temperature=0.85)
     return Candidate(
         title=str(data.get("title", "")).strip(),
@@ -137,6 +141,28 @@ async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feed
         tags=clean_tags(data.get("tags") or []),
         image_prompts=[str(p).strip() for p in (data.get("image_prompts") or []) if str(p).strip()][:9],
     )
+
+
+async def _pick_reference(session: Session, llm: LLM, ctx: AccountContext, topic: Topic, url: str, emit: Emit) -> dict:
+    """这篇照着哪篇帖子写、出图。用户给的链接用不了直接报错（不能悄悄换成别的帖子）；自动挑的挑不到就不用。"""
+    from mediaflow.services import refpost
+
+    emit("reference", "找一篇照着做的帖子…" if not url else "读你给的参考帖…", None)
+    try:
+        ref, why_none = await refpost.pick(session, llm, ctx.account_id, topic, url=url)
+    except refpost.RefError as e:
+        raise ValueError(f"参考帖用不了：{e}") from e
+    except Exception as e:  # noqa: BLE001 - 自动挑参考帖出问题不影响写稿
+        logger.warning("挑参考帖失败", exc_info=True)
+        ref, why_none = {}, f"参考帖没找到（{e}）"
+    if ref:
+        n = len(ref.get("local") or [])
+        emit("reference", f"照着「{ref['title'][:24]}」（{ref.get('creator') or '同领域博主'}，{ref.get('likes') or '?'}赞）写，"
+             + (f"{n} 张图一张对一张照着原图做" if n else "原图没拿到，配图按账号风格出"),
+             {"reference": {k: ref.get(k) for k in ("title", "url", "creator", "likes")}})
+    else:
+        emit("warning", f"{why_none}，这篇按账号的配图风格出图；想照着某篇做，在草稿页贴它的链接", None)
+    return ref
 
 
 def _length_req(ctx: AccountContext) -> str:
@@ -397,17 +423,19 @@ async def write_draft(
     trigger: Trigger = Trigger.manual,
     emit: Emit = _noop,
     fetch: Fetcher | None = None,
+    reference_url: str = "",
 ) -> Draft:
     ctx = load_context(session, account_id)
     if not (ctx.theme or ctx.keywords or hint or topic_id):
         raise ValueError("账号还没有设定主题，先和管家聊聊账号定位吧")
 
     topic = await _pick_topic(session, llm, ctx, topic_id, hint, emit, fetch)
+    ref = await _pick_reference(session, llm, ctx, topic, reference_url, emit)
 
     candidates: list[Candidate] = []
     eval_failed = False
     emit("write", "第 1 版写作中…", {"attempt": 1})
-    c = await _generate(llm, ctx, topic, hint, "")
+    c = await _generate(llm, ctx, topic, hint, "", ref)
     if await _check(llm, ctx, c):
         eval_failed = True
         emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
@@ -459,6 +487,7 @@ async def write_draft(
         check_issues=best.issues,
         attempts=len(candidates),
         needs_attention=needs_attention,
+        reference=ref,
     )
     session.add(draft)
     session.flush()

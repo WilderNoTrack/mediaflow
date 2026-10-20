@@ -68,3 +68,14 @@ def client():
 
     with TestClient(create_app(background=False)) as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def no_ref_downloads(monkeypatch):
+    """测试里不真的去下载参考帖原图（需要的测试自己再 patch refpost.cache_local）。"""
+    from mediaflow.services import refpost as refpost_mod
+
+    async def offline(urls):
+        return []
+
+    monkeypatch.setattr(refpost_mod, "cache_local", offline)

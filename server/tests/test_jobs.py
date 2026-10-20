@@ -112,43 +112,53 @@ async def test_grsai_falls_back_to_other_model(monkeypatch):
     assert images_mod._payload("nano-banana-2.1") == {"aspectRatio": "3:4", "imageSize": "1K"}
 
 
-async def test_images_use_benchmark_originals_as_refs(session, llm, account, with_images, monkeypatch):
-    """对标爆款的原图下载到本地，封面参考对方封面、内页参考对方内页。"""
+async def test_images_mold_reference_post(session, llm, account, with_images, monkeypatch):
+    """写稿时挑一篇对标爆款当参考帖，原图缓存到本地；出图一张对一张照着原帖那张做。"""
     import io
 
     from PIL import Image
 
     from mediaflow.domain.models import Benchmark, BenchmarkStatus
+    from mediaflow.services import refpost as refpost_mod
     from mediaflow.services import refs as refs_mod
 
-    buf = io.BytesIO()
-    Image.new("RGB", (60, 80), "red").save(buf, "WEBP")
+    monkeypatch.setattr(refpost_mod, "cache_local", refs_mod.cache_local)  # 这条测试要真的走缓存
     got = []
 
     class Resp:
-        content = buf.getvalue()
+        def __init__(self, color):
+            buf = io.BytesIO()
+            Image.new("RGB", (60, 80), color).save(buf, "WEBP")
+            self.content = buf.getvalue()
 
         def raise_for_status(self):
             pass
 
     async def fake_get(self, url, **kw):
         got.append(url)
-        return Resp()
+        return Resp("red" if "c1" in url else "blue" if "i2" in url else "green")
 
     monkeypatch.setattr(refs_mod.httpx.AsyncClient, "get", fake_get)
     session.add(Benchmark(user_id=account.user_id, account_id=account.id, target="x", status=BenchmarkStatus.ready,
+                          creator_name="程十安an",
                           samples=[{"title": "爆款", "likes": "1万", "kind": "图文", "cover": "https://ci/a/c1!webp",
                                     "images": ["https://ci/a/c1!webp", "https://ci/a/i2!webp", "https://ci/a/i3!webp"]},
                                    {"title": "视频", "likes": "9万", "kind": "视频", "cover": "https://ci/a/v!webp"}]))
     session.commit()
-    llm.push("writer", post(images=["封面", "细节"])).push("eval", evaluation(8))
+    llm.push("writer", post(images=["封面", "细节", "清单"])).push("eval", evaluation(8))
     job = enqueue(session, JobKind.write_draft, user_id="local", account_id=account.id, payload={})
     await run_job(job.id)
+    d = session.exec(select(Draft)).one()
+    assert d.reference["title"] == "爆款" and d.reference["creator"] == "程十安an"
+    assert len(d.reference["local"]) == 3 and "https://ci/a/v!webp" not in got  # 视频笔记不参考
+    assert "参考帖有 3 张图" in llm.prompts_of("writer")[0]
+
     img_job = session.exec(select(Job).where(Job.kind == JobKind.generate_images)).one()
     await run_job(img_job.id)
-
-    assert "https://ci/a/v!webp" not in got  # 视频笔记的图不参考
     by_n = with_images.refs
-    assert len(by_n) == 2 and all(r and r[0].startswith("data:image/jpeg;base64,") for r in by_n)
-    assert sorted(len(r) for r in by_n) == [1, 2]  # 封面 1 张对标封面，内页 2 张对标内页
-    assert "参考图" in llm.prompts_of("image")[0]
+    assert len(by_n) == 3 and all(len(r) == 1 and r[0].startswith("data:image/jpeg;base64,") for r in by_n)
+    assert len({r[0] for r in by_n}) == 3  # 每张照着原帖不同的那张
+    assert all("严格照着参考图" in p for p in llm.prompts_of("image"))
+    session.expire_all()
+    imgs = session.exec(select(DraftImage).where(DraftImage.draft_id == d.id).order_by(DraftImage.idx)).all()
+    assert [i.ref_path for i in imgs] == d.reference["local"]

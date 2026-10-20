@@ -180,3 +180,46 @@ def test_llm_key_from_ui(client, monkeypatch):
     assert client.post("/api/settings/llm/test", json={"api_key": ""}).json()["ok"] is True  # 不传就测已保存的
     assert seen == ["sk-bad", "sk-good", "sk-good"]
     assert client.put("/api/settings/llm", json={"api_key": ""}).json()["configured"] is False
+
+
+async def test_set_reference_and_user_link(client, session, llm, monkeypatch):
+    """草稿页换参考帖：读笔记、缓存原图、预告每张照哪张；读不到的链接直接报原因。用户给的链接写稿也照着它。"""
+    from mediaflow.agents.pipeline import write_draft
+    from mediaflow.services import refpost
+
+    async def detail(url):
+        if "bad" in url:
+            raise refpost.RefError("这篇是视频笔记，没有图可以照着做，换一篇图文笔记")
+        return {"title": "早八通勤5套", "url": url, "creator": "小A", "likes": "2.3万", "content": "正文",
+                "tags": ["通勤"], "images": ["https://ci/1", "https://ci/2"], "cover": "https://ci/1"}
+
+    async def cache(urls):
+        return [f"_refs/{u[-1]}.jpg" for u in urls]
+
+    monkeypatch.setattr(refpost, "_detail", detail)
+    monkeypatch.setattr(refpost, "cache_local", cache)
+    a = make_account(client)
+    d = await _make_draft(session, llm, a["id"])
+    r = client.put(f"/api/drafts/{d.id}/reference", json={"url": "https://www.xiaohongshu.com/explore/abc"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["reference"]["title"] == "早八通勤5套" and body["reference"]["source"] == "user"
+    assert body["reference"]["local"] == ["_refs/1.jpg", "_refs/2.jpg"]
+    assert [i["ref_url"] for i in body["images"]][:2] == ["/files/images/_refs/1.jpg", "/files/images/_refs/2.jpg"]
+    r = client.put(f"/api/drafts/{d.id}/reference", json={"url": "https://xhslink.com/bad"})
+    assert r.status_code == 400 and "视频笔记" in r.json()["detail"]
+
+    from mediaflow.domain.models import Topic
+
+    t1, t2 = Topic(user_id="local", account_id=a["id"], title="早八5分钟通勤妆"), \
+        Topic(user_id="local", account_id=a["id"], title="周末约会穿搭")
+    session.add_all([t1, t2])
+    session.commit()
+    llm.push("writer", post()).push("eval", evaluation(8.5))
+    d2 = await write_draft(session, llm, a["id"], topic_id=t1.id, reference_url="https://www.xiaohongshu.com/explore/xyz")
+    assert d2.reference["url"].endswith("xyz") and "早八通勤5套" in llm.prompts_of("writer")[-1]
+    try:
+        await write_draft(session, llm, a["id"], topic_id=t2.id, reference_url="https://xhslink.com/bad")
+        raise AssertionError("用户给的链接用不了要报错")
+    except ValueError as e:
+        assert "视频笔记" in str(e)

@@ -218,6 +218,7 @@ class Draft(SQLModel, table=True):
     check_issues: list[str] = json_col()  # 代码硬检查没通过的项
     attempts: int = 1
     needs_attention: bool = False  # 质检失败/有硬伤时提醒用户重点看
+    reference: dict = json_obj_col()  # 这篇照着哪篇帖子写、出图（标题、链接、博主、点赞、原图）
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -230,6 +231,7 @@ class DraftImage(SQLModel, table=True):
     expanded_prompt: str = ""  # 扩写后的生图提示词
     status: ImageStatus = ImageStatus.pending
     path: str = ""  # 相对 data/images 的路径
+    ref_path: str = ""  # 照着原帖哪张图出的（相对 data/images，_refs/ 下的缓存）
     error: str = ""
     updated_at: datetime = Field(default_factory=utcnow)
 

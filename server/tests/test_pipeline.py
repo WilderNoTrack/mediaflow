@@ -218,3 +218,24 @@ async def test_last_round_only_verifies(session, llm, account):
     d, _ = await run(session, llm, account)
     assert d.attempts == 4 and d.evaluation["attempted"] and d.needs_attention
     assert "最后一次复核" in llm.prompts_of("eval")[-1] and "最后一次复核" not in llm.prompts_of("eval")[-2]
+
+
+async def test_pick_reference_from_benchmark(session, llm, account):
+    """没给链接：从对标爆款里让 AI 挑一篇和选题最像的；AI 挑不出来就按点赞最高。"""
+    from mediaflow.domain.models import Benchmark, BenchmarkStatus, Topic
+    from mediaflow.services import refpost
+
+    session.add(Benchmark(user_id=account.user_id, account_id=account.id, target="x", status=BenchmarkStatus.ready,
+                          creator_name="小A", samples=[
+                              {"title": "高赞", "likes": "5万", "kind": "图文", "images": ["https://ci/1", "https://ci/2"]},
+                              {"title": "通勤公式", "likes": "1万", "kind": "图文", "images": ["https://ci/3", "https://ci/4"]}]))
+    t = Topic(user_id="local", account_id=account.id, title="秋季通勤叠穿公式")
+    session.add(t)
+    session.commit()
+    llm.push("ref_pick", {"no": 2, "why": "同样是公式型清单"})
+    ref, _ = await refpost.pick(session, llm, account.id, t)
+    assert ref["title"] == "通勤公式" and ref["why"] == "同样是公式型清单" and ref["creator"] == "小A"
+    assert "高赞" in llm.prompts_of("ref_pick")[0]
+    llm.push("ref_pick", {"no": 9})
+    ref, _ = await refpost.pick(session, llm, account.id, t)
+    assert ref["title"] == "高赞"

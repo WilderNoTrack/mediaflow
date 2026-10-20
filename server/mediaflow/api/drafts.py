@@ -10,7 +10,7 @@ from mediaflow.domain.models import (
     Account, Draft, DraftImage, DraftStatus, Feedback, ImageStatus, Job, JobKind, Topic, utcnow,
 )
 from mediaflow.domain.schemas import (
-    DraftDetail, DraftOut, DraftPatch, FeedbackIn, ImageOut, JobOut, LearnOut, ReviseIn, WriteIn,
+    DraftDetail, DraftOut, DraftPatch, FeedbackIn, ImageOut, JobOut, LearnOut, ReferenceIn, ReviseIn, WriteIn,
 )
 from mediaflow.jobs.queue import ACTIVE, enqueue
 from mediaflow.llm.client import get_llm
@@ -36,8 +36,18 @@ def _out(s: Session, d: Draft, detail: bool = False) -> DraftOut | DraftDetail:
     if not detail:
         return DraftOut(**base)
     return DraftDetail(**base, images=[
-        ImageOut(id=i.id, idx=i.idx, prompt=i.prompt, status=i.status, url=_img_url(i), error=i.error) for i in imgs
+        ImageOut(id=i.id, idx=i.idx, prompt=i.prompt, status=i.status, url=_img_url(i), error=i.error,
+                 ref_url=_ref_url(d, i)) for i in imgs
     ])
+
+
+def _ref_url(d: Draft, img: DraftImage) -> str | None:
+    """已出的图记着照的是哪张；还没出的按「一张对一张」预告会照哪张。"""
+    from mediaflow.services.images import mold_slot
+
+    local = (d.reference or {}).get("local") or []
+    rel = img.ref_path or (local[mold_slot(local, img.idx)] if local else "")
+    return f"/files/images/{rel}" if rel else None
 
 
 @router.get("/api/accounts/{account_id}/drafts", response_model=list[DraftOut])
@@ -52,7 +62,8 @@ def list_drafts(status: DraftStatus | None = None, acc: Account = Depends(owned_
 @router.post("/api/accounts/{account_id}/write", response_model=JobOut, status_code=202)
 def start_writing(body: WriteIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
     job = enqueue(s, JobKind.write_draft, user_id=acc.user_id, account_id=acc.id,
-                  payload={"topic_id": body.topic_id, "hint": body.hint, "trigger": "chat" if body.from_chat else "manual"})
+                  payload={"topic_id": body.topic_id, "hint": body.hint, "trigger": "chat" if body.from_chat else "manual",
+                           "reference_url": body.reference_url.strip()})
     if body.from_chat:
         from mediaflow.agents.manager import log_tool
 
@@ -60,6 +71,26 @@ def start_writing(body: WriteIn, acc: Account = Depends(owned_account), s: Sessi
         log_tool(s, acc, "write_post", {"topic_id": body.topic_id or ""},
                  {"ok": True, "job_id": job.id, "topic": t.title if t else "", "note": "用户点了「写这篇」"})
     return JobOut(**job.model_dump())
+
+
+@router.put("/api/drafts/{draft_id}/reference", response_model=DraftDetail)
+async def set_reference(body: ReferenceIn, d: Draft = Depends(owned_draft), s: Session = Depends(get_session)):
+    """换一篇参考帖：读这篇笔记、缓存原图。之后点「全部重新出」就照着它一张对一张出图（文案不动）。"""
+    from mediaflow.services import refpost
+
+    try:
+        ref = await refpost.from_url(body.url)
+    except refpost.RefError as e:
+        raise HTTPException(400, str(e)) from e
+    d.reference = ref
+    for i in _images(s, d.id):
+        i.ref_path = ""
+        s.add(i)
+    d.updated_at = utcnow()
+    s.add(d)
+    s.commit()
+    s.refresh(d)
+    return _out(s, d, detail=True)
 
 
 @router.get("/api/drafts/{draft_id}", response_model=DraftDetail)
