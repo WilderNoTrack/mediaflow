@@ -416,7 +416,10 @@ def _fallback_layout(img: DraftImage, draft: Draft) -> dict:
     """模型没给 layout 时，从描述里「」括起来的字凑一份：第一处当标题，其余当要点；封面用笔记标题。"""
     quoted = [q.strip() for q in re.findall(r"「([^」]{1,40})」", img.prompt or "") if q.strip()]
     if img.idx == 0:
-        return {"kind": "cover", "title": quoted[0] if quoted else draft.title}
+        lay = {"kind": "cover", "title": quoted[0] if quoted else draft.title}
+        if len(quoted) >= 2:
+            lay["subtitle"] = " · ".join(quoted[1:4])
+        return lay
     if len(quoted) >= 3:
         return {"kind": "list", "title": quoted[0], "items": quoted[1:7]}
     head = re.split(r"[，。,；;：:]", re.sub(r"^[^：:]{0,6}[：:]", "", img.prompt or ""))[0]
