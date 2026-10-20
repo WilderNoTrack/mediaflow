@@ -235,11 +235,13 @@ type Ev = {
   dimensions?: Record<string, number>; violated_rules?: string[]; issues?: string[]; suggestions?: string[];
   items?: Item[]; resolved?: number; edits?: { applied: number; skipped: number; unfixed?: string[] };
   history?: { attempt: number; score: number | null; problems: number }[];
+  changes?: Change[]; attempted?: boolean;
 };
+type Change = { where: string; before: string; after: string; why?: string };
 const PASS = 7;
 
-/** AI 质检：先说结论（达标没、自动改了几轮、分数怎么变的），再列「必须改 / 可以更好」，建议默认收起；
- *  没达标就能一键让 AI 按这些意见再改一轮（改得更好才替换）。 */
+/** AI 质检：先说结论（达标没、分数怎么变的），再列「AI 自己改了哪些地方」（改前 → 改后、为什么改）；
+ *  AI 提的意见默认由 AI 自己落实，留在这里的只是「改过但没改好」的，需要人拿主意。 */
 function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
   const ev = d.evaluation as Ev;
   const dims = Object.entries(ev.dimensions ?? {});
@@ -247,6 +249,7 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
   const revise = useRevise(d.id, d.account_id);
   const [note, setNote] = useState("");
   const [showTips, setShowTips] = useState(false);
+  const [showChanges, setShowChanges] = useState(false);
   const job = jobs.find((j) => j.kind === "revise_draft" && isActive(j) && (j.payload as { draft_id?: string }).draft_id === d.id);
   const lastJob = jobs.find((j) => j.kind === "revise_draft" && (j.payload as { draft_id?: string }).draft_id === d.id);
   if (!dims.length && !d.check_issues.length) return null;
@@ -261,6 +264,9 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
   const history = (ev.history ?? []).filter((h) => h.score != null);
   const rounds = Math.max(0, d.attempts - 1);
   const passed = !d.needs_attention;
+  const changes = ev.changes ?? [];
+  const left = must.length + better.length;
+  const tried = ev.attempted ?? false;
   const last = (job?.events as JobEvent[] | undefined)?.at(-1);
   return (
     <Card className={cn(!passed && "border-amber-200")} >
@@ -273,8 +279,9 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
             {passed ? `达标了（${PASS} 分合格），可以直接用` : `还差一点：${PASS} 分合格，现在 ${d.score?.toFixed(1) ?? "未评分"}`}
           </div>
           <div className="mt-0.5 text-xs opacity-80">
-            {rounds > 0 ? `AI 按意见一共改了 ${rounds} 轮，留下的是分数最高的一版` : "写完一版就达标了"}
-            {!passed && must.length > 0 && `，下面 ${must.length} 处必须改的还没改掉`}
+            {changes.length > 0 ? `AI 自己挑出问题、自己改好了 ${changes.length} 处（改了 ${rounds} 轮）`
+              : rounds > 0 ? `AI 按意见改了 ${rounds} 轮，留下的是分数最高的一版` : "写完一版就达标了，没有要改的"}
+            {left > 0 && (tried ? `；还有 ${left} 处 AI 改不好，需要你看一下` : `；还有 ${left} 处可以改`)}
           </div>
           {history.length > 1 && (
             <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">
@@ -301,9 +308,37 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
           </div>
         )}
 
+        {changes.length > 0 && (
+          <div>
+            <button className="flex cursor-pointer items-center gap-1 text-xs font-medium text-emerald-700 hover:underline" onClick={() => setShowChanges((v) => !v)}>
+              <CheckCircle2 className="size-3.5" />AI 已经自动改好的 {changes.length} 处 {showChanges ? "收起" : "· 点开看改了什么"}
+            </button>
+            {showChanges && (
+              <ul className="mt-1.5 space-y-1.5">
+                {changes.map((c, k) => (
+                  <li key={k} className="rounded-lg bg-emerald-50/60 px-3 py-2 text-xs">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="shrink-0 rounded bg-emerald-100 px-1.5 text-[11px] font-medium text-emerald-800">{c.where}</span>
+                      {c.why && <span className="text-emerald-900">{c.why}</span>}
+                    </div>
+                    {c.before && <div className="mt-1 text-muted-foreground line-through decoration-red-300">{c.before}</div>}
+                    <div className="mt-0.5 text-emerald-800">{c.after || "（删掉了）"}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {left > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {tried ? "下面这些 AI 已经试着改过，但没改好——通常需要你拿主意（比如真实价格、亲身经历、要不要换说法）。可以自己改，或者在最下面补一句要求让 AI 再试。"
+              : "下面这些意见还没改，点最下面的按钮让 AI 照着改。"}
+          </p>
+        )}
         {must.length > 0 && (
           <div>
-            <div className="mb-1.5 text-xs font-medium text-red-600">必须改（{must.length}）</div>
+            <div className="mb-1.5 text-xs font-medium text-red-600">{tried ? "还没改好（重要）" : "必须改"}（{must.length}）</div>
             <ul className="space-y-1.5">
               {hard.map((x) => <li key={x} className="flex gap-2 text-red-700"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{x}</li>)}
               {mustItems.map((x, k) => <ItemRow key={k} it={x} tone="red" />)}
@@ -312,14 +347,13 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
         )}
         {better.length > 0 && (
           <div>
-            <div className="mb-1.5 text-xs font-medium text-amber-700">可以更好（{better.length}）<span className="ml-1 font-normal text-muted-foreground">不改也能发</span></div>
+            <div className="mb-1.5 text-xs font-medium text-amber-700">{tried ? "还没改好（不改也能发）" : "可以更好"}（{better.length}）</div>
             <ul className="space-y-1.5">
               {items ? niceItems.map((x, k) => <ItemRow key={k} it={x} tone="amber" />)
                 : better.map((x) => <li key={x} className="flex gap-2 text-amber-800"><span className="shrink-0">·</span>{x}</li>)}
             </ul>
           </div>
         )}
-        {(ev.resolved ?? 0) > 0 && <p className="text-xs text-emerald-700">✓ 上一轮提的问题已经改好 {ev.resolved} 处</p>}
         {tips.length > 0 && (
           <div>
             <button className="cursor-pointer text-xs font-medium text-indigo-600 hover:underline" onClick={() => setShowTips((v) => !v)}>
@@ -335,15 +369,17 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
           ) : (
             <>
               <div className="text-xs text-muted-foreground">
-                {passed ? "还想调？说一句要求，AI 只改相关的句子，改得更好才替换。" : "让 AI 照上面的意见逐条改：只动被点名的句子，你亲手改过的句子不会动；改得更好才替换。"}
+                {left === 0 ? "还想调？说一句要求，AI 只改相关的句子，改得更好才替换。"
+                  : tried ? "补一句你的想法（比如真实价格、想怎么说），AI 照着再改；只动相关的句子，你亲手改过的不会动。"
+                  : "让 AI 照上面的意见逐条改：只动被点名的句子，你亲手改过的句子不会动；改得更好才替换。"}
               </div>
               <div className="flex gap-2">
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="补充要求（可选），例如：开头更直接、再短一点"
                   className="min-w-0 flex-1 rounded-lg border bg-card px-3 py-1.5 text-sm outline-none focus:border-indigo-300" />
-                <Button size="sm" variant={passed ? "outline" : "gradient"} loading={revise.isPending} disabled={dirty || (passed && !note.trim())}
+                <Button size="sm" variant={left === 0 ? "outline" : "gradient"} loading={revise.isPending} disabled={dirty || (left === 0 && !note.trim())}
                   title={dirty ? "先保存你的修改" : undefined}
                   onClick={() => revise.mutate(note, { onSuccess: () => setNote("") })}>
-                  {!revise.isPending && <Wand2 />}{passed ? "按要求改" : "按意见再改一轮"}
+                  {!revise.isPending && <Wand2 />}{left === 0 ? "按要求改" : tried ? "让 AI 再试" : "让 AI 照着改"}
                 </Button>
               </div>
               {dirty && <p className="text-xs text-amber-600">你有没保存的修改，先保存再让 AI 改</p>}

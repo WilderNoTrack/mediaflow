@@ -48,6 +48,8 @@ class Candidate:
     issues: list[str] = field(default_factory=list)
     evaluation: dict[str, Any] = field(default_factory=dict)
     score: float | None = None
+    changes: list[dict] = field(default_factory=list)  # AI 自己按意见改过的地方（这一版是怎么一步步改出来的）
+    attempted: bool = False  # 这一版的意见有没有交给编辑改过（改过还剩下的，才是「AI 改不好、要人看」的）
 
     @property
     def items(self) -> list[dict]:
@@ -142,9 +144,10 @@ def _length_req(ctx: AccountContext) -> str:
     return f"，规则要求 {lo}–{hi} 字" if lo and hi else f"，规则要求不超过 {hi} 字" if hi else f"，规则要求至少 {lo} 字" if lo else ""
 
 
-def apply_edits(body: str, edits: list, locked: list[str] | None = None) -> tuple[str, int, int]:
+def apply_edits(body: str, edits: list, locked: list[str] | None = None,
+                log: list[dict] | None = None) -> tuple[str, int, int]:
     """按「find → replace」定点改正文；返回 (新正文, 改成了几处, 跳过几处)。
-    find 必须在正文里原样出现；碰到用户亲手改过的句子就跳过，保住用户的写法。"""
+    find 必须在正文里原样出现；碰到用户亲手改过的句子就跳过，保住用户的写法。改成的每一处记进 log。"""
     applied = skipped = 0
     for e in edits or []:
         if not isinstance(e, dict):
@@ -165,6 +168,8 @@ def apply_edits(body: str, edits: list, locked: list[str] | None = None) -> tupl
             continue
         body = body[:pos] + rep + body[end:]
         applied += 1
+        if log is not None:
+            log.append({"find": find, "replace": rep, "item": e.get("item")})
     return body.strip(), applied, skipped
 
 
@@ -192,8 +197,17 @@ def _locked_block(locked: list[str], title_locked: bool) -> str:
     return prompts.LOCKED_BLOCK.format(locked="\n".join(lines)) if lines else ""
 
 
+def _change_why(item, entries: list[dict]) -> tuple[str, str]:
+    try:
+        e = entries[int(item) - 1]
+        return e.get("where", ""), e.get("problem", "")
+    except (TypeError, ValueError, IndexError):
+        return "", ""
+
+
 async def _revise(llm: LLM, ctx: AccountContext, c: Candidate, feedback: str, *,
-                  locked: list[str] | None = None, title_locked: bool = False) -> Candidate:
+                  locked: list[str] | None = None, title_locked: bool = False,
+                  entries: list[dict] | None = None) -> Candidate:
     """在已有的一版上定点修改（find → replace），由代码落到原文上：没被点名的句子一个字不动，
     用户亲手改过的句子也不会被冲掉。模型要是回了整篇（老格式），也接得住。"""
     data = await complete_json(llm, [
@@ -206,8 +220,9 @@ async def _revise(llm: LLM, ctx: AccountContext, c: Candidate, feedback: str, *,
             feedback=feedback or "- 整体再打磨一遍：开头更抓人、信息更具体",
         )},
     ], temperature=0.4)
+    log: list[dict] = []
     if isinstance(data.get("edits"), list):
-        body, applied, skipped = apply_edits(c.body, data["edits"], locked)
+        body, applied, skipped = apply_edits(c.body, data["edits"], locked, log)
     else:
         body, applied, skipped = (str(data.get("body", "")).strip() or c.body), 0, 0
     title = str(data.get("title") or "").strip() or c.title
@@ -220,15 +235,32 @@ async def _revise(llm: LLM, ctx: AccountContext, c: Candidate, feedback: str, *,
     )
     out.evaluation = {"edits": {"applied": applied, "skipped": skipped,
                                 "unfixed": [str(x) for x in data.get("unfixed") or []][:3]}}
+    new: list[dict] = []
+    for x in log:
+        where, why = _change_why(x.get("item"), entries or [])
+        new.append({"where": where or "正文", "before": x["find"][:200], "after": x["replace"][:200], "why": why[:120]})
+    if out.title != c.title:
+        new.append({"where": "标题", "before": c.title, "after": out.title, "why": _why_for("标题", entries)})
+    if out.tags != c.tags:
+        new.append({"where": "标签", "before": "、".join(c.tags), "after": "、".join(out.tags), "why": _why_for("标签", entries)})
+    for i, p in enumerate(out.image_prompts):
+        old = c.image_prompts[i] if i < len(c.image_prompts) else ""
+        if p != old:
+            new.append({"where": f"配图{i + 1}", "before": old[:200], "after": p[:200], "why": _why_for(f"配图{i + 1}", entries)})
+    out.changes = [*c.changes, *new]
     return out
 
 
+def _why_for(where: str, entries: list[dict] | None) -> str:
+    return next((e.get("problem", "")[:120] for e in entries or [] if where in (e.get("where") or "")), "")
+
+
 async def _check(llm: LLM, ctx: AccountContext, c: Candidate, *, prev: Candidate | None = None,
-                 locked: list[str] | None = None, title_locked: bool = False) -> bool:
+                 locked: list[str] | None = None, title_locked: bool = False, final: bool = False) -> bool:
     """硬检查 + AI 质检；prev 是上一版（复核模式：主编先核对上一轮的问题改好没有）。返回质检是否出错。"""
     c.issues = hard_check(c.title, c.body, c.tags, c.image_prompts, ctx.rules)
     try:
-        await _evaluate(llm, ctx, c, prev=prev, locked=locked or [], title_locked=title_locked)
+        await _evaluate(llm, ctx, c, prev=prev, locked=locked or [], title_locked=title_locked, final=final)
         return False
     except LLMError:
         logger.warning("质检失败", exc_info=True)
@@ -266,16 +298,17 @@ def _item_text(i: dict) -> str:
     return f"{i.get('where') or '全文'}{q}：{i.get('problem', '')}"
 
 
-def _prev_block(prev: Candidate | None) -> str:
+def _prev_block(prev: Candidate | None, final: bool = False) -> str:
     rows = [f"{n}. [硬伤] {x}" for n, x in enumerate(prev.issues, 1)] if prev else []
     if prev:
         rows += [f"{len(rows) + n}. [{'必须改' if i.get('level') == 'must' else '可以更好'}] {_item_text(i)}"
                  for n, i in enumerate(prev.items, 1)]
-    return prompts.EVAL_REVIEW_BLOCK.format(prev="\n".join(rows)) if rows else ""
+    mode = prompts.EVAL_MODE_FINAL if final else prompts.EVAL_MODE_REVIEW
+    return prompts.EVAL_REVIEW_BLOCK.format(prev="\n".join(rows), mode_note=mode) if rows else ""
 
 
 async def _evaluate(llm: LLM, ctx: AccountContext, c: Candidate, *, prev: Candidate | None = None,
-                    locked: list[str] | None = None, title_locked: bool = False) -> None:
+                    locked: list[str] | None = None, title_locked: bool = False, final: bool = False) -> None:
     data = await complete_json(llm, [
         {"role": "system", "content": prompts.EVALUATOR_SYSTEM},
         {"role": "user", "content": prompts.EVALUATOR_USER.format(
@@ -286,7 +319,7 @@ async def _evaluate(llm: LLM, ctx: AccountContext, c: Candidate, *, prev: Candid
             body_len=body_len(c.body),
             tags="、".join(c.tags),
             images="\n".join(f"{i + 1}. {p}" for i, p in enumerate(c.image_prompts)) or "（无）",
-            locked_block=_locked_block(locked or [], title_locked), review_block=_prev_block(prev),
+            locked_block=_locked_block(locked or [], title_locked), review_block=_prev_block(prev, final),
         )},
     ], temperature=0.2)
     dims = {}
@@ -322,21 +355,36 @@ async def _evaluate(llm: LLM, ctx: AccountContext, c: Candidate, *, prev: Candid
     }
 
 
-def _feedback_for(c: Candidate, note: str = "", *, include_nice: bool = False) -> str:
-    """给改稿编辑的意见：用户的要求 > 硬伤 > 没遵守的规则 > 必须改；「可以更好」只在没有更重要的问题、
-    或用户主动要求再改时才给——一次只改关键的几处，才不会越改越乱。"""
+def _feedback_entries(c: Candidate, note: str = "", *, include_nice: bool = True) -> list[dict]:
+    """给改稿编辑的意见（每条带位置，方便把改动和原因对上）：用户的要求 > 硬伤 > 没遵守的规则 > 必须改 > 可以更好。
+    主编提的每条意见都有具体改法，所以默认全部交给编辑落实——提了就改，而不是只列出来让人自己改。"""
     ev = c.evaluation
-    lines = [f"用户的要求：{note.strip()}"] if note.strip() else []
-    lines += [f"[硬伤] {i}" for i in c.issues]
-    lines += [f"[没遵守规则] {r}" for r in ev.get("violated_rules", [])]
-    nice = [i for i in c.items if i.get("level") != "must"]
-    key = c.items if include_nice else (c.must or ([] if lines else nice))
+    out = [{"text": f"用户的要求：{note.strip()}", "where": "", "problem": note.strip()}] if note.strip() else []
+    out += [{"text": f"[硬伤] {i}", "where": "标题" if "标题" in i else "标签" if "标签" in i else "", "problem": i} for i in c.issues]
+    out += [{"text": f"[没遵守规则] {r}", "where": "", "problem": f"没遵守：{r}"} for r in ev.get("violated_rules", [])]
+    key = c.items if include_nice else (c.must or ([] if out else c.items))
     for i in key:
         fix = f"｜改法：{i['fix']}" if i.get("fix") else ""
-        lines.append(f"[{'必须改' if i.get('level') == 'must' else '可以更好'}] {_item_text(i)}{fix}")
+        out.append({"text": f"[{'必须改' if i.get('level') == 'must' else '可以更好'}] {_item_text(i)}{fix}",
+                    "where": i.get("where", ""), "problem": i.get("problem", "")})
     if not c.items:  # 老格式
-        lines += [f"[建议] {x}" for x in ev.get("suggestions", [])]
-    return "\n".join(f"{n}. {x}" for n, x in enumerate(lines, 1))
+        out += [{"text": f"[建议] {x}", "where": "", "problem": x} for x in ev.get("suggestions", [])]
+    return out
+
+
+def _feedback_for(c: Candidate, note: str = "", *, include_nice: bool = True) -> str:
+    return "\n".join(f"{n}. {e['text']}" for n, e in enumerate(_feedback_entries(c, note, include_nice=include_nice), 1))
+
+
+def _actionable(c: Candidate) -> bool:
+    """还有没有能交给编辑改的意见（硬伤、没守的规则、主编的意见，不管必须改还是可以更好）。"""
+    low = c.score is not None and c.score < PASS_SCORE
+    return bool(c.issues or c.evaluation.get("violated_rules") or c.items or low)
+
+
+def _stored_eval(c: Candidate, history: list[dict]) -> dict:
+    return {**c.evaluation, "history": history, "checked": _sig(c.title, c.body),
+            "changes": c.changes[-40:], "attempted": c.attempted}
 
 
 async def write_draft(
@@ -358,36 +406,44 @@ async def write_draft(
 
     candidates: list[Candidate] = []
     eval_failed = False
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        base = _next_base(candidates) if candidates else None
-        emit("write", "第 1 版写作中…" if base is None else f"按质检意见改第 {attempt - 1} 轮…", {"attempt": attempt})
+    emit("write", "第 1 版写作中…", {"attempt": 1})
+    c = await _generate(llm, ctx, topic, hint, "")
+    if await _check(llm, ctx, c):
+        eval_failed = True
+        emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
+    candidates.append(c)
+    emit("review", f"第 1 版：{c.score if c.score is not None else '未评分'} 分" + _problems(c),
+         {"attempt": 1, "score": c.score, "issues": c.issues, "evaluation": c.evaluation})
+    # AI 提的意见由 AI 自己落实：有意见就交给编辑改，改完复核；最后一轮只复核不再提新意见，
+    # 这样留在稿子上的意见一定是「改过但没改好」的，不会出现提了却没人改。
+    for attempt in range(2, MAX_ATTEMPTS + 1):
+        base = _next_base(candidates)
+        if not _actionable(base):
+            break
+        entries = _feedback_entries(base)
+        base.attempted = True
+        emit("write", f"按 AI 的 {len(entries)} 条意见自动改第 {attempt - 1} 轮…", {"attempt": attempt})
         try:
-            c = (await _generate(llm, ctx, topic, hint, "") if base is None
-                 else await _revise(llm, ctx, base, _feedback_for(base)))
+            c = await _revise(llm, ctx, base, _feedback_for(base), entries=entries)
         except LLMError as e:
-            if candidates:
-                emit("warning", f"第 {attempt} 版生成失败（{e}），使用已有的最好版本", None)
-                break
-            raise
-        if base is not None and _unchanged(c, base):
+            emit("warning", f"第 {attempt} 版生成失败（{e}），使用已有的最好版本", None)
+            break
+        if _unchanged(c, base):
             emit("warning", "这一轮编辑没找到能改的地方，用已有的最好版本", None)
             break
-        if await _check(llm, ctx, c, prev=base):
+        if await _check(llm, ctx, c, prev=base, final=attempt == MAX_ATTEMPTS):
             eval_failed = True
             emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
         candidates.append(c)
-        emit("review", f"{'第 1 版' if base is None else f'改第 {attempt - 1} 轮'}："
-             f"{c.score if c.score is not None else '未评分'} 分" + _problems(c),
+        emit("review", f"改第 {attempt - 1} 轮：{c.score if c.score is not None else '未评分'} 分" + _problems(c),
              {"attempt": attempt, "score": c.score, "issues": c.issues, "evaluation": c.evaluation})
-        if c.passed:
-            break
 
     best = max(candidates, key=lambda x: x.rank())
     needs_attention = bool(best.issues) or best.score is None or best.score < PASS_SCORE or eval_failed
     if needs_attention:
         emit("warning", "没有一版完全达标，已保存最好的一版，并标记为需要重点检查", None)
 
-    best.evaluation = {**best.evaluation, "history": _history(candidates), "checked": _sig(best.title, best.body)}
+    best.evaluation = _stored_eval(best, _history(candidates))
     draft = Draft(
         user_id=ctx.user_id,
         account_id=ctx.account_id,
@@ -427,7 +483,8 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
     ctx = load_context(session, draft.account_id)
     images = sorted(session.exec(select(DraftImage).where(DraftImage.draft_id == draft.id)).all(), key=lambda i: i.idx)
     cur = Candidate(title=draft.title, body=draft.body, tags=list(draft.tags), image_prompts=[i.prompt for i in images],
-                    issues=list(draft.check_issues), evaluation=dict(draft.evaluation or {}), score=draft.score)
+                    issues=list(draft.check_issues), evaluation=dict(draft.evaluation or {}), score=draft.score,
+                    changes=list((draft.evaluation or {}).get("changes") or []))
     locked = user_sentences(draft.original_body, draft.body)
     title_locked = draft.title != draft.original_title
     if note.strip() or cur.score is None or cur.evaluation.get("checked") != _sig(cur.title, cur.body):
@@ -442,8 +499,10 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
     for r in range(rounds):
         emit("write", f"按质检意见再改第 {r + 1} 轮…", {"attempt": start + r})
         base = _next_base([cur, *tried])
+        entries = _feedback_entries(base, note)
+        base.attempted = True
         try:
-            c = await _revise(llm, ctx, base, _feedback_for(base, note, include_nice=True),
+            c = await _revise(llm, ctx, base, _feedback_for(base, note), entries=entries,
                               locked=locked, title_locked=title_locked)
         except LLMError as e:
             if tried:
@@ -453,14 +512,14 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
         if _unchanged(c, base):
             emit("warning", "这一轮编辑没找到能改的地方，停下来", None)
             break
-        await _check(llm, ctx, c, prev=base, locked=locked, title_locked=title_locked)
+        await _check(llm, ctx, c, prev=base, locked=locked, title_locked=title_locked, final=r == rounds - 1)
         tried.append(c)
         emit("review", f"改第 {r + 1} 轮：{c.score if c.score is not None else '未评分'} 分" + _problems(c),
              {"score": c.score, "issues": c.issues})
         # 更好就换；用户明确提了要求时，只要不比原来差也换（用户要的就是这个改动）
         if c.rank() > best.rank() or (note.strip() and best is cur and c.rank() >= cur.rank()):
             best = c
-        if c.passed and (not note.strip() or best is c):
+        if not _actionable(c) and (not note.strip() or best is c):
             break
     history += _history(tried, start)
     improved = best is not cur
@@ -471,7 +530,7 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
                 img.prompt = best.image_prompts[i]
                 session.add(img)
     draft.score, draft.check_issues = best.score, best.issues
-    draft.evaluation = {**best.evaluation, "history": history, "checked": _sig(best.title, best.body)}
+    draft.evaluation = _stored_eval(best, history)
     draft.attempts += len(tried)
     draft.needs_attention = not best.passed
     draft.updated_at = utcnow()

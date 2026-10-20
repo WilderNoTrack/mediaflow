@@ -183,19 +183,38 @@ def test_apply_edits_is_surgical_and_keeps_user_sentences():
 
 
 async def test_review_rounds_are_targeted_and_remember_previous_issues(session, llm, account):
-    """主编给出带位置的「必须改」→ 编辑只改那一句 → 主编复核时能看到上一轮自己提了什么。"""
+    """主编给出带位置的意见（必须改 + 可以更好）→ 编辑全部落实，只改被点名的句子 → 复核时能看到上一轮提了什么；
+    改过的地方都记下来，最后一轮只复核、不再提新意见。"""
     body = "宝子们今天聊通勤穿搭。" + "这一段是很有信息量的内容，讲了具体的搭配方法。" * 8 + "开头这句太平淡了。"
     must = {"hook": 6, "value": 7, "voice": 7, "fit": 7, "rules": 8, "violated_rules": [],
             "items": [{"level": "must", "where": "结尾", "quote": "开头这句太平淡了。", "problem": "结尾没有互动",
                        "fix": "改成提问"},
-                      {"level": "nice", "where": "开头", "quote": "宝子们", "problem": "可以更具体", "fix": ""}]}
+                      {"level": "nice", "where": "开头", "quote": "宝子们", "problem": "可以更具体", "fix": "点出通勤人群"}]}
     ok = {"hook": 8, "value": 8, "voice": 8, "fit": 8, "rules": 8, "violated_rules": [], "resolved": [1],
-          "items": [{"level": "nice", "where": "标签", "quote": "", "problem": "可以多一个场景标签", "fix": ""}]}
-    llm.push("writer", post(body=body)).push("eval", must, ok)
-    llm.push("reviser", {"edits": [{"find": "开头这句太平淡了。", "replace": "你们通勤最头疼哪一步？评论区告诉我～"}]})
+          "items": [{"level": "nice", "where": "开头", "quote": "宝子们", "problem": "可以更具体", "fix": "点出通勤人群"}]}
+    done = {"hook": 9, "value": 8, "voice": 8, "fit": 8, "rules": 8, "violated_rules": [], "resolved": [1], "items": []}
+    llm.push("writer", post(body=body)).push("eval", must, ok, done)
+    llm.push("reviser", {"edits": [{"item": 1, "find": "开头这句太平淡了。", "replace": "你们通勤最头疼哪一步？评论区告诉我～"}]},
+             {"edits": [{"item": 1, "find": "宝子们", "replace": "通勤族宝子们"}]})
     d, _ = await run(session, llm, account)
-    assert d.body.endswith("你们通勤最头疼哪一步？评论区告诉我～") and "这一段是很有信息量的内容" in d.body
-    assert d.attempts == 2 and not d.needs_attention  # 只剩「可以更好」：达标
+    assert d.body.endswith("你们通勤最头疼哪一步？评论区告诉我～") and d.body.startswith("通勤族宝子们")
+    assert "这一段是很有信息量的内容" in d.body
+    assert d.attempts == 3 and not d.needs_attention and d.evaluation["items"] == []
     rev = llm.prompts_of("reviser")[0]
-    assert "结尾「开头这句太平淡了。」：结尾没有互动｜改法：改成提问" in rev and "可以更好" not in rev  # 只改关键的
+    assert "结尾「开头这句太平淡了。」：结尾没有互动｜改法：改成提问" in rev and "可以更具体" in rev  # 提了就改
     assert "上一轮你提的问题" in llm.prompts_of("eval")[1] and "结尾没有互动" in llm.prompts_of("eval")[1]
+    assert "不要再提新的 nice" in llm.prompts_of("eval")[1]
+    changes = d.evaluation["changes"]
+    assert [(c["where"], c["why"]) for c in changes] == [("结尾", "结尾没有互动"), ("开头", "可以更具体")]
+    assert changes[0]["before"] == "开头这句太平淡了。"
+
+
+async def test_last_round_only_verifies(session, llm, account):
+    """最后一轮复核不再提新意见；还留着的意见标记为「改过」，界面据此说「AI 改不好，要你看」而不是「请你改」。"""
+    item = {"level": "must", "where": "第2段", "quote": "这一段", "problem": "缺数据", "fix": "补一个价格"}
+    bad = {"hook": 6, "value": 6, "voice": 6, "fit": 6, "rules": 6, "violated_rules": [], "items": [item]}
+    llm.push("writer", post()).push("eval", bad, bad, bad, bad)
+    llm.push("reviser", post(title="二"), post(title="三"), post(title="四"))
+    d, _ = await run(session, llm, account)
+    assert d.attempts == 4 and d.evaluation["attempted"] and d.needs_attention
+    assert "最后一次复核" in llm.prompts_of("eval")[-1] and "最后一次复核" not in llm.prompts_of("eval")[-2]
