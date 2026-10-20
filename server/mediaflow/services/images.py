@@ -340,7 +340,7 @@ async def generate_images(
                 data = await gen(img.expanded_prompt)
                 img.review = {}
                 if vllm is not None:
-                    data = await _review(img, data, gen, a_uri)
+                    data = await _review(img, data, gen, r)
                 name = f"{img.idx:02d}-{uuid4().hex[:8]}.png"
                 (out_dir / name).write_bytes(data)
                 img.path, img.status = f"{draft_id}/{name}", ImageStatus.done
@@ -354,10 +354,10 @@ async def generate_images(
             session.add(img)
             session.commit()
 
-    async def _review(img: DraftImage, data: bytes, gen, a_uri: str | None) -> bytes:
+    async def _review(img: DraftImage, data: bytes, gen, refs: list[str]) -> bytes:
         """出图后看一眼：有错字、内容不对、风格跑偏就带着修改要求重出一次（只重出一次，省额度）。"""
         emit("image", f"第 {img.idx + 1} 张出好了，在自检…", {"idx": img.idx, **progress()})
-        res = await visual_mod.check_image(vllm, data, img.expanded_prompt, spec, anchor_uri=a_uri)
+        res = await visual_mod.check_image(vllm, data, img.expanded_prompt, spec, refs=refs)
         review = {**res, "redone": False, "at": utcnow().isoformat()}
         if not res["ok"] and res.get("fix"):
             emit("image", f"第 {img.idx + 1} 张自检发现：{'；'.join(res['problems'][:2]) or res['fix'][:30]}，改一下重出…",
@@ -368,7 +368,7 @@ async def generate_images(
             except ImageError as e:
                 logger.info("自检后重出失败，留第一版：%s", e)
             else:
-                res2 = await visual_mod.check_image(vllm, data2, img.expanded_prompt, spec, anchor_uri=a_uri)
+                res2 = await visual_mod.check_image(vllm, data2, img.expanded_prompt, spec, refs=refs)
                 review = {**res2, "redone": True, "before": res["problems"], "fix": res["fix"], "at": utcnow().isoformat()}
                 img.expanded_prompt, data = prompt2, data2
         img.review = review

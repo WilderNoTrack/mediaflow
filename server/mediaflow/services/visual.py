@@ -351,18 +351,24 @@ def check_enabled() -> bool:
     return credentials.get("image_check") != "off"
 
 
-async def check_image(vllm: LLM, data: bytes, prompt: str, spec: str, *, anchor_uri: str | None = None) -> dict:
-    """看一张刚出好的图：{ok, problems, fix}。看不了（模型出错）当作通过，不耽误出图。"""
+async def check_image(vllm: LLM, data: bytes, prompt: str, spec: str, *, refs: list[str] | None = None) -> dict:
+    """看一张刚出好的图：{ok, problems, fix}。refs 是出这张图时给生图模型的参考图（顺序同「参考图 1、2」），
+    一起给质检看，免得把照版式模板做出来的画风当成跑偏。看不了（模型出错）当作通过，不耽误出图。"""
     from mediaflow.services.refs import uri_of
 
     uri = await asyncio.to_thread(uri_of, data)
     if not uri:
         return {"ok": True, "problems": [], "fix": "", "skipped": True}
+    refs = [r for r in refs or [] if r]
+    note = ""
+    if len(refs) == 1:
+        note = "第 1 张附图是要检查的图，第 2 张附图就是要求里说的「参考图」。"
+    elif refs:
+        note = "第 1 张附图是要检查的图；要求里的「参考图 1」「参考图 2」依次是第 2、3 张附图。"
+    if refs and ("版式模板" in prompt or "照着参考图的版式" in prompt):
+        note += "版式和画风以版式模板为准（模板本来就是插画/实拍等画风不算跑偏），同套已出好的图只比配色、字体、人物。"
     content: list[dict] = [{"type": "text", "text": prompts.IMAGE_CHECK_USER.format(
-        prompt=prompt[:1200], spec=spec[:400],
-        anchor_note="第 2 张附图是同一套里已经出好的图，看风格是否统一。" if anchor_uri else "")}, image_part(uri)]
-    if anchor_uri:
-        content.append(image_part(anchor_uri))
+        prompt=prompt[:1200], spec=spec[:400], anchor_note=note)}, image_part(uri), *[image_part(r) for r in refs]]
     try:
         raw = await complete_json(vllm, [{"role": "system", "content": prompts.IMAGE_CHECK_SYSTEM},
                                          {"role": "user", "content": content}], temperature=0.1)
