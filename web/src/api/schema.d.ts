@@ -409,6 +409,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/drafts/{draft_id}/reference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Reference
+         * @description 换一篇参考帖：读这篇笔记、缓存原图。之后点「全部重新出」就照着它一张对一张出图（文案不动）。
+         */
+        put: operations["set_reference_api_drafts__draft_id__reference_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/drafts/{draft_id}": {
         parameters: {
             query?: never;
@@ -1215,6 +1235,14 @@ export interface components {
              */
             images_busy: number;
             /**
+             * Reference
+             * @description 这篇照着哪篇帖子写、出图：title/url/creator/likes/why/local(原图本地路径)
+             * @default {}
+             */
+            reference: {
+                [key: string]: unknown;
+            };
+            /**
              * Created At
              * Format: date-time
              */
@@ -1280,6 +1308,14 @@ export interface components {
              */
             images_busy: number;
             /**
+             * Reference
+             * @description 这篇照着哪篇帖子写、出图：title/url/creator/likes/why/local(原图本地路径)
+             * @default {}
+             */
+            reference: {
+                [key: string]: unknown;
+            };
+            /**
              * Created At
              * Format: date-time
              */
@@ -1342,6 +1378,11 @@ export interface components {
             url: string | null;
             /** Error */
             error: string;
+            /**
+             * Ref Url
+             * @description 这张照着参考帖哪张原图出的（本地缓存地址）
+             */
+            ref_url?: string | null;
         };
         /** ImageSettingsIn */
         ImageSettingsIn: {
@@ -1556,6 +1597,14 @@ export interface components {
              * @default
              */
             message: string;
+        };
+        /** ReferenceIn */
+        ReferenceIn: {
+            /**
+             * Url
+             * @description 小红书笔记链接（也支持 xhslink 短链、整段分享文字）
+             */
+            url: string;
         };
         /** RemoveBenchmarkOut */
         RemoveBenchmarkOut: {
@@ -1826,6 +1875,12 @@ export interface components {
              * @default false
              */
             from_chat: boolean;
+            /**
+             * Reference Url
+             * @description 照着这篇小红书笔记写、出图（不填就自动挑）
+             * @default
+             */
+            reference_url: string;
         };
     };
     responses: never;
@@ -2652,6 +2707,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_reference_api_drafts__draft_id__reference_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReferenceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftDetail"];
                 };
             };
             /** @description Validation Error */

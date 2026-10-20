@@ -185,6 +185,10 @@ export function useDraftActions(id: string) {
         })),
       onSuccess: inv,
     }),
+    reference: useMutation({
+      mutationFn: (url: string) => unwrap(api.PUT("/api/drafts/{draft_id}/reference", { ...p, body: { url } })),
+      onSuccess: (d) => { qc.setQueryData(["draft", id], d); inv(); },
+    }),
     remove: useMutation({ mutationFn: () => unwrap(api.DELETE("/api/drafts/{draft_id}", p)), onSuccess: inv }),
   };
 }
@@ -193,7 +197,7 @@ export function useWrite(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: Partial<S["WriteIn"]>) =>
-      unwrap(api.POST("/api/accounts/{account_id}/write", { params: { path: { account_id: id } }, body: { hint: "", from_chat: false, ...body } })),
+      unwrap(api.POST("/api/accounts/{account_id}/write", { params: { path: { account_id: id } }, body: { hint: "", from_chat: false, reference_url: "", ...body } })),
     onSettled: () => qc.invalidateQueries({ queryKey: ["jobs", id] }),
   });
 }

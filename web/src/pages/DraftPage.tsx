@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowLeft, Check, CheckCircle2, ChevronLeft, Copy, Download, Heart, Image as ImageIcon,
-  MessageCircle, RefreshCw, Save, Sparkles, Star, Tag, ThumbsDown, ThumbsUp, Trash2, Wand2,
+  ExternalLink, Link2, MessageCircle, RefreshCw, Save, Sparkles, Star, Tag, ThumbsDown, ThumbsUp, Trash2, Wand2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -138,10 +138,73 @@ export function DraftPage() {
         </div>
         <div className="space-y-4 lg:sticky lg:top-20 lg:self-start">
           <PhonePreview d={d} title={title} body={body} tags={tagList} idx={imgIdx} onIdx={setImgIdx} />
+          <ReferenceCard d={d} />
           <ImagesCard d={d} i={imgIdx} setI={setImgIdx} />
         </div>
       </div>
     </div>
+  );
+}
+
+type Ref = { title?: string; url?: string; creator?: string; likes?: string; why?: string; source?: string; local?: string[] };
+
+/** 这篇照着哪篇帖子写、出图；可以贴一篇小红书笔记换掉，再「按它全部重新出图」。 */
+function ReferenceCard({ d }: { d: DraftDetail }) {
+  const act = useDraftActions(d.id);
+  const ref = (d.reference ?? {}) as Ref;
+  const [editing, setEditing] = useState(false);
+  const [url, setUrl] = useState("");
+  const [justSet, setJustSet] = useState(false);
+  const n = ref.local?.length ?? 0;
+  const submit = () => url.trim() && act.reference.mutate(url.trim(), {
+    onSuccess: () => { setEditing(false); setUrl(""); setJustSet(true); },
+  });
+  const busy = d.images.some((x) => x.status === "pending" || x.status === "running");
+  return (
+    <Card>
+      <CardHead icon={<Link2 />} title="照着这篇帖子"
+        action={!editing && <button className="cursor-pointer text-xs text-indigo-600 hover:underline" onClick={() => setEditing(true)}>{ref.title ? "换一篇" : "指定一篇"}</button>} />
+      <CardBody className="space-y-3">
+        {ref.title ? (
+          <div className="flex gap-3">
+            {n > 0
+              ? <img src={`/files/images/${ref.local![0]}`} alt="" className="h-[84px] w-[63px] shrink-0 rounded-md border object-cover" />
+              : <div className="flex h-[84px] w-[63px] shrink-0 items-center justify-center rounded-md bg-muted"><ImageIcon className="size-4 text-muted-foreground" /></div>}
+            <div className="min-w-0 flex-1 text-xs">
+              {ref.url
+                ? <a href={ref.url} target="_blank" rel="noreferrer" className="line-clamp-2 text-sm font-medium hover:text-indigo-600">{ref.title}<ExternalLink className="ml-1 inline size-3 text-muted-foreground" /></a>
+                : <div className="line-clamp-2 text-sm font-medium">{ref.title}</div>}
+              <div className="mt-1 text-muted-foreground">{[ref.creator, ref.likes && `${ref.likes} 赞`, n > 0 && `${n} 张图`].filter(Boolean).join(" · ")}</div>
+              {ref.why && <div className="mt-1 text-muted-foreground">为什么选它：{ref.why}</div>}
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs leading-relaxed text-muted-foreground">这篇没有照着具体的帖子做（没找到合适的对标爆款）。贴一篇小红书图文笔记，配图就会一张对一张照着它的版式出。</p>
+        )}
+        {ref.title && n > 0 && !editing && !justSet && (
+          <p className="text-xs leading-relaxed text-muted-foreground">文案学它的结构和节奏；配图一张对一张照着它的版式、文字位置和配色重做，内容换成这篇的。</p>
+        )}
+        {editing && (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} autoFocus
+                placeholder="粘贴小红书笔记链接或分享文字"
+                className="min-w-0 flex-1 rounded-md border bg-input-background px-2.5 py-1.5 text-xs outline-none focus:border-indigo-400" />
+              <Button size="xs" loading={act.reference.isPending} disabled={!url.trim()} onClick={submit}>确定</Button>
+              <Button size="xs" variant="ghost" onClick={() => { setEditing(false); act.reference.reset(); }}>取消</Button>
+            </div>
+            <ErrorText error={act.reference.error} />
+          </div>
+        )}
+        {justSet && d.images.length > 0 && (
+          <div className="flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+            <span className="flex-1">换好了。文案不动，配图要按它重新出吗？</span>
+            <Button size="xs" disabled={busy} loading={act.images.isPending}
+              onClick={() => act.images.mutate("all", { onSuccess: () => setJustSet(false) })}>按它全部重新出图</Button>
+          </div>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
@@ -207,6 +270,12 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
               {cur.status === "failed" && <span className="text-red-500">生成失败</span>}
             </div>
             <div className="flex items-start gap-2">
+              {cur.ref_url && (
+                <a href={cur.ref_url} target="_blank" rel="noreferrer" className="shrink-0 text-center" title="这张照着参考帖的这张图做">
+                  <img src={cur.ref_url} alt="" className="h-[64px] w-[48px] rounded-md border object-cover" />
+                  <span className="mt-0.5 block text-[10px] text-muted-foreground">照着原帖第 {((d.reference as Ref).local ?? []).indexOf(cur.ref_url.replace("/files/images/", "")) + 1 || "?"} 张</span>
+                </a>
+              )}
               <p className="flex-1 rounded-md bg-input-background px-3 py-2 text-xs leading-relaxed">{cur.prompt}</p>
               <Button variant="outline" size="sm" className="px-2" title={cur.status === "running" || cur.status === "pending" ? "这张正在出" : "重新出这张"}
                 disabled={cur.status === "running" || cur.status === "pending"} loading={act.images.isPending && act.images.variables === cur.idx}
