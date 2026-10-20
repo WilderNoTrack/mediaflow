@@ -398,11 +398,11 @@ export const useTestImage = () =>
 export const useLlmSettings = () =>
   useQuery({ queryKey: ["llm-settings"], queryFn: () => unwrap(api.GET("/api/settings/llm")) });
 
-/** 保存前后端会先用这个 Key 实际问一句，填错直接报错 */
+/** 保存前后端会先用这个 Key 实际问一句，填错直接报错。字段不传就不改 */
 export function useSaveLlmKey() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (api_key: string) => unwrap(api.PUT("/api/settings/llm", { body: { api_key } })),
+    mutationFn: (body: S["LlmSettingsIn"]) => unwrap(api.PUT("/api/settings/llm", { body })),
     onSuccess: (d) => {
       qc.setQueryData(["llm-settings"], d);
       qc.invalidateQueries({ queryKey: ["system"] });

@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-chat"
     # 看图用的模型（同一个 DeepSeek Key）：学对标账号的配图模板、出图后自检。留空就不看图
     deepseek_vision_model: str = "deepseek-flash"
+    # 也可以走 openai-next 调 DeepSeek（和配图共用 openai-next 的 Key）：配了就优先用，出错自动换 DeepSeek 官方
+    llm_next_base_url: str = "https://api.openai-next.com/v1"
+    llm_next_model: str = "deepseek-v4-1-flash-261017"
     llm_timeout: float = 120.0
     llm_max_retries: int = 3
 

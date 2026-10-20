@@ -38,8 +38,8 @@ uv run mediaflow            # 自动打开 http://127.0.0.1:8765
 
 | 变量 | 必填 | 说明 |
 | --- | --- | --- |
-| `DEEPSEEK_API_KEY` | 是 | 写稿、评审、对话都用 DeepSeek；也可以在页面里填（填的时候会先验证能不能用） |
-| `IMAGE_NEXT_API_KEY` | 否 | AI 配图（openai-next，优先用）；额度用完或出不了图自动换 grsai，额度用完后 6 小时内直接走 grsai |
+| `DEEPSEEK_API_KEY` | 二选一 | 写稿、评审、对话都用 DeepSeek；也可以在页面里填（填的时候会先验证能不能用） |
+| `IMAGE_NEXT_API_KEY` | 二选一 | openai-next 的 Key：AI 配图优先用它（额度用完或出不了图自动换 grsai）；**同一个 Key 也能调 DeepSeek 写稿聊天**（默认模型 `deepseek-v4-1-flash-261017`，`LLM_NEXT_MODEL` 可改），配了就优先走它，出错自动换 DeepSeek 官方；只填它不填 `DEEPSEEK_API_KEY` 也能用（看图也走它） |
 | `IMAGE_API_KEY` | 否 | AI 配图（grsai，备用）；两个都不填就只生成文案。两个 Key 也都能在「AI 配图」设置里填 |
 | `DEEPSEEK_VISION_MODEL` | 否 | 看图用的模型（学配图模板、出图自检），默认 `deepseek-flash`，同一个 DeepSeek Key；留空就不看图 |
 | `MEDIAFLOW_DATA_DIR` | 否 | 数据目录，默认 `server/data` |

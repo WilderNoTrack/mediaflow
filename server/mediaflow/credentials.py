@@ -45,6 +45,8 @@ SPECS: list[CredSpec] = [
     CredSpec("bilibili_refreshed_at", "bilibili", "B站上次续期时间", "key", "", "", hidden=True),
     CredSpec("deepseek_api_key", "llm", "DeepSeek API Key", "key", "写稿、对话用的模型 Key", "https://platform.deepseek.com/api_keys",
              hidden=True),  # 在首页「开始之前」里单独填
+    CredSpec("llm_next_model", "llm", "openai-next 上的 DeepSeek 模型名", "key", "", "", hidden=True),
+    CredSpec("llm_channel", "llm", "文字模型先用哪条", "key", "", "", hidden=True),  # 空/auto=openai-next 优先，deepseek=只用官方，next=只用 openai-next
     CredSpec("image_api_key", "image", "AI 配图 API Key", "key", "grsai 的 API Key", "https://grsai.ai/zh/dashboard/api-keys",
              hidden=True),  # 配图在单独的「AI 配图」设置里填，不出现在数据来源列表
     CredSpec("image_next_api_key", "image", "openai-next 生图 API Key", "key", "优先用；额度用完自动换 grsai",

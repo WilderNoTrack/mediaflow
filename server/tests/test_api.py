@@ -175,7 +175,8 @@ def test_llm_key_from_ui(client, monkeypatch):
     r = client.put("/api/settings/llm", json={"api_key": "sk-bad"})
     assert r.status_code == 400 and "Key 不对" in r.json()["detail"]
     assert client.get("/api/settings/llm").json()["configured"] is False
-    assert client.put("/api/settings/llm", json={"api_key": " sk-good "}).json() == {"configured": True, "origin": "ui"}
+    out = client.put("/api/settings/llm", json={"api_key": " sk-good "}).json()
+    assert out["configured"] is True and out["origin"] == "ui" and out["order"] == ["deepseek"]
     assert llm_client.llm_key() == "sk-good" and client.get("/api/system").json()["llm_configured"] is True
     assert client.post("/api/settings/llm/test", json={"api_key": ""}).json()["ok"] is True  # 不传就测已保存的
     assert seen == ["sk-bad", "sk-good", "sk-good"]

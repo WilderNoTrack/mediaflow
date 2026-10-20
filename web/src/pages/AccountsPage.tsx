@@ -49,6 +49,7 @@ export function AccountsPage() {
         </>}
         right={<div className="flex gap-2">
           {admin && <>
+            <Button variant="outline" size="sm" onClick={() => setLlmOpen(true)}><Bot /><span className="hidden sm:inline">模型</span></Button>
             <Button variant="outline" size="sm" onClick={() => setImageOpen(true)}><ImageIcon /><span className="hidden sm:inline">AI 配图</span></Button>
             <Button variant="outline" size="sm" onClick={() => setSourcesOpen(true)}><KeyRound /><span className="hidden sm:inline">连接平台</span></Button>
           </>}
@@ -192,7 +193,7 @@ function Setup({ onSources, onImage, onLlm }: { onSources: () => void; onImage: 
   if (!sys) return null;
   const platforms = new Set(creds.filter((c) => c.configured).map((c) => c.platform));
   const steps = [
-    { done: sys.llm_configured, title: "填 DeepSeek Key", desc: "写文案、和小媒聊天都靠它，按用量计费。照着弹窗里 3 步做，1 分钟搞定。", must: true, action: <Button size="xs" variant="gradient" onClick={onLlm}>填 Key</Button> },
+    { done: sys.llm_configured, title: "填模型 Key", desc: "写文案、和小媒聊天都靠它（DeepSeek，按用量计费）。openai-next 或 DeepSeek 官方填一个就行，1 分钟搞定。", must: true, action: <Button size="xs" variant="gradient" onClick={onLlm}>填 Key</Button> },
     { done: platforms.size >= 2, title: `连接平台（已连 ${platforms.size} 个平台）`, desc: "连上小红书、抖音等，选题和对标才有真实数据；不连也能用热榜。", action: <Button size="xs" variant="outline" onClick={onSources}>去连接</Button> },
     { done: sys.image_configured, title: "AI 配图（可选）", desc: "填一个生图 Key，写完稿自动出 3:4 配图；不配也能用，只是没有图。", action: <Button size="xs" variant="outline" onClick={onImage}>去配置</Button> },
   ];

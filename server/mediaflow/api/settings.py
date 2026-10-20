@@ -170,12 +170,28 @@ class ImageTestIn(BaseModel):
 
 
 class LlmSettingsOut(BaseModel):
-    configured: bool
-    origin: str = Field(description="ui=界面里填的，env=环境变量，空=没配")
+    configured: bool = Field(description="能不能写稿聊天（两条里配了任意一条）")
+    origin: str = Field(description="DeepSeek 官方 Key：ui=界面里填的，env=环境变量，空=没配")
+    deepseek_configured: bool = False
+    next_configured: bool = Field(False, description="openai-next 的 Key 配了没（和配图共用一个 Key）")
+    next_origin: str = ""
+    next_model: str = Field("", description="openai-next 上调的 DeepSeek 模型名")
+    channel: str = Field("auto", description="auto=openai-next 优先、出错换官方；next=只用 openai-next；deepseek=只用官方")
+    order: list[str] = Field(default_factory=list, description="现在实际按这个顺序走")
+    next_paused: bool = Field(False, description="openai-next 刚出过错，这一阵先走官方")
 
 
 class LlmSettingsIn(BaseModel):
-    api_key: str = Field(max_length=200, description="空字符串清除界面里填的 Key")
+    api_key: str | None = Field(default=None, max_length=200, description="DeepSeek 官方 Key。null 不改；空字符串清除")
+    next_api_key: str | None = Field(default=None, max_length=300, description="openai-next 的 Key（和配图共用）。null 不改；空字符串清除")
+    next_model: str | None = Field(default=None, max_length=100, description="openai-next 上的模型名。null 不改；空字符串恢复默认")
+    channel: str | None = Field(default=None, description="auto / next / deepseek")
+
+
+class LlmTestIn(BaseModel):
+    channel: str = Field("deepseek", description="next / deepseek")
+    api_key: str | None = Field(default=None, max_length=300, description="试一个还没保存的 Key；不填用已保存的")
+    model: str | None = Field(default=None, max_length=100)
 
 
 class LlmTestOut(BaseModel):
@@ -184,10 +200,17 @@ class LlmTestOut(BaseModel):
     error: str = ""
 
 
+def _origin(key: str) -> str:
+    return "ui" if credentials._load().get(key) else ("env" if getattr(get_settings(), key, "") else "")
+
+
 def _llm_out() -> LlmSettingsOut:
-    stored = credentials._load()
-    origin = "ui" if stored.get("deepseek_api_key") else ("env" if get_settings().deepseek_api_key else "")
-    return LlmSettingsOut(configured=bool(origin), origin=origin)
+    from mediaflow.llm import client as c
+
+    origin, next_origin = _origin("deepseek_api_key"), _origin("image_next_api_key")
+    return LlmSettingsOut(configured=bool(origin or next_origin), origin=origin, deepseek_configured=bool(origin),
+                          next_configured=bool(next_origin), next_origin=next_origin, next_model=c.next_llm_model(),
+                          channel=c.llm_channel_pref(), order=c.llm_channels(), next_paused=c.next_paused())
 
 
 @router.get("/llm", response_model=LlmSettingsOut)
@@ -197,34 +220,57 @@ def get_llm_settings():
 
 @router.put("/llm", response_model=LlmSettingsOut, dependencies=[ADMIN])
 async def update_llm_settings(body: LlmSettingsIn):
-    """先用这个 Key 实际问一句，能用才保存（填错了当场就知道）；空字符串清除。"""
-    key = body.api_key.strip()
+    """填了新 Key 先实际问一句，能用才保存（填错了当场就知道）；空字符串清除。"""
+    from mediaflow.llm.client import reset_next_pause
+
+    if body.channel is not None and body.channel not in ("auto", "next", "deepseek"):
+        raise HTTPException(400, "channel 只能是 auto / next / deepseek")
+    key = (body.api_key or "").strip()
     if key:
-        r = await _try_llm(key)
+        r = await _try_llm("deepseek", key)
         if not r.ok:
             raise HTTPException(400, r.error)
-    credentials.update({"deepseek_api_key": key})
+    nkey, nmodel = (body.next_api_key or "").strip(), (body.next_model or "").strip()
+    if nkey or nmodel:
+        r = await _try_llm("next", nkey or None, nmodel or None)
+        if not r.ok:
+            raise HTTPException(400, r.error)
+    credentials.update({"deepseek_api_key": None if body.api_key is None else key,
+                        "image_next_api_key": None if body.next_api_key is None else nkey,
+                        "llm_next_model": None if body.next_model is None else nmodel,
+                        "llm_channel": None if body.channel is None else ("" if body.channel == "auto" else body.channel)})
+    if nkey or nmodel:
+        reset_next_pause()
     return _llm_out()
 
 
 @router.post("/llm/test", response_model=LlmTestOut, dependencies=[ADMIN])
-async def test_llm(body: LlmSettingsIn):
-    return await _try_llm(body.api_key.strip() or None)
+async def test_llm(body: LlmTestIn):
+    return await _try_llm(body.channel, (body.api_key or "").strip() or None, (body.model or "").strip() or None)
 
 
-async def _try_llm(key: str | None) -> LlmTestOut:
-    from mediaflow.llm.client import DeepSeekLLM, LLMError
+async def _try_llm(channel: str, key: str | None, model: str | None = None) -> LlmTestOut:
+    from mediaflow.llm.client import LLMError, make_channel
 
     t = time.monotonic()
+    nxt = channel == "next"
     try:
-        await DeepSeekLLM(api_key=key).complete([{"role": "user", "content": "回复「好」"}], temperature=0)
+        await make_channel("next" if nxt else "deepseek", api_key=key, model=model).complete(
+            [{"role": "user", "content": "回复「好」"}], temperature=0)
     except LLMError as e:
         msg = str(e)
-        if "401" in msg or "auth" in msg.lower() or "invalid" in msg.lower():
-            msg = "Key 不对：去 DeepSeek 后台重新复制一遍（以 sk- 开头）"
-        elif "402" in msg or "balance" in msg.lower():
-            msg = "DeepSeek 账户余额不足，先去充值"
+        low = msg.lower()
+        if "401" in msg or "auth" in low or "invalid" in low and "model" not in low:
+            msg = "Key 不对：去后台重新复制一遍" + ("（openai-next 的 sk- 开头那串）" if nxt else "（以 sk- 开头）")
+        elif "402" in msg or "balance" in low or "quota" in low or "额度" in msg or "余额" in msg:
+            msg = ("openai-next 额度用完了，先去充值" if nxt else "DeepSeek 账户余额不足，先去充值")
+        elif nxt and ("model" in low or "404" in msg or "not found" in low or "不存在" in msg):
+            msg = f"openai-next 上没有这个模型（{model or '默认模型'}），去 openai-next 的模型列表复制准确的名字：{msg[:160]}"
+        elif nxt and model and ("503" in msg or "500" in msg):
+            msg = f"openai-next 调不通这个模型（{model}），多半是模型名不对，去 openai-next 的模型列表复制准确的名字"
         return LlmTestOut(ok=False, seconds=round(time.monotonic() - t, 1), error=msg)
+    except Exception as e:  # noqa: BLE001 - 比如没配 Key
+        return LlmTestOut(ok=False, seconds=round(time.monotonic() - t, 1), error=str(e) or "还没填 Key")
     return LlmTestOut(ok=True, seconds=round(time.monotonic() - t, 1))
 
 

@@ -860,7 +860,7 @@ export interface paths {
         get: operations["get_llm_settings_api_settings_llm_get"];
         /**
          * Update Llm Settings
-         * @description 先用这个 Key 实际问一句，能用才保存（填错了当场就知道）；空字符串清除。
+         * @description 填了新 Key 先实际问一句，能用才保存（填错了当场就知道）；空字符串清除。
          */
         put: operations["update_llm_settings_api_settings_llm_put"];
         post?: never;
@@ -1729,19 +1729,92 @@ export interface components {
         LlmSettingsIn: {
             /**
              * Api Key
-             * @description 空字符串清除界面里填的 Key
+             * @description DeepSeek 官方 Key。null 不改；空字符串清除
              */
-            api_key: string;
+            api_key?: string | null;
+            /**
+             * Next Api Key
+             * @description openai-next 的 Key（和配图共用）。null 不改；空字符串清除
+             */
+            next_api_key?: string | null;
+            /**
+             * Next Model
+             * @description openai-next 上的模型名。null 不改；空字符串恢复默认
+             */
+            next_model?: string | null;
+            /**
+             * Channel
+             * @description auto / next / deepseek
+             */
+            channel?: string | null;
         };
         /** LlmSettingsOut */
         LlmSettingsOut: {
-            /** Configured */
+            /**
+             * Configured
+             * @description 能不能写稿聊天（两条里配了任意一条）
+             */
             configured: boolean;
             /**
              * Origin
-             * @description ui=界面里填的，env=环境变量，空=没配
+             * @description DeepSeek 官方 Key：ui=界面里填的，env=环境变量，空=没配
              */
             origin: string;
+            /**
+             * Deepseek Configured
+             * @default false
+             */
+            deepseek_configured: boolean;
+            /**
+             * Next Configured
+             * @description openai-next 的 Key 配了没（和配图共用一个 Key）
+             * @default false
+             */
+            next_configured: boolean;
+            /**
+             * Next Origin
+             * @default
+             */
+            next_origin: string;
+            /**
+             * Next Model
+             * @description openai-next 上调的 DeepSeek 模型名
+             * @default
+             */
+            next_model: string;
+            /**
+             * Channel
+             * @description auto=openai-next 优先、出错换官方；next=只用 openai-next；deepseek=只用官方
+             * @default auto
+             */
+            channel: string;
+            /**
+             * Order
+             * @description 现在实际按这个顺序走
+             */
+            order?: string[];
+            /**
+             * Next Paused
+             * @description openai-next 刚出过错，这一阵先走官方
+             * @default false
+             */
+            next_paused: boolean;
+        };
+        /** LlmTestIn */
+        LlmTestIn: {
+            /**
+             * Channel
+             * @description next / deepseek
+             * @default deepseek
+             */
+            channel: string;
+            /**
+             * Api Key
+             * @description 试一个还没保存的 Key；不填用已保存的
+             */
+            api_key?: string | null;
+            /** Model */
+            model?: string | null;
         };
         /** LlmTestOut */
         LlmTestOut: {
@@ -3961,7 +4034,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LlmSettingsIn"];
+                "application/json": components["schemas"]["LlmTestIn"];
             };
         };
         responses: {

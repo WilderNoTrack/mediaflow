@@ -115,7 +115,7 @@ export function ImageSettingsDialog({ onClose }: { onClose: () => void }) {
                 <span className="font-medium">出完自己检查一遍</span>
                 <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
                   每张出完让 AI 看一眼：图上的字有没有错字乱码、画面和描述对不对得上、和同套的图是不是一个风格。有问题就带着修改意见自动重出一次（会多用一次生图额度），结果在草稿页每张图下面能看到。
-                  {!st.vision && " 需要配好 DeepSeek Key 才能看图。"}
+                  {!st.vision && " 需要配好模型 Key（openai-next 或 DeepSeek）才能看图。"}
                 </span>
               </span>
             </label>

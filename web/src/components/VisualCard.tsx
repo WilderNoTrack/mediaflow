@@ -54,7 +54,7 @@ export function VisualCard({ account }: { account: Account }) {
             <p className="text-sm">还没有配图模板，现在每篇配图照它自己的参考帖做</p>
             <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">
               {vision ? "加完对标账号会自动看它的爆款图学一个；也可以现在学，或者贴几篇你喜欢的图文笔记照着学。"
-                : "学模板要能看图，管理员配好 DeepSeek Key 后就能用。"}
+                : "学模板要能看图，管理员配好模型 Key 后就能用。"}
             </p>
             {vision && !learning && (
               <div className="mt-4 flex flex-wrap justify-center gap-2">

@@ -26,7 +26,7 @@ function SystemBanner() {
   return (
     <div className="flex items-center justify-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-800">
       <AlertCircle className="size-3.5 shrink-0" />
-      还没填 DeepSeek Key，写稿和对话用不了。
+      还没填模型 Key（openai-next 或 DeepSeek），写稿和对话用不了。
       <button
         className="cursor-pointer font-medium underline underline-offset-2"
         onClick={() => setOpen(true)}
