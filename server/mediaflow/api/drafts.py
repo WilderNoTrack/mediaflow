@@ -10,7 +10,7 @@ from mediaflow.domain.models import (
     Account, Draft, DraftImage, DraftStatus, Feedback, ImageStatus, Job, JobKind, Topic, utcnow,
 )
 from mediaflow.domain.schemas import (
-    DraftDetail, DraftOut, DraftPatch, FeedbackIn, ImageOut, JobOut, LearnOut, ReferenceIn, ReviseIn, WriteIn,
+    DraftDetail, DraftOut, DraftPatch, FeedbackIn, ImageEditIn, ImageOut, JobOut, LearnOut, ReferenceIn, ReviseIn, WriteIn,
 )
 from mediaflow.jobs.queue import ACTIVE, enqueue
 from mediaflow.llm.client import get_llm
@@ -63,7 +63,8 @@ def list_drafts(status: DraftStatus | None = None, acc: Account = Depends(owned_
 def start_writing(body: WriteIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
     job = enqueue(s, JobKind.write_draft, user_id=acc.user_id, account_id=acc.id,
                   payload={"topic_id": body.topic_id, "hint": body.hint, "trigger": "chat" if body.from_chat else "manual",
-                           "reference_url": body.reference_url.strip()})
+                           "reference_url": body.reference_url.strip(),
+                           "image_plan": [p.strip() for p in body.image_plan if p.strip()]})
     if body.from_chat:
         from mediaflow.agents.manager import log_tool
 
@@ -172,6 +173,21 @@ def regenerate_images(idx: int | None = None, all: bool = False, d: Draft = Depe
     job = enqueue(s, JobKind.generate_images, user_id=d.user_id, account_id=d.account_id,
                   payload={"draft_id": d.id, "only_idx": idx})
     return JobOut(**job.model_dump())
+
+
+@router.post("/api/drafts/{draft_id}/images/edit", response_model=DraftDetail)
+def edit_images(body: ImageEditIn, d: Draft = Depends(owned_draft), s: Session = Depends(get_session)):
+    """改配图：改描述 / 加一张 / 删一张 / 调顺序 / 照原描述重出（编号按改之前的顺序）。改过的马上重出，其余不动。"""
+    from mediaflow.services import draft_edit
+
+    try:
+        res = draft_edit.apply_ops(s, d, [o.model_dump() for o in body.ops])
+    except draft_edit.EditError as e:
+        raise HTTPException(409 if "正在出图" in str(e) else 400, str(e)) from e
+    if body.regenerate and res["changed"]:
+        enqueue(s, JobKind.generate_images, user_id=d.user_id, account_id=d.account_id, payload={"draft_id": d.id})
+    s.refresh(d)
+    return _out(s, d, detail=True)
 
 
 @router.get("/api/drafts/{draft_id}/text")

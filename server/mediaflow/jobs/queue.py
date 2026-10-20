@@ -89,6 +89,7 @@ async def _handle_write(job: Job, emit) -> dict:
             hint=job.payload.get("hint", ""),
             trigger=Trigger(job.payload.get("trigger", "manual")),
             reference_url=job.payload.get("reference_url", ""),
+            image_plan=job.payload.get("image_plan") or [],
             emit=emit,
         )
         pending = s.exec(select(DraftImage).where(

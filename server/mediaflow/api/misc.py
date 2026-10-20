@@ -38,7 +38,7 @@ def chat_history(acc: Account = Depends(owned_account), s: Session = Depends(get
 @router.post("/api/accounts/{account_id}/chat", response_model=list[ChatMessageOut])
 async def send_chat(body: ChatIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
     auth.check_quota(s, acc.user_id, "chats")
-    msgs = await manager.chat(s, get_llm(), acc.id, body.text.strip())
+    msgs = await manager.chat(s, get_llm(), acc.id, body.text.strip(), draft_id=body.draft_id)
     return [ChatMessageOut(**m.model_dump()) for m in msgs]
 
 
@@ -46,7 +46,7 @@ async def send_chat(body: ChatIn, acc: Account = Depends(owned_account), s: Sess
 async def stream_chat(body: ChatIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
     """和 POST /chat 一样，但用 SSE 边做边推事件（见 manager.chat_events）。断开连接不影响这一轮跑完、存好。"""
     auth.check_quota(s, acc.user_id, "chats")
-    q = manager.start_chat(get_llm(), acc.id, body.text.strip())
+    q = manager.start_chat(get_llm(), acc.id, body.text.strip(), draft_id=body.draft_id)
 
     async def events():
         while True:

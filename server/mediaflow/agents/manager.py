@@ -38,12 +38,12 @@ HISTORY_LIMIT = 40
 RESULT_CHARS = 1500          # 普通工具结果给模型看的长度上限
 RESEARCH_RESULT_CHARS = 4000  # 调研结果信息密度高，放宽
 HISTORY_TOOL_CHARS = 500      # 历史轮次里的工具结果只留摘要，控制上下文
-READ_ONLY = {"list_drafts", "find_benchmarks", "research_search", "research_creators", "research_creator_posts", "research_post"}
+READ_ONLY = {"list_drafts", "get_draft", "find_benchmarks", "research_search", "research_creators", "research_creator_posts", "research_post"}
 _locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像一个靠谱的运营搭子。
 用户多是刚开始做小红书副业的新手（比如宝妈），说人话：少用「拆解、中位数、爆款率、质检」这类行话，必要时用一句话解释。
-你的工作是帮用户把账号定位聊清楚、记住长期规则、找选题、安排写稿。
+你的工作是帮用户把账号定位聊清楚、记住长期规则、找选题、安排写稿，并按用户的话直接改稿子和配图。
 
 【原则】
 1. 边聊边记：听到新的定位信息（主题、受众、文案风格、配图风格、选题方向、关键词），马上调用 update_profile 写入，不要攒着。
@@ -60,6 +60,13 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    用户说「照着这篇/这几篇写」并给了链接，就 write_post 并把链接原样放进 reference_url（多个就都放进去，第一篇图文笔记当配图模板）；
    想给已有草稿换配图照的那篇，告诉他在草稿页「参考帖」里贴链接，再点全部重新出。没有对标、也没连小红书时找不到参考帖，就按账号的配图风格统一出。
 8. AI 写完会自己挑问题、自己按意见改好，不用让用户去逐条改；草稿页列着改了哪些地方。
+9. 用户要改已有的稿子，你直接动手改，不要让用户自己去页面上改：
+   - 「第二张换成…」「封面字大一点」「加一张清单图」「删掉最后一张」「第三张挪到前面」：先 get_draft 看现在每张是什么（用户正在看的那篇已经在下方，可以直接用），
+     再 edit_images；描述要写完整：保留原来用户没要求改的部分，把用户的要求写具体（放什么、怎么构图、图上写哪几个字）。只说「重新出一张」用 redo。
+   - 改文案（标题、开头、语气、加一段）用 revise_post，把用户原话传进去。
+   - 用户写新稿时就说了每张图要什么（「第一张放…第二张放…」），write_post 时用 image_plan 一张一条传进去。
+   - 用户的要求是「以后每篇都这样」，除了改这篇，再 add_rule 记下来。
+   - 说清改了哪几张、多久能好；理解不了的指代（比如没说哪篇、哪张）先问一句，别乱改。
 
 【调研】用户想了解某个博主、某类爆款、某个话题在各平台的情况时，用 research_* 工具查真实数据。
 - 先宽后窄：research_search 看话题全貌，或 research_creators 先确认是哪位博主（重名时挑名字最吻合、粉丝最多的，拿不准就问用户），
@@ -142,7 +149,29 @@ TOOLS = [
         "topic_id": {"type": "string", "description": "可选：选题库里的选题 ID"},
         "hint": {"type": "string", "description": "可选：方向或额外要求"},
         "reference_url": {"type": "string", "description": "可选：用户指定要照着写的小红书笔记链接，可以多篇（原样传，含分享文字也行，多个用换行隔开）；第一篇图文笔记当配图模板"},
+        "image_plan": {"type": "array", "items": {"type": "string"},
+                       "description": "可选：用户对每张图的要求，按顺序一张一条（第 1 张是封面），尽量保留用户原话；用户没说就不传"},
     }),
+    _tool("get_draft", "看一篇草稿的详情：标题、正文、每张配图的编号/描述/状态、参考了哪些帖子。改之前先看", {
+        "draft_id": {"type": "string", "description": "草稿 ID；不传就是用户正在看的那篇（没有就是最近一篇）"},
+    }),
+    _tool("edit_images", "改一篇草稿的配图，一次可以给好几步；改过描述的、新加的、要重出的会马上重新出图，其余已出好的不动，"
+          "整套沿用同一份视觉风格。编号一律按改之前的顺序（get_draft 里的 no）", {
+              "draft_id": {"type": "string", "description": "不传就是用户正在看的那篇"},
+              "ops": {"type": "array", "items": {"type": "object", "properties": {
+                  "op": {"type": "string", "enum": ["update", "add", "remove", "move", "redo"],
+                         "description": "update 改描述 / add 加一张 / remove 删掉 / move 挪位置 / redo 描述不变、重新出"},
+                  "no": {"type": "integer", "description": "第几张（update/remove/move/redo）"},
+                  "after": {"type": "integer", "description": "add：加在第几张后面，0 放最前，不填放最后"},
+                  "to": {"type": "integer", "description": "move：挪到第几张"},
+                  "description": {"type": "string", "description": "update/add：这张图完整的新中文画面描述——"
+                                  "保留原描述里用户没要求改的部分，把用户的要求写具体（放什么、怎么构图、图上写哪几个字）"},
+              }, "required": ["op"]}},
+          }, ["ops"]),
+    _tool("revise_post", "按用户的要求改一篇草稿的文案（标题/正文/标签），后台改、改完 AI 复核，改得更好才替换", {
+        "draft_id": {"type": "string", "description": "不传就是用户正在看的那篇"},
+        "instruction": {"type": "string", "description": "用户的修改要求，尽量保留原话"},
+    }, ["instruction"]),
     _tool("set_auto", "开关自动模式（按频率自动写稿进待审核）", {
         "enabled": {"type": "boolean"},
         "frequency": {"type": "string", "enum": ["daily", "every_2_days", "weekly"]},
@@ -179,8 +208,27 @@ def _bench_state(s: Session, account_id: str) -> dict:
 
 
 class Toolbox:
-    def __init__(self, session: Session, llm: LLM, account: Account, fetch: Fetcher | None) -> None:
+    def __init__(self, session: Session, llm: LLM, account: Account, fetch: Fetcher | None,
+                 draft_id: str | None = None) -> None:
         self.s, self.llm, self.acc, self.fetch = session, llm, account, fetch
+        self.draft_id = draft_id  # 用户正在看的草稿
+
+    def _draft(self, draft_id: str = "") -> Draft:
+        did = draft_id.strip() or self.draft_id
+        d = self.s.get(Draft, did) if did else self.s.exec(
+            select(Draft).where(Draft.account_id == self.acc.id).order_by(col(Draft.created_at).desc())).first()
+        if d is None or d.account_id != self.acc.id:
+            raise LookupError("没找到这篇草稿" if did else "这个账号还没有草稿")
+        return d
+
+    def current_draft(self) -> dict | None:
+        """用户在草稿页跟小媒聊时，把这篇的概况放进上下文，「第二张」就有指向。"""
+        from mediaflow.services import draft_edit
+
+        if not self.draft_id:
+            return None
+        d = self.s.get(Draft, self.draft_id)
+        return draft_edit.summary(self.s, d, body_chars=600) if d and d.account_id == self.acc.id else None
 
     def snapshot(self) -> dict:
         rules = self.s.exec(
@@ -270,14 +318,50 @@ class Toolbox:
             out["source_note"] = p.source_note
         return out
 
-    async def t_write_post(self, topic_id: str = "", hint: str = "", reference_url: str = "") -> dict:
+    async def t_write_post(self, topic_id: str = "", hint: str = "", reference_url: str = "",
+                           image_plan: list[str] | None = None) -> dict:
+        plan = [str(p).strip()[:300] for p in (image_plan or []) if str(p).strip()][:9]
         try:
             job = enqueue(self.s, JobKind.write_draft, user_id=self.acc.user_id, account_id=self.acc.id,
                           payload={"topic_id": topic_id or None, "hint": hint, "trigger": Trigger.chat.value,
-                                   "reference_url": reference_url.strip()[:3000]})
+                                   "reference_url": reference_url.strip()[:3000], "image_plan": plan})
         except JobConflict as e:
             return {"ok": False, "error": str(e), "job_id": e.job.id}
-        return {"ok": True, "job_id": job.id, "note": "已开始在后台写，1-3 分钟后在草稿里能看到"}
+        return {"ok": True, "job_id": job.id, "note": "已开始在后台写，1-3 分钟后在草稿里能看到"
+                + (f"；配图按用户说的 {len(plan)} 张出" if plan else "")}
+
+    async def t_get_draft(self, draft_id: str = "") -> dict:
+        from mediaflow.services import draft_edit
+
+        return {"ok": True, **draft_edit.summary(self.s, self._draft(draft_id))}
+
+    async def t_edit_images(self, ops: list[dict], draft_id: str = "") -> dict:
+        from mediaflow.services import draft_edit
+
+        d = self._draft(draft_id)
+        if not isinstance(ops, list) or not all(isinstance(o, dict) for o in ops):
+            return {"ok": False, "error": "ops 要是一组 {op, no, ...}"}
+        try:
+            res = draft_edit.apply_ops(self.s, d, ops)
+        except draft_edit.EditError as e:
+            return {"ok": False, "error": str(e)}
+        out: dict[str, Any] = {"ok": True, "draft_id": d.id, **res}
+        if res["changed"]:
+            job = enqueue(self.s, JobKind.generate_images, user_id=d.user_id, account_id=d.account_id,
+                          payload={"draft_id": d.id})
+            out["job_id"] = job.id
+            out["note"] = f"第 {'、'.join(map(str, res['changed']))} 张正在重新出，一般 1 分钟左右，草稿页能看到"
+        out["images"] = draft_edit.summary(self.s, d)["images"]
+        return out
+
+    async def t_revise_post(self, instruction: str, draft_id: str = "") -> dict:
+        d = self._draft(draft_id)
+        try:
+            job = enqueue(self.s, JobKind.revise_draft, user_id=d.user_id, account_id=d.account_id,
+                          payload={"draft_id": d.id, "note": instruction.strip()[:300]})
+        except JobConflict as e:
+            return {"ok": False, "error": str(e), "job_id": e.job.id}
+        return {"ok": True, "job_id": job.id, "draft_id": d.id, "note": "在后台改，大约 1 分钟，改完草稿页会更新"}
 
     async def t_find_benchmarks(self, query: str = "", prefer: str = "") -> dict:
         from mediaflow.services import benchmark as bench
@@ -459,7 +543,7 @@ def _ms(t0: float) -> int:
 
 
 async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
-                      fetch: Fetcher | None = None) -> AsyncIterator[dict]:
+                      fetch: Fetcher | None = None, draft_id: str | None = None) -> AsyncIterator[dict]:
     """处理一条用户消息，边做边吐事件（界面实时显示「思考了几秒、调了什么工具、回复逐字出来」）：
 
     user{message} → 每一轮：step_start{kind=thinking} → [thinking{text}] → [delta{text}]… → step_end{ms}
@@ -471,13 +555,16 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
         if acc is None:
             raise LookupError("账号不存在")
         t_all = time.monotonic()
-        box = Toolbox(session, llm, acc, fetch)
+        box = Toolbox(session, llm, acc, fetch, draft_id)
         history = _history(session, account_id)
-        yield {"type": "user", "message": _msg_out(_save(session, acc, ChatRole.user, text))}
+        cur = box.current_draft()
+        yield {"type": "user", "message": _msg_out(_save(session, acc, ChatRole.user, text,
+                                                         payload={"draft_id": cur["id"], "draft_title": cur["title"]} if cur else None))}
 
         messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT + "\n\n【当前账号状态】\n"
-             + json.dumps(box.snapshot(), ensure_ascii=False, indent=1)},
+             + json.dumps(box.snapshot(), ensure_ascii=False, indent=1)
+             + ("\n\n【用户正在看的草稿（「这篇」「第二张」指的就是它）】\n" + json.dumps(cur, ensure_ascii=False, indent=1) if cur else "")},
             *history,
             {"role": "user", "content": text},
         ]
@@ -575,10 +662,11 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
         yield {"type": "done", "ms": total}
 
 
-async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = None) -> list[ChatMessage]:
+async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = None,
+               draft_id: str | None = None) -> list[ChatMessage]:
     """处理一条用户消息（不流式），返回本轮新增的消息（用户消息、工具记录、回复）。"""
     ids = []
-    async for ev in chat_events(session, llm, account_id, text, fetch=fetch):
+    async for ev in chat_events(session, llm, account_id, text, fetch=fetch, draft_id=draft_id):
         if ev["type"] in ("user", "tool_message", "message"):
             ids.append(ev["message"]["id"])
     return [session.get(ChatMessage, i) for i in ids]
@@ -587,7 +675,8 @@ async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch:
 _running: set[asyncio.Task] = set()
 
 
-def start_chat(llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = None) -> asyncio.Queue:
+def start_chat(llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = None,
+               draft_id: str | None = None) -> asyncio.Queue:
     """在后台跑一轮对话，事件放进队列（None 表示结束）。浏览器断开连接也会跑完、结果照样存进对话。"""
     from mediaflow.db import get_engine
 
@@ -596,7 +685,7 @@ def start_chat(llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = 
     async def run() -> None:
         try:
             with Session(get_engine(), expire_on_commit=False) as s:
-                async for ev in chat_events(s, llm, account_id, text, fetch=fetch):
+                async for ev in chat_events(s, llm, account_id, text, fetch=fetch, draft_id=draft_id):
                     q.put_nowait(ev)
         except Exception as e:  # noqa: BLE001 - 出错也要告诉界面，别让它一直转圈
             logger.exception("对话处理失败")

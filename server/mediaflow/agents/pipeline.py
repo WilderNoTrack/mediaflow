@@ -107,7 +107,22 @@ async def _pick_topic(
     return t
 
 
-def _reference_block(ref: dict) -> str:
+def _plan_block(plan: list[str]) -> str:
+    if not plan:
+        return ""
+    return (f"\n\n【用户对配图的要求（必须照做）】这篇一共 {len(plan)} 张图，image_prompts 就写 {len(plan)} 张，"
+            "第 i 张必须是用户说的那样，只是把画面和图上的字写具体：\n"
+            + "\n".join(f"第 {i + 1} 张{'（封面）' if i == 0 else ''}：{p}" for i, p in enumerate(plan)))
+
+
+def _apply_plan(prompts_: list[str], plan: list[str]) -> list[str]:
+    """用户定了每张放什么：张数按用户的，模型漏写的那张直接用用户原话。"""
+    if not plan:
+        return prompts_
+    return [prompts_[i] if i < len(prompts_) and prompts_[i] else plan[i] for i in range(len(plan))]
+
+
+def _reference_block(ref: dict, *, planned: bool = False) -> str:
     if not ref.get("title"):
         return ""
     posts = [ref, *[x for x in ref.get("extra") or [] if x.get("title")]]
@@ -122,7 +137,7 @@ def _reference_block(ref: dict) -> str:
     n = len(ref.get("local") or []) or len(ref.get("images") or [])
     imgs = (f"\n\n【配图要和主参考帖一个模子】主参考帖有 {n} 张图，image_prompts 也写 {n} 张，第 i 张对应它的第 i 张"
             "（封面对封面，内页对内页）：出图时会把那张原图当模板，照着它的版式、文字位置、配色和装饰重做，整套用同一份视觉规范，"
-            "所以每张只写清「这一张放本篇的什么内容、图上写哪几个字」，信息量和原图那张相当。") if n > 1 else ""
+            "所以每张只写清「这一张放本篇的什么内容、图上写哪几个字」，信息量和原图那张相当。") if n > 1 and not planned else ""
     learn = ("学它们共同的标题公式、开头钩子、结构节奏和信息密度（以主参考帖为主）" if len(posts) > 1
              else "学它的标题公式、开头钩子、结构节奏和信息密度")
     return ("\n\n" + prompts.UNTRUSTED_NOTICE + "\n<external_data>\n"
@@ -131,7 +146,7 @@ def _reference_block(ref: dict) -> str:
 
 
 async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feedback: str,
-                    ref: dict | None = None) -> Candidate:
+                    ref: dict | None = None, plan: list[str] | None = None) -> Candidate:
     data = await complete_json(llm, [
         {"role": "system", "content": prompts.WRITER_SYSTEM},
         {"role": "user", "content": prompts.WRITER_USER.format(
@@ -141,13 +156,13 @@ async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feed
             topic_angle=topic.angle or "自行决定",
             hint_block=f"用户补充要求：{hint}\n" if hint else "",
             feedback_block=f"\n【上一版的问题，这次必须改掉】\n{feedback}\n" if feedback else "",
-        ) + _reference_block(ref or (topic.reference or {}))},
+        ) + _reference_block(ref or (topic.reference or {}), planned=bool(plan)) + _plan_block(plan or [])},
     ], temperature=0.85)
     return Candidate(
         title=str(data.get("title", "")).strip(),
         body=str(data.get("body", "")).strip(),
         tags=clean_tags(data.get("tags") or []),
-        image_prompts=[str(p).strip() for p in (data.get("image_prompts") or []) if str(p).strip()][:9],
+        image_prompts=_apply_plan([str(p).strip() for p in (data.get("image_prompts") or []) if str(p).strip()][:9], plan or []),
     )
 
 
@@ -435,6 +450,7 @@ async def write_draft(
     emit: Emit = _noop,
     fetch: Fetcher | None = None,
     reference_url: str = "",
+    image_plan: list[str] | None = None,
 ) -> Draft:
     ctx = load_context(session, account_id)
     if not (ctx.theme or ctx.keywords or hint or topic_id):
@@ -446,7 +462,8 @@ async def write_draft(
     candidates: list[Candidate] = []
     eval_failed = False
     emit("write", "第 1 版写作中…", {"attempt": 1})
-    c = await _generate(llm, ctx, topic, hint, "", ref)
+    plan = [p.strip() for p in image_plan or [] if p.strip()][:9]
+    c = await _generate(llm, ctx, topic, hint, "", ref, plan)
     if await _check(llm, ctx, c):
         eval_failed = True
         emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
@@ -503,6 +520,8 @@ async def write_draft(
     session.add(draft)
     session.flush()
     status = ImageStatus.pending if image_configured() else ImageStatus.skipped
+    if plan:  # 改稿时模型可能动了配图描述：张数和每张要什么，还是以用户说的为准
+        best.image_prompts = _apply_plan(best.image_prompts, plan)
     for i, p in enumerate(best.image_prompts):
         session.add(DraftImage(draft_id=draft.id, idx=i, prompt=p, status=status))
     topic.status = TopicStatus.used

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -235,7 +236,21 @@ class WriteIn(BaseModel):
     topic_id: str | None = None
     hint: str = ""
     from_chat: bool = Field(False, description="在小媒对话里点的「写这篇」：把这次写稿记进对话，进度和结果卡片留在对话里")
+    image_plan: list[str] = Field(default=[], max_length=9, description="用户对每张图的要求（第 1 张、第 2 张…），写稿时照这个出配图描述")
     reference_url: str = Field("", max_length=3000, description="照着这些小红书笔记写（可以多个链接/分享文字，第一篇图文笔记当配图模板；不填就自动挑）")
+
+
+class ImageOp(BaseModel):
+    op: Literal["update", "add", "remove", "move", "redo"]
+    no: int | None = Field(None, description="第几张（按改之前的顺序，从 1 开始）")
+    after: int | None = Field(None, description="add：加在第几张后面，0 = 放最前，不填放最后")
+    to: int | None = Field(None, description="move：挪到第几张")
+    description: str = Field("", max_length=500, description="update/add：这张图的中文画面描述")
+
+
+class ImageEditIn(BaseModel):
+    ops: list[ImageOp] = Field(min_length=1, max_length=20)
+    regenerate: bool = Field(True, description="改完马上把改过的、新加的出图")
 
 
 class ReferenceIn(BaseModel):
@@ -258,6 +273,7 @@ class JobOut(BaseModel):
 
 class ChatIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
+    draft_id: str | None = Field(None, description="用户正在看的草稿（在草稿页跟小媒聊时带上，「第二张」就指这篇的第二张图）")
 
 
 class ChatMessageOut(BaseModel):

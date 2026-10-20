@@ -285,3 +285,78 @@ def test_chat_stream_llm_error_still_answers(client, llm):
     llm.push("manager", fail("超时"))
     evs = _sse(client.post(f"/api/accounts/{a['id']}/chat/stream", json={"text": "在吗"}))
     assert evs[-1]["type"] == "done" and "连不上 AI 服务" in evs[-2]["message"]["content"]
+
+
+async def test_edit_images_ops(client, session, llm):
+    """改配图：编号按改之前的顺序；改过的、新加的、要重出的标成待出图并派出图任务，其余不动。"""
+    from mediaflow.domain.models import DraftImage, ImageStatus, JobKind
+
+    a = make_account(client)
+    d = await _make_draft(session, llm, a["id"])
+    imgs = session.exec(select(DraftImage).where(DraftImage.draft_id == d.id).order_by(DraftImage.idx)).all()
+    for i in imgs:
+        i.status, i.path = ImageStatus.done, f"{d.id}/{i.idx}.png"
+        session.add(i)
+    session.commit()
+    before = [i.prompt for i in imgs]
+    assert len(before) == 2
+    r = client.post(f"/api/drafts/{d.id}/images/edit", json={"ops": [
+        {"op": "update", "no": 2, "description": "三套穿搭对比拼图"},
+        {"op": "add", "after": 1, "description": "单品清单"},
+        {"op": "add", "after": 0, "description": "新封面"},
+        {"op": "move", "no": 1, "to": 4},
+    ]})
+    assert r.status_code == 200, r.text
+    got = r.json()["images"]
+    assert [i["prompt"] for i in got] == ["新封面", "单品清单", "三套穿搭对比拼图", before[0]]
+    assert [i["status"] for i in got] == ["pending", "pending", "pending", "done"]
+    jobs = session.exec(select(Job).where(Job.kind == JobKind.generate_images)).all()
+    assert len(jobs) == 1 and jobs[0].payload["draft_id"] == d.id
+
+    r = client.post(f"/api/drafts/{d.id}/images/edit", json={"ops": [{"op": "remove", "no": 1}]})
+    assert r.status_code == 409 and "正在出图" in r.json()["detail"]  # 上一轮还没出完
+    session.delete(jobs[0])
+    session.commit()
+    r = client.post(f"/api/drafts/{d.id}/images/edit", json={"ops": [{"op": "remove", "no": 9}]})
+    assert r.status_code == 400 and "没有第 9 张" in r.json()["detail"]
+    r = client.post(f"/api/drafts/{d.id}/images/edit", json={"ops": [{"op": "remove", "no": 1}, {"op": "redo", "no": 4}],
+                                                         "regenerate": False})
+    assert [(i["idx"], i["prompt"], i["status"]) for i in r.json()["images"]] == [
+        (0, "单品清单", "pending"), (1, "三套穿搭对比拼图", "pending"), (2, before[0], "pending")]
+    r = client.post(f"/api/drafts/{d.id}/images/edit", json={"ops": [{"op": "remove", "no": k} for k in (1, 2, 3)]})
+    assert r.status_code == 400 and "至少要留一张" in r.json()["detail"]
+
+
+async def test_chat_edits_current_draft_images(client, session, llm):
+    """在草稿页跟小媒说「第二张换成…」：上下文里有这篇的每张图，小媒调 edit_images 直接改。"""
+    from mediaflow.domain.models import DraftImage
+
+    a = make_account(client)
+    d = await _make_draft(session, llm, a["id"])
+    llm.push("manager", tool_call("edit_images", ops=[{"op": "update", "no": 2, "description": "三套穿搭对比拼图，每格标 Look1/2/3"}]),
+             say("第 2 张换成对比拼图了，正在重新出"))
+    r = client.post(f"/api/accounts/{a['id']}/chat", json={"text": "第二张换成三套穿搭的对比拼图", "draft_id": d.id})
+    assert r.status_code == 200, r.text
+    sys = llm.calls[-2][1][0]["content"]
+    assert "用户正在看的草稿" in sys and d.id in sys and '"no": 2' in sys
+    img = session.exec(select(DraftImage).where(DraftImage.draft_id == d.id, DraftImage.idx == 1)).one()
+    session.refresh(img)
+    assert img.prompt.startswith("三套穿搭对比拼图")
+    tool = [m for m in r.json() if m["role"] == "tool"][0]
+    assert tool["tool_name"] == "edit_images" and tool["payload"]["result"]["changed"] == [2]
+    assert r.json()[0]["payload"]["draft_id"] == d.id
+
+
+async def test_write_with_image_plan(session, llm, account):
+    """用户写稿时说了每张图要什么：写稿提示里带上，张数按用户的，漏写的直接用原话。"""
+    from mediaflow.agents.pipeline import write_draft
+    from mediaflow.domain.models import DraftImage
+    from tests.fakes import fake_fetch
+
+    llm.push("writer", post(images=["封面：大字「3套」"])).push("eval", evaluation(8.5))
+    d = await write_draft(session, llm, account.id, hint="通勤穿搭", fetch=fake_fetch,
+                          image_plan=["封面大字「3套通勤公式」", "三套全身照拼图", "单品清单"])
+    w = llm.prompts_of("writer")[0]
+    assert "用户对配图的要求（必须照做）" in w and "第 2 张：三套全身照拼图" in w
+    imgs = session.exec(select(DraftImage).where(DraftImage.draft_id == d.id).order_by(DraftImage.idx)).all()
+    assert [i.prompt for i in imgs] == ["封面：大字「3套」", "三套全身照拼图", "单品清单"]
