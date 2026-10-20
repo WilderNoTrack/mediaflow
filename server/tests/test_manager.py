@@ -1,3 +1,5 @@
+import json
+
 from sqlmodel import select
 
 from mediaflow.agents.manager import TOOLS, chat
@@ -21,7 +23,13 @@ async def test_updates_profile_and_remembers_it(session, llm, account):
     llm.push("manager", say("刚才把风格改成了毒舌但真诚"))
     await chat(session, llm, account.id, "你刚才改了啥")
     last_messages = llm.calls[-1][1]
-    assert any("update_profile" in (m.get("content") or "") for m in last_messages)
+    # 历史里是原生的 tool_calls + tool 结果，不是「（我执行了…）」文字（否则模型会学着只写不调）
+    calls = [(m, c) for m in last_messages if m["role"] == "assistant" for c in m.get("tool_calls") or []]
+    assert [c["function"]["name"] for _, c in calls] == ["update_profile"]
+    assert json.loads(calls[0][1]["function"]["arguments"]) == {"content_style": "毒舌但真诚"}
+    i = last_messages.index(calls[0][0])
+    assert last_messages[i + 1]["role"] == "tool" and last_messages[i + 1]["tool_call_id"] == calls[0][1]["id"]
+    assert not any("我执行了" in (m.get("content") or "") for m in last_messages[1:])
     assert "毒舌但真诚" in last_messages[0]["content"]  # 账号快照也是最新的
 
 
@@ -127,7 +135,8 @@ async def test_research_tools_run_in_parallel_and_save_note(session, llm, accoun
     await chat(session, llm, account.id, "嗯")
     ctx = llm.calls[-1][1]
     assert note.id in ctx[0]["content"]
-    hist = [m["content"] for m in ctx[1:] if "我执行了 research_creator_posts" in (m.get("content") or "")]
+    ids = {c["id"] for m in ctx[1:] for c in m.get("tool_calls") or [] if c["function"]["name"] == "research_creator_posts"}
+    hist = [m["content"] for m in ctx[1:] if m["role"] == "tool" and m["tool_call_id"] in ids]
     assert hist and len(hist[0]) < 600
 
 
@@ -168,3 +177,74 @@ async def test_notes_are_scoped_to_account(session, llm, account):
     llm.push("manager", tool_call("remove_note", note_id=n.id), say("删不了"))
     msgs = await chat(session, llm, account.id, "删掉那条笔记")
     assert msgs[1].payload["result"]["ok"] is False and session.get(Note, n.id) is not None
+
+
+async def test_ask_user_ends_turn_with_buttons(session, llm, account):
+    """有常见答案的问题给按钮：同一步的操作照做，问题当回复，选项存进消息；下一轮模型知道用户在回答它。"""
+    from mediaflow.llm.client import LLMResponse, ToolCall
+
+    llm.push("manager", LLMResponse(content="记下了～", tool_calls=[
+        ToolCall(id="a", name="update_profile", arguments={"theme": "宝妈省钱"}),
+        ToolCall(id="b", name="ask_user", arguments={"question": "你的内容主要给谁看？", "multi": True,
+                                                      "options": ["新手宝妈", "二胎家庭", "上班族妈妈", "新手宝妈"]})]))
+    msgs = await chat(session, llm, account.id, "我想分享带娃省钱")
+    assert len(llm.calls) == 1  # 问完这一轮就结束，等用户
+    assert [m.role for m in msgs] == [ChatRole.user, ChatRole.tool, ChatRole.assistant]
+    session.refresh(account)
+    assert account.theme == "宝妈省钱"
+    reply = msgs[-1]
+    assert reply.content == "记下了～\n\n你的内容主要给谁看？"
+    assert reply.payload["ask"] == {"question": "你的内容主要给谁看？", "options": ["新手宝妈", "二胎家庭", "上班族妈妈"],
+                                    "multi": True, "kind": "choice"}
+
+    llm.push("manager", tool_call("update_profile", audience="新手宝妈、二胎家庭"), say("好，记下了"))
+    await chat(session, llm, account.id, "新手宝妈、二胎家庭")
+    ctx = llm.calls[1][1]
+    asked = [m for m in ctx if m["role"] == "assistant" and any(c["function"]["name"] == "ask_user" for c in m.get("tool_calls") or [])]
+    assert asked and ctx[ctx.index(asked[0]) + 1]["role"] == "tool"
+    session.refresh(account)
+    assert account.audience == "新手宝妈、二胎家庭"
+
+
+async def test_fake_tool_call_in_text_is_corrected(session, llm, account):
+    """模型在文字里写「（我执行了 update_profile：…）」却没调用：提醒一次让它真调，用户看不到那段假的。"""
+    llm.push("manager", say('（我执行了 update_profile：{"audience": "新手宝妈"}）\n\n记下了'),
+             tool_call("update_profile", audience="新手宝妈"), say("记下了，受众是新手宝妈"))
+    msgs = await chat(session, llm, account.id, "给新手宝妈看的")
+    session.refresh(account)
+    assert account.audience == "新手宝妈"
+    assert msgs[-1].content == "记下了，受众是新手宝妈"
+    assert any("没有真正调用工具" in (m.get("content") or "") and m["role"] == "user" for m in llm.calls[-1][1])
+
+
+def test_sanitize_drops_fake_tool_lines():
+    from mediaflow.agents.manager import _sanitize
+
+    assert _sanitize('好的\n\n（我执行了 add_rule：{"text": "x"}）\n\n还有别的吗') == "好的\n\n还有别的吗"
+    assert _sanitize("（我执行了 update_profile：{}）") == ""
+
+
+async def test_second_write_while_running_is_not_a_failure(session, llm, account):
+    from mediaflow.agents.manager import Toolbox
+
+    tb = Toolbox(session, llm, account, None)
+    first = await tb.call("write_post", {"hint": "省钱"})
+    again = await tb.call("write_post", {"hint": "再来一篇"})
+    assert first["ok"] and again["ok"] and again["already_running"] and again["job_id"] == first["job_id"]
+    assert len(session.exec(select(Job)).all()) == 1
+
+
+async def test_update_visual_without_template_creates_one(session, llm, account):
+    """没对标、没模板时说「配图要清新手绘风」：按描述起一套模板（没有样例图），不再报「先学一个」。"""
+    from mediaflow.agents.manager import Toolbox
+
+    account.visual = {}
+    session.add(account)
+    session.commit()
+    llm.push("visual_update", {"spec": "奶油白底、手绘涂鸦、马卡龙色", "changed": "",
+                               "pages": [{"type": "清单页", "desc": "序号+要点"}, {"type": "封面", "desc": "大字标题"}]})
+    r = await Toolbox(session, llm, account, None).call("update_visual", {"instruction": "清新手绘风"})
+    assert r["ok"] and r["created"] and r["pages"] == ["封面", "清单页"]
+    session.refresh(account)
+    assert account.visual["source"]["names"] == ["按你的描述"] and account.visual["pages"][0]["examples"] == []
+    assert "还没有配图模板" in llm.prompts_of("visual_update")[0]

@@ -318,3 +318,22 @@ async def test_deepseek_stream_accumulates_tool_calls():
     assert r.content == "我去查查" and r.usage == {"total_tokens": 9}
     assert [(c.id, c.name, c.arguments) for c in r.tool_calls] == [
         ("a", "research_search", {"keyword": "通勤"}), ("b", "list_drafts", {})]
+
+
+async def test_events_carry_the_whole_writing_process(session, llm, account):
+    """对话里的写稿卡片要能展开看完整过程：热点来源和条目、候选选题、每一版的标题/字数/改动/打分。"""
+    llm.push("writer", post(title="这是一个特别特别特别特别特别长的通勤穿搭标题啊啊")).push("eval", evaluation(6))
+    llm.push("reviser", post(title="通勤穿搭3个心机")).push("eval", evaluation(8.5))
+    events = []
+    await write_draft(session, llm, account.id, emit=lambda st, m, data=None: events.append((st, m, data or {})),
+                      fetch=fake_fetch)
+    hot = next(d for st, m, d in events if "sources" in d)
+    assert {x["label"] for x in hot["sources"]} == {"微博", "百度", "B站"} and hot["hot"][0]["title"] == "秋冬穿搭新趋势"
+    picked = next(d for st, m, d in events if "candidates" in d)
+    assert picked["candidates"][0]["title"] == picked["title"] and picked["picked"] == 0
+    fit = next(d for st, m, d in events if "title_fit" in d)
+    assert fit["title_fit"]["before"].startswith("这是一个特别") and len(fit["title_fit"]["after"]) <= 20
+    reviews = [d for st, m, d in events if st == "review"]
+    assert reviews[0]["title"] and reviews[0]["body_len"] > 0 and reviews[0]["evaluation"]["dimensions"]
+    assert reviews[-1]["title"] == "通勤穿搭3个心机" and reviews[-1]["score"] == 8.5
+    assert any(st == "write" and d.get("feedback") for st, m, d in events)

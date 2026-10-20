@@ -80,7 +80,7 @@ async def _pick_topic(
         t = session.get(Topic, topic_id)
         if t is None or t.account_id != ctx.account_id:
             raise LookupError("选题不存在或不属于这个账号")
-        emit("topic", f"使用选题库里的选题：{t.title}", {"topic_id": t.id})
+        emit("topic", f"使用选题库里的选题：{t.title}", {"topic_id": t.id, **_topic_info(t)})
         return t
     if not hint:
         # 复刻模式：先按顺序用对标方案里的复刻选题
@@ -88,10 +88,17 @@ async def _pick_topic(
             Topic.account_id == ctx.account_id, Topic.source == "benchmark", Topic.status == TopicStatus.new,
         ).order_by(col(Topic.created_at))).first()
         if bt is not None:
-            emit("topic", f"使用复刻选题：{bt.title}", {"topic_id": bt.id})
+            emit("topic", f"使用复刻选题：{bt.title}", {"topic_id": bt.id, **_topic_info(bt)})
             return bt
     emit("topic", "正在搜热点、找选题…", None)
     proposal = await propose_topics(session, llm, ctx, direction=hint, count=3, fetch=fetch)
+    rep = proposal.report
+    ok_src = [st for st in rep.statuses if st.ok and st.count]
+    emit("topic", f"热点：{len(ok_src)} 个来源抓到 {len(rep.items)} 条" if rep.items else "热点来源这次没抓到数据",
+         {"sources": [{"source": st.source, "label": st.label, "ok": st.ok, "count": st.count, "note": st.note, "mode": st.mode}
+                      for st in rep.statuses],
+          "hot": [{"source": it.source, "title": it.title[:60], "heat": it.heat, "url": it.url if len(it.url) <= 300 else ""}
+                  for it in rep.items[:15]]})
     if proposal.source_note:
         emit("warning", proposal.source_note, None)
     if not proposal.topics:
@@ -105,8 +112,15 @@ async def _pick_topic(
         emit("topic", f"按你的想法写：{t.title}", {"topic_id": t.id})
         return t
     t = proposal.topics[0]
-    emit("topic", f"选定选题：{t.title}", {"topic_id": t.id, "angle": t.angle})
+    emit("topic", f"选定选题：{t.title}", {"topic_id": t.id, **_topic_info(t),
+                                          "candidates": [_topic_info(x) for x in proposal.topics], "picked": 0,
+                                          "skipped_dups": proposal.skipped_duplicates})
     return t
+
+
+def _topic_info(t: Topic) -> dict:
+    return {k: v for k, v in {"title": t.title, "angle": t.angle, "reason": t.reason, "source": t.source,
+                              "url": t.source_url}.items() if v}
 
 
 def _plan_block(plan: list[str]) -> str:
@@ -186,8 +200,10 @@ async def _pick_reference(session: Session, llm: LLM, ctx: AccountContext, topic
         emit("reference", f"照着「{ref['title'][:24]}」（{ref.get('creator') or '同领域博主'}，{ref.get('likes') or '?'}赞）"
              + (f"等 {1 + len(extra)} 篇" if extra else "") + "写；"
              + (f"配图统一照这篇，{n} 张一张对一张照着原图做" if n else "这篇原图没拿到，配图按账号风格统一出"),
-             {"reference": {k: ref.get(k) for k in ("title", "url", "creator", "likes")},
-              "extra": [x.get("title", "") for x in extra]})
+             {"reference": {k: ref.get(k) for k in ("title", "url", "creator", "likes", "source", "why")},
+              "images": n,
+              "extra": [x.get("title", "") for x in extra],
+              "extra_posts": [{k: x.get(k) for k in ("title", "url", "creator", "likes")} for x in extra]})
     else:
         emit("warning", f"{why_none}，这篇按账号的配图风格出图；想照着某篇做，在草稿页贴它的链接", None)
     return ref
@@ -289,8 +305,18 @@ async def _enforce(llm: LLM, ctx: AccountContext, c: Candidate, emit: Emit) -> N
     """平台硬限制（标题 20 字、标签个数）交给代码落实，模型写出来的每一版都过一遍，保证听话。"""
     why = await _fit_title(llm, ctx, c)
     if why:
-        emit("write", f"{why}：{c.title}", None)
+        ch = c.changes[-1] if c.changes else {}
+        emit("write", f"{why}：{c.title}", {"title_fit": {"before": ch.get("before", ""), "after": c.title}})
     _fit_tags(ctx, c)
+
+
+def _version(c: Candidate, base: Candidate | None = None) -> dict:
+    """进度事件里带上这一版的样子和这一轮改了什么，对话里能看到完整的写作过程。"""
+    new = c.changes[len(base.changes):] if base is not None and len(c.changes) >= len(base.changes) else c.changes
+    clip = lambda x: str(x or "")[:160]  # noqa: E731
+    return {"title": c.title, "body_len": body_len(c.body), "tags": c.tags[:10], "images": len(c.image_prompts),
+            "changes": [{"where": clip(x.get("where")), "before": clip(x.get("before")), "after": clip(x.get("after")),
+                         "why": clip(x.get("why"))} for x in new[:12] if isinstance(x, dict)]}
 
 
 def _n_problems(c: Candidate) -> int:
@@ -518,7 +544,7 @@ async def write_draft(
 
     candidates: list[Candidate] = []
     eval_failed = False
-    emit("write", "第 1 版写作中…", {"attempt": 1})
+    emit("write", "第 1 版写作中…", {"attempt": 1, "topic": topic.title})
     plan = [p.strip() for p in image_plan or [] if p.strip()][:9]
     c = await _generate(llm, ctx, topic, hint, "", ref, plan)
     await _enforce(llm, ctx, c, emit)
@@ -527,7 +553,7 @@ async def write_draft(
         emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
     candidates.append(c)
     emit("review", f"第 1 版：{c.score if c.score is not None else '未评分'} 分" + _problems(c),
-         {"attempt": 1, "score": c.score, "issues": c.issues, "evaluation": c.evaluation})
+         {"attempt": 1, "score": c.score, "issues": c.issues, "evaluation": c.evaluation, **_version(c)})
     # AI 提的意见由 AI 自己落实：有意见就交给编辑改，改完复核；最后一轮只复核不再提新意见，
     # 这样留在稿子上的意见一定是「改过但没改好」的，不会出现提了却没人改。
     for attempt in range(2, MAX_ATTEMPTS + 1):
@@ -536,7 +562,8 @@ async def write_draft(
             break
         entries = _feedback_entries(base)
         base.attempted = True
-        emit("write", f"按 AI 的 {len(entries)} 条意见自动改第 {attempt - 1} 轮…", {"attempt": attempt})
+        emit("write", f"按 AI 的 {len(entries)} 条意见自动改第 {attempt - 1} 轮…",
+             {"attempt": attempt, "feedback": [e["text"][:200] for e in entries]})
         try:
             c = await _revise(llm, ctx, base, _feedback_for(base), entries=entries)
         except LLMError as e:
@@ -551,7 +578,7 @@ async def write_draft(
             emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
         candidates.append(c)
         emit("review", f"改第 {attempt - 1} 轮：{c.score if c.score is not None else '未评分'} 分" + _problems(c),
-             {"attempt": attempt, "score": c.score, "issues": c.issues, "evaluation": c.evaluation})
+             {"attempt": attempt, "score": c.score, "issues": c.issues, "evaluation": c.evaluation, **_version(c, base)})
 
     best = max(candidates, key=lambda x: x.rank())
     needs_attention = bool(best.issues) or best.score is None or best.score < PASS_SCORE or eval_failed
@@ -615,9 +642,9 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
     tried: list[Candidate] = []
     best = cur
     for r in range(rounds):
-        emit("write", f"按质检意见再改第 {r + 1} 轮…", {"attempt": start + r})
         base = _next_base([cur, *tried])
         entries = _feedback_entries(base, note)
+        emit("write", f"按质检意见再改第 {r + 1} 轮…", {"attempt": start + r, "feedback": [e["text"][:200] for e in entries]})
         base.attempted = True
         try:
             c = await _revise(llm, ctx, base, _feedback_for(base, note), entries=entries,
@@ -634,7 +661,7 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
         await _check(llm, ctx, c, prev=base, locked=locked, title_locked=title_locked, final=r == rounds - 1)
         tried.append(c)
         emit("review", f"改第 {r + 1} 轮：{c.score if c.score is not None else '未评分'} 分" + _problems(c),
-             {"score": c.score, "issues": c.issues})
+             {"attempt": start + r, "score": c.score, "issues": c.issues, "evaluation": c.evaluation, **_version(c, base)})
         # 更好就换；用户明确提了要求时，只要不比原来差也换（用户要的就是这个改动）
         if c.rank() > best.rank() or (note.strip() and best is cur and c.rank() >= cur.rank()):
             best = c

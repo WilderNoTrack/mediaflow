@@ -97,10 +97,12 @@ async def _handle_write(job: Job, emit) -> dict:
         pending = s.exec(select(DraftImage).where(
             DraftImage.draft_id == draft.id, DraftImage.status == ImageStatus.pending
         )).first()
+        out = {"draft_id": draft.id, "title": draft.title, "score": draft.score}
         if pending:
-            enqueue(s, JobKind.generate_images, user_id=job.user_id,
-                    account_id=job.account_id, payload={"draft_id": draft.id})
-        return {"draft_id": draft.id, "title": draft.title, "score": draft.score}
+            img_job = enqueue(s, JobKind.generate_images, user_id=job.user_id,
+                              account_id=job.account_id, payload={"draft_id": draft.id})
+            out["images_job_id"] = img_job.id  # 对话里的写稿卡片接着显示出图过程
+        return out
 
 
 async def _handle_images(job: Job, emit) -> dict:

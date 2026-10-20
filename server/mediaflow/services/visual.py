@@ -287,28 +287,40 @@ async def learn_quietly(s: Session, account_id: str, emit: Emit = _noop) -> None
 
 
 async def revise(s: Session, llm: LLM, acc: Account, instruction: str) -> dict:
-    """按用户的话改模板（纯文字，不用看图）：样例图按页型名字沿用。"""
-    if not has_template(acc):
-        raise VisualError("这个账号还没有配图模板，先学一个")
-    cur = {k: acc.visual.get(k) for k in ("spec", "tips")} | {
-        "pages": [{k: p.get(k, "") for k in ("type", "desc", "when")} for p in pages(acc.visual)]}
+    """按用户的话改模板（纯文字，不用看图）：样例图按页型名字沿用。
+    还没有模板（没对标、也没给链接）时按用户的描述起一套：页型没有样例图，出图照文字描述做。"""
+    fresh = not has_template(acc)
+    if fresh:
+        cur = {"spec": acc.image_style or "", "tips": [], "pages": [{"type": "封面", "desc": "", "when": "每篇第 1 张"}]}
+        extra = prompts.VISUAL_NEW_NOTE.format(theme=acc.theme or "（未设定）", style=acc.image_style or "（未设定）")
+    else:
+        cur = {k: acc.visual.get(k) for k in ("spec", "tips")} | {
+            "pages": [{k: p.get(k, "") for k in ("type", "desc", "when")} for p in pages(acc.visual)]}
+        extra = ""
     try:
         raw = await complete_json(llm, [
             {"role": "system", "content": prompts.VISUAL_UPDATE_SYSTEM},
             {"role": "user", "content": prompts.VISUAL_UPDATE_USER.format(
-                current=json.dumps(cur, ensure_ascii=False, indent=1), instruction=instruction.strip()[:300])},
+                current=json.dumps(cur, ensure_ascii=False, indent=1), instruction=instruction.strip()[:300]) + extra},
         ], temperature=0.3)
     except LLMError as e:
         raise VisualError(str(e)) from e
     for p in raw.get("pages") or []:
         if isinstance(p, dict):
             p.pop("examples", None)
+    if not isinstance(raw, dict):
+        raise VisualError("模型没给出模板")
     tpl = _clean(raw, [], acc.visual)
-    acc.visual = {**acc.visual, **tpl, "at": utcnow().isoformat()}
+    if fresh:
+        tpl["pages"][0]["examples"] = []  # 没有样例图：_clean 补封面时不会有图，这里明确一下
+    base = {} if fresh else dict(acc.visual or {})
+    acc.visual = {**base, **tpl, **({"source": {"kind": "text", "names": ["按你的描述"]}} if fresh else {}),
+                  "at": utcnow().isoformat()}
     acc.updated_at = utcnow()
     s.add(acc)
     s.commit()
-    return {"changed": str(raw.get("changed") or "")[:100], "pages": [p["type"] for p in tpl["pages"]], "spec": tpl["spec"]}
+    return {"changed": str(raw.get("changed") or ("按描述起了一套配图模板" if fresh else ""))[:100],
+            "pages": [p["type"] for p in tpl["pages"]], "spec": tpl["spec"], **({"created": True} if fresh else {})}
 
 
 def patch(s: Session, acc: Account, *, spec: str | None = None, pages_in: list[dict] | None = None,

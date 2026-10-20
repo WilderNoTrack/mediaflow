@@ -162,7 +162,7 @@ async def test_manager_clone_tool(session, account, llm):
     job = session.get(Job, r["job_id"])
     assert job.kind == JobKind.clone_creator and session.get(Benchmark, job.payload["benchmark_ids"][0]).theme == "职场理财"
     again = await tb.call("clone_creator", {"targets": ["x"]})
-    assert not again["ok"] and "正在拆解" in again["error"]
+    assert again["ok"] and again["already_running"] and again["job_id"] == job.id and "已经在学" in again["note"]
     assert tb.snapshot()["benchmarks"][0]["status"] == "analyzing"
 
 

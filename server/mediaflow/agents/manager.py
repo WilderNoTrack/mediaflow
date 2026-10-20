@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable
@@ -47,8 +48,13 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
 
 【原则】
 1. 边聊边记：听到新的定位信息（主题、受众、文案风格、配图风格、选题方向、关键词），马上调用 update_profile 写入，不要攒着。
+   改设定、记规则、改模板都必须真的调用工具；只在回复里写「已记下」「我执行了…」不算数，设置不会保存。
 2. 用户说「以后都要…」「每篇都…」「不要再…」这类长期要求，用 add_rule 记成一条规则；要删就用 remove_rule（规则 ID 见下方账号状态）。
 3. 主动补全：定位里还空着的项，自然地问，一次只问一个。配图风格要问出具体的视觉感觉，尽量保留用户原话。
+   有常见答案的问题（受众是谁、文案什么调调、配图什么感觉、多久发一篇）用 ask_user 给 3-4 个选项按钮，用户点一下就行，也能自己打字；
+   你拟好一个具体方案想让用户拍板时（帮他起的定位、配图风格、选题），用 ask_user kind=confirm，选项如「就按这个定」「换一个」「我来改改」。
+   用户点了同意就马上调用对应工具落实（update_profile / update_visual / write_post），不要再问一遍；点了「换一个」就换个方案再问；点了「我来改改」就问他想改哪里。
+   开放的问题（「你想分享哪方面的经验」）直接问，不用按钮。ask_user 调用后这一轮就结束了，问题写在 question 里，回复里不要再重复。
 4. 用户想要选题，用 find_topics；想写一篇，用 write_post（可以带选题 ID 或方向）。写稿在后台进行，对话里会出现进度卡片，写好后卡片会变成稿子（带封面和打分），你只需一句话说「开始写了，大概 1-3 分钟」。
    find_topics 的结果也会以卡片列在对话里（每个都有「写这篇」按钮），不要逐条复述，挑 1-2 个说说为什么值得写即可。
 5. 工具结果里有失败或降级（比如热点来源没抓到），必须如实告诉用户，不能装作正常。
@@ -62,7 +68,7 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    【账号配图模板】学完对标后会看对标账号的图，学出一套配图模板（整体视觉 + 几种页型，各有样例图，见下方账号状态 visual）。
    有模板时每篇配图都照模板出（每张选一种页型、照样例版式），整个账号像同一个博主做的；参考帖只管文案，用户自己给了参考帖的那篇才照它出图。
    用户想换配图风格：说的是「照这几篇的图来」就 learn_visual 带上链接；说的是具体要求（「封面别放人」「颜色换成莫兰迪」「加一种对比页」）用 update_visual；
-   想重新学对标的图就 learn_visual 不带链接。出完的图会自动看一遍有没有错字、内容不对、风格跑偏，有问题自动重出一次。
+   想重新学对标的图就 learn_visual 不带链接。没有对标账号、用户也没给链接时不要调 learn_visual；用户描述了想要的配图感觉，就 update_profile 存进 image_style，再 update_visual 按描述起一套模板（还没有模板也可以）。出完的图会自动看一遍有没有错字、内容不对、风格跑偏，有问题自动重出一次。
 8. AI 写完会自己挑问题、自己按意见改好，不用让用户去逐条改；草稿页列着改了哪些地方。
 9. 用户要改已有的稿子，你直接动手改，不要让用户自己去页面上改：
    - 「第二张换成…」「封面字大一点」「加一张清单图」「删掉最后一张」「第三张挪到前面」：先 get_draft 看现在每张是什么（用户正在看的那篇已经在下方，可以直接用），
@@ -198,12 +204,25 @@ TOOLS = [
               "query": {"type": "string", "description": "方向，如「通勤穿搭」；不传用账号主题"},
               "prefer": {"type": "string", "description": "可选：用户的额外要求，如「粉丝少一点」「要做视频的」"},
           }),
+    _tool("ask_user", "问用户一个有常见答案的问题，或者请用户拍板一个提议：选项显示成按钮，用户点一下就行（也能自己打字）。"
+          "调用后这一轮对话就结束、等用户回答，所以要先把该做的工具调用做完（可以同一步一起发）", {
+              "question": {"type": "string", "description": "要问的话，可以先半句说明为什么问；回复里不要再重复"},
+              "options": {"type": "array", "items": {"type": "string"},
+                          "description": "2-5 个选项，每个 15 字以内，口语；confirm 时第一个是同意（如「就按这个定」），再给「换一个」「我来改改」"},
+              "multi": {"type": "boolean", "description": "可以多选时为 true（比如受众可以同时是几类人）"},
+              "kind": {"type": "string", "enum": ["choice", "confirm"], "description": "choice 选答案；confirm 确认一个提议"},
+          }, ["question", "options"]),
     _tool("clone_creator", "对标 1-3 个小红书账号：后台读作品、逐个拆打法、合成一套并换成新主题，自动更新定位/规则/选题库", {
         "targets": {"type": "array", "items": {"type": "string"},
                     "description": "对标账号列表：主页链接、笔记链接、博主名字或小红书号，原样传"},
         "theme": {"type": "string", "description": "用户想换成的主题；用户没说且账号已有主题时可以不传"},
     }, ["targets"]),
 ]
+
+def _already(e: JobConflict, note: str) -> dict:
+    """同类任务已经在跑：不算失败（用户看到的是「已经在做了」），把那个任务的进度卡片给出来。"""
+    return {"ok": True, "already_running": True, "job_id": e.job.id, "note": note}
+
 
 def visual_pages(v: dict | None) -> list[dict]:
     from mediaflow.services.visual import pages
@@ -346,7 +365,7 @@ class Toolbox:
                           payload={"topic_id": topic_id or None, "hint": hint, "trigger": Trigger.chat.value,
                                    "reference_url": reference_url.strip()[:3000], "image_plan": plan})
         except JobConflict as e:
-            return {"ok": False, "error": str(e), "job_id": e.job.id}
+            return _already(e, "上一篇还在写，这次没有另开一篇；它的进度见对话里的卡片，写完再说写下一篇")
         return {"ok": True, "job_id": job.id, "note": "已开始在后台写，1-3 分钟后在草稿里能看到"
                 + (f"；配图按用户说的 {len(plan)} 张出" if plan else "")}
 
@@ -387,7 +406,7 @@ class Toolbox:
         try:
             job = enqueue(self.s, JobKind.learn_visual, user_id=self.acc.user_id, account_id=self.acc.id, payload={"links": ls})
         except JobConflict as e:
-            return {"ok": False, "error": str(e), "job_id": e.job.id}
+            return _already(e, "配图模板已经在学了（没有重复开），学完会自动用上")
         return {"ok": True, "job_id": job.id, "note": "在后台看图学模板，大约 1 分钟，好了在「账号设定 → 配图模板」能看到"}
 
     async def t_update_visual(self, instruction: str) -> dict:
@@ -405,7 +424,7 @@ class Toolbox:
             job = enqueue(self.s, JobKind.revise_draft, user_id=d.user_id, account_id=d.account_id,
                           payload={"draft_id": d.id, "note": instruction.strip()[:300]})
         except JobConflict as e:
-            return {"ok": False, "error": str(e), "job_id": e.job.id}
+            return {**_already(e, "这篇已经在改了（没有重复开），改完草稿页会更新；新要求等这轮改完再说"), "draft_id": d.id}
         return {"ok": True, "job_id": job.id, "draft_id": d.id, "note": "在后台改，大约 1 分钟，改完草稿页会更新"}
 
     async def t_find_benchmarks(self, query: str = "", prefer: str = "") -> dict:
@@ -425,7 +444,7 @@ class Toolbox:
         try:
             job, new = bench.add(self.s, self.acc, [*items, target], theme=theme)
         except JobConflict as e:
-            return {"ok": False, "error": str(e), "job_id": e.job.id}
+            return _already(e, "对标账号已经在学了（没有重复开），学完会自动更新定位和选题库")
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "job_id": job.id, "added": [b.target for b in new],
@@ -506,20 +525,82 @@ class Toolbox:
         return {"ok": True, "removed": n.title}
 
 
+def _shrink(v: Any, n: int = 300) -> Any:
+    """历史里的工具参数只留个大概（长文本截断），保持合法 JSON。"""
+    if isinstance(v, str):
+        return v if len(v) <= n else v[:n] + "…"
+    if isinstance(v, list):
+        return [_shrink(x, n) for x in v[:12]]
+    if isinstance(v, dict):
+        return {k: _shrink(x, n) for k, x in v.items()}
+    return v
+
+
+def _call(cid: str, name: str, args: dict) -> dict:
+    return {"id": cid, "type": "function",
+            "function": {"name": name, "arguments": json.dumps(_shrink(args or {}), ensure_ascii=False)}}
+
+
 def _history(session: Session, account_id: str) -> list[dict]:
+    """把对话记录还原成模型原生的格式：做过的操作是真正的 tool_calls + tool 结果，
+    而不是「（我执行了…）」这种文字——否则模型会学着在回复里写「我执行了」却不真的调用工具，设置就没存上。"""
     rows = list(reversed(session.exec(
         select(ChatMessage).where(ChatMessage.account_id == account_id)
         .order_by(col(ChatMessage.created_at).desc()).limit(HISTORY_LIMIT)
     ).all()))
     msgs: list[dict] = []
+    tools: list[ChatMessage] = []
+
+    def flush() -> None:
+        if not tools:
+            return
+        calls = [_call(f"h_{m.id}", m.tool_name or "unknown", (m.payload or {}).get("args") or {}) for m in tools]
+        msgs.append({"role": "assistant", "content": None, "tool_calls": calls})
+        for m, c in zip(tools, calls):
+            body = m.content if len(m.content) <= HISTORY_TOOL_CHARS else m.content[:HISTORY_TOOL_CHARS] + "…（已截断）"
+            msgs.append({"role": "tool", "tool_call_id": c["id"], "content": body})
+        tools.clear()
+
     for m in rows:
         if m.role == ChatRole.tool:
-            # 把做过的操作作为管家自己的备忘放回上下文
-            body = m.content if len(m.content) <= HISTORY_TOOL_CHARS else m.content[:HISTORY_TOOL_CHARS] + "…（已截断）"
-            msgs.append({"role": "assistant", "content": f"（我执行了 {m.tool_name}：{body}）"})
+            tools.append(m)
+            continue
+        flush()
+        ask = (m.payload or {}).get("ask") if m.role == ChatRole.assistant else None
+        if ask:
+            # 给过选项按钮：还原成一次 ask_user 调用，模型知道用户接下来的话是在回答它
+            c = _call(f"h_{m.id}", "ask_user", {k: ask.get(k) for k in ("question", "options", "multi", "kind")})
+            msgs.append({"role": "assistant", "content": m.content or None, "tool_calls": [c]})
+            msgs.append({"role": "tool", "tool_call_id": c["id"], "content": '{"ok":true,"note":"选项已经显示给用户，等用户回答"}'})
         else:
             msgs.append({"role": m.role.value, "content": m.content})
+    flush()
     return msgs
+
+
+NUDGE = ("（系统：你在回复里用文字写了「我执行了…」之类的话，但并没有真正调用工具——设置没有保存、按钮也没显示。"
+         "现在请真正调用对应的工具（改设定用 update_profile / add_rule / update_visual，给选项用 ask_user），不要在文字里描述调用。）")
+_FAKE = re.compile(r"[（(]\s*我(?:执行了|调用了|给了选项)")
+
+
+def _sanitize(reply: str) -> str:
+    """模型偶尔会照着老格式在回复里写「（我执行了 xx：{…}）」：这种段落不给用户看。"""
+    keep = [p for p in re.split(r"\n\s*\n", reply) if not _FAKE.match(p.strip())]
+    return "\n\n".join(keep).strip()
+
+
+def _ask(args: dict) -> tuple[str, dict | None]:
+    """ask_user 的参数 → (问题, 按钮)。选项不到 2 个就当普通提问。"""
+    q = str(args.get("question") or "").strip()
+    opts: list[str] = []
+    for o in args.get("options") or []:
+        o = " ".join(str(o).split())[:20]
+        if o and o not in opts:
+            opts.append(o)
+    kind = "confirm" if args.get("kind") == "confirm" else "choice"
+    if len(opts) < 2:
+        return q, None
+    return q, {"question": q, "options": opts[:5], "multi": bool(args.get("multi")) and kind == "choice", "kind": kind}
 
 
 def _save(session: Session, acc: Account, role: ChatRole, content: str, tool_name: str = "", payload: dict | None = None) -> ChatMessage:
@@ -615,6 +696,8 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
         ]
         steps: list[dict] = []
         reply = ""
+        ask: dict | None = None
+        nudged = False
         n = 0
         for _ in range(MAX_STEPS):
             n += 1
@@ -652,40 +735,58 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
             if open_:
                 yield close()
             if resp is None or not resp.tool_calls:
-                reply = (resp.content.strip() if resp else "") or "嗯？我没太明白，可以再说一次吗"
+                raw = resp.content.strip() if resp else ""
+                if raw and _FAKE.search(raw) and not nudged:
+                    # 在文字里「假装」调了工具：设置其实没存。提醒一次，让它真的调用
+                    nudged = True
+                    messages.append({"role": "assistant", "content": raw})
+                    messages.append({"role": "user", "content": NUDGE})
+                    yield {"type": "reset"}
+                    continue
+                reply = _sanitize(raw) or "嗯？我没太明白，可以再说一次吗"
                 break
-            if resp.content.strip():
+            asks = [c for c in resp.tool_calls if c.name == "ask_user"]
+            calls = [c for c in resp.tool_calls if c.name != "ask_user"]
+            lead = resp.content.strip()
+            if lead and not asks:
                 # 调工具前说的话（"我先去搜一下"）：放进过程里，不当回复
-                steps.append({"id": f"n{n}", "kind": "note", "text": resp.content.strip()})
-                yield {"type": "note", "id": f"n{n}", "text": resp.content.strip()}
-            messages.append({"role": "assistant", "content": resp.content or None, "tool_calls": [
-                {"id": c.id, "type": "function",
-                 "function": {"name": c.name, "arguments": json.dumps(c.arguments, ensure_ascii=False)}}
-                for c in resp.tool_calls
-            ]})
-            tool_steps = [{"id": f"c{n}_{k}", "kind": "tool", "name": c.name, "args": c.arguments}
-                          for k, c in enumerate(resp.tool_calls)]
-            for st in tool_steps:
-                yield {"type": "step_start", **st}
-            done_q: asyncio.Queue = asyncio.Queue()
-            runner = asyncio.create_task(_run_calls(box, resp.tool_calls, on_done=lambda k, r, ms: done_q.put_nowait((k, r, ms))))
-            for _k in range(len(tool_steps)):
-                k, result, ms = await done_q.get()
-                st = tool_steps[k]
-                st.update(ok=result.get("ok") is not False, ms=ms)
-                if result.get("ok") is False:
-                    st["error"] = str(result.get("error", ""))[:300]
-                yield {"type": "step_end", "id": st["id"], "ok": st["ok"], "ms": ms, "error": st.get("error", "")}
-            results = await runner
-            for c, st, result in zip(resp.tool_calls, tool_steps, results):
-                wide = c.name.startswith("research_") or c.name == "find_benchmarks"
-                summary = _clip(_for_model(c.name, result), RESEARCH_RESULT_CHARS if wide else RESULT_CHARS)
-                m = _save(session, acc, ChatRole.tool, summary, tool_name=c.name,
-                          payload={"args": c.arguments, "result": result})
-                st["message_id"] = m.id
-                steps.append(st)
-                messages.append({"role": "tool", "tool_call_id": c.id, "content": summary})
-                yield {"type": "tool_message", "id": st["id"], "message": _msg_out(m)}
+                steps.append({"id": f"n{n}", "kind": "note", "text": lead})
+                yield {"type": "note", "id": f"n{n}", "text": lead}
+            if calls:
+                messages.append({"role": "assistant", "content": resp.content or None, "tool_calls": [
+                    {"id": c.id, "type": "function",
+                     "function": {"name": c.name, "arguments": json.dumps(c.arguments, ensure_ascii=False)}}
+                    for c in calls
+                ]})
+                tool_steps = [{"id": f"c{n}_{k}", "kind": "tool", "name": c.name, "args": c.arguments}
+                              for k, c in enumerate(calls)]
+                for st in tool_steps:
+                    yield {"type": "step_start", **st}
+                done_q: asyncio.Queue = asyncio.Queue()
+                runner = asyncio.create_task(_run_calls(box, calls, on_done=lambda k, r, ms: done_q.put_nowait((k, r, ms))))
+                for _k in range(len(tool_steps)):
+                    k, result, ms = await done_q.get()
+                    st = tool_steps[k]
+                    st.update(ok=result.get("ok") is not False, ms=ms)
+                    if result.get("ok") is False:
+                        st["error"] = str(result.get("error", ""))[:300]
+                    yield {"type": "step_end", "id": st["id"], "ok": st["ok"], "ms": ms, "error": st.get("error", "")}
+                results = await runner
+                for c, st, result in zip(calls, tool_steps, results):
+                    wide = c.name.startswith("research_") or c.name == "find_benchmarks"
+                    summary = _clip(_for_model(c.name, result), RESEARCH_RESULT_CHARS if wide else RESULT_CHARS)
+                    m = _save(session, acc, ChatRole.tool, summary, tool_name=c.name,
+                              payload={"args": c.arguments, "result": result})
+                    st["message_id"] = m.id
+                    steps.append(st)
+                    messages.append({"role": "tool", "tool_call_id": c.id, "content": summary})
+                    yield {"type": "tool_message", "id": st["id"], "message": _msg_out(m)}
+            if asks:
+                # 问用户：同一步的其他操作做完后这一轮就结束，问题当回复，选项存进消息给界面画按钮
+                q, ask = _ask(asks[0].arguments if not asks[0].error else {})
+                lead = _sanitize(lead)
+                reply = (q if not lead or lead in q else lead if q in lead else f"{lead}\n\n{q}") or "你看怎么定？"
+                break
         else:
             # 步数用完：不再给工具，让模型基于已做的操作给用户一个交代（类似 Agents SDK 的 max_turns 收尾）
             messages.append({"role": "user", "content": "（系统：本轮工具调用次数已达上限，请不要再调用工具，"
@@ -702,7 +803,8 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
                 reply = "这一轮操作有点多，我先停一下，刚才做的都已保存。"
                 yield {"type": "reset"}
         total = _ms(t_all)
-        m = _save(session, acc, ChatRole.assistant, reply, payload={"steps": steps, "ms": total})
+        m = _save(session, acc, ChatRole.assistant, reply,
+                  payload={"steps": steps, "ms": total, **({"ask": ask} if ask else {})})
         yield {"type": "message", "message": _msg_out(m)}
         yield {"type": "done", "ms": total}
 

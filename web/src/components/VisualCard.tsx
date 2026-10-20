@@ -35,7 +35,7 @@ export function VisualCard({ account }: { account: Account }) {
     if (!confirm(`删掉「${t}」这种页？以后的配图不再用它。`)) return;
     act.patch.mutate({ pages: pages.filter((p) => p.type !== t).map((p) => ({ type: p.type, desc: p.desc ?? "", when: p.when ?? "", examples: p.examples ?? [], from: "" })) });
   };
-  const from = v.source?.kind === "links" ? `照你给的 ${v.source.links?.length ?? 0} 篇笔记学的` : v.source?.names?.length ? `从「${v.source.names.join("」「")}」的 ${v.source.images ?? ""} 张图学的` : "";
+  const from = v.source?.kind === "text" ? "按你的描述起的（没有样例图，出图照文字描述做）" : v.source?.kind === "links" ? `照你给的 ${v.source.links?.length ?? 0} 篇笔记学的` : v.source?.names?.length ? `从「${v.source.names.join("」「")}」的 ${v.source.images ?? ""} 张图学的` : "";
 
   return (
     <Card>
