@@ -153,7 +153,8 @@ def font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
 _EMOJI = re.compile("[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE00-\U0000FE0F\U0000200D\U00002B00-\U00002BFF\U0001F1E6-\U0001F1FF]")
 _NO_START = set("，。！？、；：,.!?;:）)」』》】〉”’…%·~～")
 _NO_END = set("（(「『《【〈“‘")
-_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.%+\-/:'&]*|\s+|.", re.S)
+# 英文单词、数字连同后面的单位（5天、133元、150g）不拆开
+_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.%+\-/:'&]*[\u4e00-\u9fff]?|\s+|.", re.S)
 
 
 @lru_cache(maxsize=4096)
@@ -209,17 +210,18 @@ def wrap(text: str, f: ImageFont.FreeTypeFont, width: float) -> list[str]:
 
 
 def _no_orphan(lines: list[str], start: int) -> None:
-    """最后一行只剩一两个字（「防/水」）时，从上一行挪几个字下来，读起来不断气。"""
+    """最后一行只剩一两个字（「防/水」）时，从上一行挪几个字下来，读起来不断气（按词挪，不拆「5天」「150g」）。"""
     if len(lines) - start < 2:
         return
     prev, last = lines[-2], lines[-1]
-    if len(last) > 2 or len(prev) < 5 or re.search(r"[A-Za-z0-9]$", prev):
+    if len(last) > 2 or len(prev) < 5:
         return
-    while len(last) < 3 and len(prev) > 4:
-        last, prev = prev[-1] + last, prev[:-1]
-        while prev and last[0] in _NO_START and len(prev) > 3:
-            last, prev = prev[-1] + last, prev[:-1]
-    lines[-2], lines[-1] = prev, last
+    toks = _TOKEN.findall(prev)
+    while len(last) < 3 and len(toks) > 1 and len("".join(toks)) > 4:
+        last = toks.pop() + last
+        while toks and len(toks) > 1 and last[0] in _NO_START:
+            last = toks.pop() + last
+    lines[-2], lines[-1] = "".join(toks).rstrip(), last.lstrip()
 
 
 def fit(text: str, width: float, height: float, *, bold: bool = True, max_size: int = 120, min_size: int = 28,
@@ -249,12 +251,14 @@ def draw_lines(d: ImageDraw.ImageDraw, lines: list[str], f: ImageFont.FreeTypeFo
     """一行行画字，返回画完后的 y。highlight 里的词：marker 给了就在字下半截画高亮笔，hl_color 给了就换字色。"""
     joined = "".join(lines)
     spans: list[tuple[int, int]] = []
-    hl = clean(highlight, 30).replace("\n", "")
-    if hl:
-        start = joined.find(hl)
-        while start >= 0 and hl:
-            spans.append((start, start + len(hl)))
-            start = joined.find(hl, start + len(hl))
+    hl = "".join(clean(highlight, 30).split())
+    if hl:  # 不管空格找高亮词（模型常写「133元」而标题是「133 元」）
+        pos = [k for k, ch in enumerate(joined) if not ch.isspace()]
+        compact = "".join(joined[k] for k in pos)
+        start = compact.find(hl)
+        while start >= 0:
+            spans.append((pos[start], pos[start + len(hl) - 1] + 1))
+            start = compact.find(hl, start + len(hl))
     off = 0
     top = _ink(f)
     for line in lines:
@@ -588,7 +592,7 @@ def overlay(base: bytes | Image.Image, lay: dict, palette_name: str | None = Non
     ImageDraw.Draw(sh).rounded_rectangle([50, py0 + 10, W - 50, py0 + ph + 10], radius=44, fill=(0, 0, 0, 70))
     layer = Image.alpha_composite(layer, sh.filter(ImageFilter.GaussianBlur(18)))
     panel = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    ImageDraw.Draw(panel).rounded_rectangle([50, py0, W - 50, py0 + ph], radius=44, fill=(*p["bg"], 232))
+    ImageDraw.Draw(panel).rounded_rectangle([50, py0, W - 50, py0 + ph], radius=44, fill=(*p["bg"], 246))
     layer = Image.alpha_composite(layer, panel)
     moved = Image.new("RGBA", img.size, (0, 0, 0, 0))
     moved.paste(txt, (0, py0 + pad - bbox[1]), txt)
