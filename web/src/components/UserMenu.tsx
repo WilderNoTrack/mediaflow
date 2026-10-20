@@ -1,5 +1,5 @@
 import { LogOut, UserRound, Users } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChangePassword, useLogout, useMe } from "../api/hooks";
 import { cn } from "../lib/utils";
 import { Button, ErrorText, Input, Label, Modal } from "./ui";
@@ -12,16 +12,22 @@ export function UserMenu() {
   const [open, setOpen] = useState(false);
   const [users, setUsers] = useState(false);
   const [pw, setPw] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", off);
+    return () => document.removeEventListener("mousedown", off);
+  }, [open]);
   if (!me || me.auth !== "password") return null;
   const lim = me.limits as { writes?: number };
   const used = me.usage as { writes?: number };
   return (
-    <div className="relative">
+    <div className="relative" ref={box}>
       <Button variant="outline" size="sm" onClick={() => setOpen(!open)}><UserRound /><span className="hidden max-w-24 truncate sm:inline">{me.name}</span></Button>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-50 mt-2 w-56 rounded-xl border bg-card p-1.5 text-sm shadow-xl">
+                    <div className="absolute right-0 z-50 mt-2 w-56 rounded-xl border bg-card p-1.5 text-sm shadow-xl">
             <div className="px-3 py-2">
               <div className="font-medium">{me.name}</div>
               <div className="text-xs text-muted-foreground">

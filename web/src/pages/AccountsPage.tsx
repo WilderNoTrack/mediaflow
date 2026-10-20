@@ -1,15 +1,17 @@
 import { Bot, Check, ChevronRight, Copy, ImageIcon, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAccounts, useClone, useCreateAccount, useCredentials, useDeleteAccount, useSystem } from "../api/hooks";
+import { useAccounts, useClone, useCreateAccount, useCredentials, useDeleteAccount, useIsAdmin, useSystem } from "../api/hooks";
 import { Header } from "../components/Header";
 import { ImageSettingsDialog } from "../components/ImageSettingsDialog";
 import { LlmKeyDialog } from "../components/LlmKeyDialog";
 import { SourcesDialog } from "../components/SourcesDialog";
+import { UserMenu } from "../components/UserMenu";
 import { Avatar, Badge, Button, Empty, ErrorText, Input, Label, Logo, Modal, Spinner, Textarea } from "../components/ui";
 import { cn, timeAgo } from "../lib/utils";
 
 export function AccountsPage() {
+  const admin = useIsAdmin();
   const { data: accounts = [], isLoading } = useAccounts();
   const create = useCreateAccount();
   const del = useDeleteAccount();
@@ -46,8 +48,11 @@ export function AccountsPage() {
           </div>
         </>}
         right={<div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setImageOpen(true)}><ImageIcon />AI 配图</Button>
-          <Button variant="outline" size="sm" onClick={() => setSourcesOpen(true)}><KeyRound />连接平台</Button>
+          {admin && <>
+            <Button variant="outline" size="sm" onClick={() => setImageOpen(true)}><ImageIcon /><span className="hidden sm:inline">AI 配图</span></Button>
+            <Button variant="outline" size="sm" onClick={() => setSourcesOpen(true)}><KeyRound /><span className="hidden sm:inline">连接平台</span></Button>
+          </>}
+          <UserMenu />
         </div>}
       />
       {sourcesOpen && <SourcesDialog onClose={() => setSourcesOpen(false)} />}
@@ -55,7 +60,7 @@ export function AccountsPage() {
       {llmOpen && <LlmKeyDialog onClose={() => setLlmOpen(false)} />}
 
       <div className="container mx-auto max-w-5xl px-6 py-10">
-        <Setup onSources={() => setSourcesOpen(true)} onImage={() => setImageOpen(true)} onLlm={() => setLlmOpen(true)} />
+        {admin && <Setup onSources={() => setSourcesOpen(true)} onImage={() => setImageOpen(true)} onLlm={() => setLlmOpen(true)} />}
 
         <div className="mb-8 flex items-end justify-between">
           <div>

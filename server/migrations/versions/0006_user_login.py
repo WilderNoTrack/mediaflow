@@ -17,14 +17,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table('user', schema=None) as b:
-        b.add_column(sa.Column('username', sqlmodel.sql.sqltypes.AutoString(), nullable=True))
-        b.add_column(sa.Column('password_hash', sqlmodel.sql.sqltypes.AutoString(), nullable=False, server_default=''))
-        b.add_column(sa.Column('is_admin', sa.Boolean(), nullable=False, server_default=sa.false()))
-        b.add_column(sa.Column('disabled', sa.Boolean(), nullable=False, server_default=sa.false()))
-        b.add_column(sa.Column('token_version', sa.Integer(), nullable=False, server_default='0'))
-        b.add_column(sa.Column('last_login_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True))
-        b.create_index('ix_user_username', ['username'], unique=True)
+    # 不用 batch 模式：SQLite 的 batch 会重建 user 表，已有数据（外键引用 user）时会失败。
+    # 直接 ADD COLUMN（都有常量默认值）+ CREATE INDEX 就够了。
+    op.add_column('user', sa.Column('username', sqlmodel.sql.sqltypes.AutoString(), nullable=True))
+    op.add_column('user', sa.Column('password_hash', sqlmodel.sql.sqltypes.AutoString(), nullable=False, server_default=''))
+    op.add_column('user', sa.Column('is_admin', sa.Boolean(), nullable=False, server_default=sa.false()))
+    op.add_column('user', sa.Column('disabled', sa.Boolean(), nullable=False, server_default=sa.false()))
+    op.add_column('user', sa.Column('token_version', sa.Integer(), nullable=False, server_default='0'))
+    op.add_column('user', sa.Column('last_login_at', sqlmodel.sql.sqltypes.UTCDateTime(), nullable=True))
+    op.create_index('ix_user_username', 'user', ['username'], unique=True)
 
 
 def downgrade() -> None:

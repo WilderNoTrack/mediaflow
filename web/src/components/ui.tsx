@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { Loader2 } from "lucide-react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 import { forwardRef } from "react";
@@ -198,10 +199,12 @@ export function Label({ children, hint }: { children: ReactNode; hint?: string }
 }
 
 export function Modal({ children, className, onClose }: { children: ReactNode; className?: string; onClose?: () => void }) {
-  return (
+  // 挂到 body 上：放在带 backdrop-blur 的 header 里时，fixed 会被 header 截住
+  return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
       <div className={cn("w-full max-w-md rounded-2xl bg-card shadow-2xl", className)}>{children}</div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -321,11 +321,14 @@ export const useMe = () =>
 /** 管理员才能改全站设置（Key、平台账号）；本地版自己就是管理员 */
 export const useIsAdmin = () => useMe().data?.is_admin ?? false;
 
+/** 换人登录时清掉上一个人的数据缓存；["me"] 本身保留（clear() 会让正在订阅它的组件收不到更新） */
+const dropOthers = (qc: ReturnType<typeof useQueryClient>) => qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "me" });
+
 export function useLogin() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: S["LoginIn"]) => unwrap(api.POST("/api/auth/login", { body })),
-    onSuccess: (me) => { qc.clear(); qc.setQueryData(["me"], me); },
+    onSuccess: (me) => { dropOthers(qc); qc.setQueryData(["me"], me); },
   });
 }
 
@@ -333,7 +336,7 @@ export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => unwrap(api.POST("/api/auth/logout")),
-    onSuccess: () => { qc.clear(); qc.setQueryData(["me"], null); },
+    onSuccess: () => { dropOthers(qc); qc.setQueryData(["me"], null); },
   });
 }
 

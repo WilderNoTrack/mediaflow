@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Account, Benchmark, Candidate, Job, JobEvent } from "../api/client";
-import { isActive, useClone, useCredentials, useFindCandidates, usePendingChat, useRemoveBenchmark } from "../api/hooks";
+import { isActive, useClone, useCredentials, useFindCandidates, useIsAdmin, usePendingChat, useRemoveBenchmark } from "../api/hooks";
 import { cn } from "../lib/utils";
 import { hitText, MAX_BENCH } from "./CandidatePicker";
 import { CandidateGallery, FindProgress, NoteGrid, uniqNotes } from "./CreatorGallery";
@@ -89,6 +89,13 @@ export function BenchmarkPanel({ account, jobs, onGoTopics, onOpenChat }: {
 }
 
 function XhsConnect() {
+  const admin = useIsAdmin();
+  if (!admin)
+    return (
+      <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <AlertCircle className="mt-0.5 size-4 shrink-0" />管理员还没连上小红书，暂时找不了同领域的号。可以先去「选题」「写稿」，或者联系管理员扫码连接。
+      </div>
+    );
   return (
     <Card className="border-amber-200">
       <CardHead icon={<KeyRound />} title="先连上小红书" desc="找同领域的号、读对方作品都要用小红书登录态；建议用小号扫码，连上后会自动开始找" />
@@ -98,7 +105,8 @@ function XhsConnect() {
 }
 
 function FindError({ error }: { error: string }) {
-  const login = /登录|扫码|Cookie/.test(error);
+  const admin = useIsAdmin();
+  const login = /登录|扫码|Cookie/.test(error) && admin;
   return (
     <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
       <p className="flex items-start gap-2"><AlertCircle className="mt-0.5 size-4 shrink-0" />上次没找成：{error}</p>

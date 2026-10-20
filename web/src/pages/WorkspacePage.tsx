@@ -1,13 +1,14 @@
 import { ArrowLeft, Copy, FileText, KeyRound, MessageCircle, Settings, TrendingUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { isActive, useAccount, useActiveJobs, useCredentials, useDrafts, useFindCandidates, useTopics } from "../api/hooks";
+import { isActive, useAccount, useActiveJobs, useCredentials, useDrafts, useFindCandidates, useIsAdmin, useTopics } from "../api/hooks";
 import { BenchmarkPanel } from "../components/BenchmarkPanel";
 import { ChatPanel } from "../components/ChatPanel";
 import { ContentsPanel } from "../components/ContentsPanel";
 import { JobStrip } from "../components/JobProgress";
 import { SettingsPanel } from "../components/SettingsPanel";
 import { SourcesDialog } from "../components/SourcesDialog";
+import { UserMenu } from "../components/UserMenu";
 import { TopicsPanel } from "../components/TopicsPanel";
 import { Avatar, Button, Empty, Spinner, Tabs } from "../components/ui";
 
@@ -26,6 +27,7 @@ export function WorkspacePage() {
   const { data: topics = [] } = useTopics(id);
   const [chatOpen, setChatOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const admin = useIsAdmin();
   const find = useFindCandidates(id);
   const { data: creds } = useCredentials();
   const started = useRef(false);
@@ -73,7 +75,10 @@ export function WorkspacePage() {
             </div>
           </div>
           <div className="ml-auto hidden md:block">{tabs}</div>
-          <Button variant="outline" size="sm" className="ml-auto md:ml-2" onClick={() => setSourcesOpen(true)}><KeyRound /><span className="hidden sm:inline">连接平台</span></Button>
+          <div className="ml-auto flex gap-2 md:ml-2">
+            {admin && <Button variant="outline" size="sm" onClick={() => setSourcesOpen(true)}><KeyRound /><span className="hidden sm:inline">连接平台</span></Button>}
+            <UserMenu />
+          </div>
         </div>
         <div className="overflow-x-auto px-4 pb-3 md:hidden">{tabs}</div>
       </header>

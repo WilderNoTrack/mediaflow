@@ -1,7 +1,7 @@
 import { AlertCircle, ExternalLink, Lightbulb, PenLine, Plus, Search, Sparkles, TrendingUp, X } from "lucide-react";
 import { useState } from "react";
 import type { Account, S, Topic } from "../api/client";
-import { useTopicActions, useTopics, useWrite } from "../api/hooks";
+import { useIsAdmin, useTopicActions, useTopics, useWrite } from "../api/hooks";
 import { cn, PLATFORMS } from "../lib/utils";
 import { SourcesDialog } from "./SourcesDialog";
 import { Badge, Button, Empty, ErrorText, Input, Spinner } from "./ui";
@@ -17,6 +17,7 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
   const [result, setResult] = useState<S["TopicSearchOut"] | null>(null);
   const [writingId, setWritingId] = useState<string | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const admin = useIsAdmin();
   const fresh = topics.filter((t) => t.status === "new");
   const used = topics.filter((t) => t.status === "used");
 
@@ -65,7 +66,7 @@ export function TopicsPanel({ account, busy, onGoConfig }: { account: Account; b
           ) : (
             <span>从 {SOURCES.map((s) => PLATFORMS[s].label).join("、")} 搜热点，再按你的定位挑出能写的角度</span>
           )}
-          <button className="ml-auto cursor-pointer text-indigo-600 hover:underline" onClick={() => setSourcesOpen(true)}>连接平台</button>
+          {admin && <button className="ml-auto cursor-pointer text-indigo-600 hover:underline" onClick={() => setSourcesOpen(true)}>连接平台</button>}
         </div>
         {result && !search.isPending && (
           <p className="mt-2 text-xs text-muted-foreground">
