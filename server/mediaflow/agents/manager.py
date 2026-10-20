@@ -18,16 +18,19 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlmodel import Session, col, select
 
+from mediaflow.agents import prompts
 from mediaflow.agents.context import load_context
 from mediaflow.domain.models import (
-    Account, AutoFrequency, ChatMessage, ChatRole, Draft, JobKind, Note, Rule, RuleSource, Trigger, utcnow,
+    Account, AutoFrequency, ChatMessage, ChatRole, Draft, Job, JobKind, JobStatus, Note, Rule, RuleSource, Topic,
+    TopicStatus, Trigger, utcnow,
 )
 from mediaflow.jobs.queue import JobConflict, enqueue
-from mediaflow.llm.client import LLM, LLMError, stream_complete
+from mediaflow.llm.client import LLM, LLMError, complete_json, stream_complete
 from mediaflow.research import service as research
 from mediaflow.research.types import Unsupported
 from mediaflow.services.topics import Fetcher, propose_topics
@@ -35,7 +38,10 @@ from mediaflow.services.topics import Fetcher, propose_topics
 logger = logging.getLogger(__name__)
 
 MAX_STEPS = 12
-HISTORY_LIMIT = 40
+HISTORY_TURNS = 16           # 最近多少轮（按用户发言算）原样给模型；更早的压进长期记忆
+HISTORY_ROWS = 400           # 往回最多翻多少条记录（一轮里调研可能有十几条工具记录）
+HISTORY_CHARS = 24000        # 原样带上的历史总字数预算，超了少带几轮
+MEMORY_KEEP_TURNS = 10       # 压记忆时最近这几轮留着原样
 RESULT_CHARS = 1500          # 普通工具结果给模型看的长度上限
 RESEARCH_RESULT_CHARS = 4000  # 调研结果信息密度高，放宽
 HISTORY_TOOL_CHARS = 500      # 历史轮次里的工具结果只留摘要，控制上下文
@@ -285,7 +291,24 @@ class Toolbox:
                         "pages": [f"{p['type']}：{p.get('when', '')}" for p in visual_pages(a.visual)],
                         "from": (a.visual.get("source") or {}).get("names", [])} if visual_pages(a.visual) else "还没有配图模板"),
             **_bench_state(self.s, a.id),
+            **self._recent_state(),
         }
+
+    def _recent_state(self) -> dict:
+        """最近的稿子、没用过的选题、上次找到的对标候选：聊得再久也指得上「刚才那篇」「第 2 个选题」「选第 1 个博主」。"""
+        drafts = self.s.exec(select(Draft).where(Draft.account_id == self.acc.id)
+                             .order_by(col(Draft.created_at).desc()).limit(5)).all()
+        topics = self.s.exec(select(Topic).where(Topic.account_id == self.acc.id, Topic.status == TopicStatus.new)
+                             .order_by(col(Topic.created_at).desc()).limit(8)).all()
+        cands = (self.acc.bench_candidates or {}).get("candidates") or []
+        out: dict[str, Any] = {}
+        if drafts:
+            out["recent_drafts"] = [{"id": d.id, "title": d.title, "status": d.status.value, "score": d.score} for d in drafts]
+        if topics:
+            out["new_topics"] = [{"id": t.id, "title": t.title} for t in topics]
+        if cands:
+            out["bench_candidates"] = [{"no": i + 1, "name": c.get("name"), "url": c.get("url")} for i, c in enumerate(cands[:8])]
+        return out
 
     async def call(self, name: str, args: dict) -> dict:
         fn = getattr(self, f"t_{name}", None)
@@ -541,13 +564,109 @@ def _call(cid: str, name: str, args: dict) -> dict:
             "function": {"name": name, "arguments": json.dumps(_shrink(args or {}), ensure_ascii=False)}}
 
 
-def _history(session: Session, account_id: str) -> list[dict]:
+def _since(acc: Account) -> datetime | None:
+    upto = (acc.chat_memory or {}).get("upto")
+    try:
+        dt = datetime.fromisoformat(upto) if upto else None
+        return dt.replace(tzinfo=timezone.utc) if dt and dt.tzinfo is None else dt
+    except ValueError:
+        return None
+
+
+def _recent(session: Session, acc: Account) -> list[ChatMessage]:
+    """还没压进长期记忆的聊天记录，新的在前。"""
+    q = select(ChatMessage).where(ChatMessage.account_id == acc.id)
+    since = _since(acc)
+    if since is not None:
+        q = q.where(ChatMessage.created_at > since)
+    return list(session.exec(q.order_by(col(ChatMessage.created_at).desc()).limit(HISTORY_ROWS)).all())
+
+
+def _jobs(session: Session, rows: list[ChatMessage]) -> dict[str, Job]:
+    ids = {str(r["job_id"]) for m in rows if m.role == ChatRole.tool
+           for r in [(m.payload or {}).get("result") or {}] if r.get("job_id")}
+    return {j.id: j for j in session.exec(select(Job).where(col(Job.id).in_(ids))).all()} if ids else {}
+
+
+def _outcome(session: Session, job: Job | None) -> str:
+    """后台任务后来怎么样了：写完的稿子叫什么、几分，失败的原因——模型才接得上「刚才那篇」。"""
+    if job is None:
+        return ""
+    if job.status in (JobStatus.queued, JobStatus.running):
+        return "还在进行"
+    if job.status == JobStatus.failed:
+        return f"失败了：{job.error[:120]}"
+    r = job.result or {}
+    did = r.get("draft_id")
+    d = session.get(Draft, did) if did else None
+    if d is not None:
+        return f"做完了：草稿 {d.id}「{d.title}」" + (f"，{d.score:g} 分" if d.score is not None else "")
+    if job.kind == JobKind.clone_creator:
+        return "学完了，账号定位和选题库已更新"
+    if job.kind == JobKind.learn_visual:
+        return "学完了，配图模板已更新"
+    return "做完了"
+
+
+_KEEP = {  # 历史里每种工具结果留哪些字段（原结果给界面画卡片，模型只要记得住关键事实）
+    "find_benchmarks": None,
+    "find_topics": ("ok", "topics", "source_note", "error"),
+    "get_draft": ("ok", "id", "title", "status", "score", "images", "error"),
+    "list_drafts": ("ok", "drafts"),
+}
+
+
+def _tool_text(session: Session, m: ChatMessage, jobs: dict[str, Job]) -> str:
+    """历史里的一条工具结果：按工具留关键信息（找到的候选和链接、选题 ID、稿子标题、任务后来的结果）。"""
+    p = m.payload or {}
+    r = p.get("result")
+    name = m.tool_name or ""
+    if not isinstance(r, dict):
+        return m.content[:HISTORY_TOOL_CHARS]
+    if name == "find_benchmarks":
+        r = {"ok": r.get("ok"), **({"error": r["error"]} if r.get("error") else {}), "candidates": [
+            {"no": i + 1, **{k: c[k] for k in ("name", "url", "fans", "median_likes", "level") if c.get(k) not in (None, "")}}
+            for i, c in enumerate(r.get("candidates") or [])]}
+        return _clip(r, 1500)
+    if name == "find_topics":
+        r = {**{k: r[k] for k in _KEEP[name] if k in r},
+             "topics": [{"id": t.get("id"), "title": t.get("title")} for t in r.get("topics") or []]}
+        return _clip(r, 800)
+    if name == "get_draft":
+        imgs = [{"no": i.get("no"), "desc": str(i.get("description") or "")[:60]} for i in r.get("images") or []]
+        return _clip({**{k: r[k] for k in _KEEP[name] if k in r and k != "images"}, "images": imgs}, 800)
+    if name == "list_drafts":
+        return _clip({k: r[k] for k in _KEEP[name] if k in r}, 800)
+    if r.get("job_id"):
+        out = {k: v for k, v in r.items() if k not in ("images",)}
+        later = _outcome(session, jobs.get(str(r["job_id"])))
+        if later:
+            out["后来"] = later
+        return _clip(_shrink(out, 200), 600)
+    return _clip(_shrink(r, 300), 800 if name.startswith("research_") else HISTORY_TOOL_CHARS)
+
+
+def _history(session: Session, acc: Account) -> list[dict]:
     """把对话记录还原成模型原生的格式：做过的操作是真正的 tool_calls + tool 结果，
-    而不是「（我执行了…）」这种文字——否则模型会学着在回复里写「我执行了」却不真的调用工具，设置就没存上。"""
-    rows = list(reversed(session.exec(
-        select(ChatMessage).where(ChatMessage.account_id == account_id)
-        .order_by(col(ChatMessage.created_at).desc()).limit(HISTORY_LIMIT)
-    ).all()))
+    而不是「（我执行了…）」这种文字——否则模型会学着在回复里写「我执行了」却不真的调用工具，设置就没存上。
+    带最近 HISTORY_TURNS 轮（按用户发言算、从一轮的开头截），更早的在长期记忆里。"""
+    recent = _recent(session, acc)
+    jobs = _jobs(session, recent)
+    texts: dict[str, str] = {}
+    rows: list[ChatMessage] = []
+    turns = size = 0
+    for m in recent:  # 新的在前
+        t = _tool_text(session, m, jobs) if m.role == ChatRole.tool else m.content
+        texts[m.id] = t
+        size += len(t) + 20
+        rows.append(m)
+        if m.role == ChatRole.user:
+            turns += 1
+            if turns >= HISTORY_TURNS or size >= HISTORY_CHARS:
+                break
+    rows.reverse()
+    while rows and rows[0].role == ChatRole.tool:  # 窗口别从半截工具结果开始
+        rows.pop(0)
     msgs: list[dict] = []
     tools: list[ChatMessage] = []
 
@@ -557,8 +676,7 @@ def _history(session: Session, account_id: str) -> list[dict]:
         calls = [_call(f"h_{m.id}", m.tool_name or "unknown", (m.payload or {}).get("args") or {}) for m in tools]
         msgs.append({"role": "assistant", "content": None, "tool_calls": calls})
         for m, c in zip(tools, calls):
-            body = m.content if len(m.content) <= HISTORY_TOOL_CHARS else m.content[:HISTORY_TOOL_CHARS] + "…（已截断）"
-            msgs.append({"role": "tool", "tool_call_id": c["id"], "content": body})
+            msgs.append({"role": "tool", "tool_call_id": c["id"], "content": texts[m.id]})
         tools.clear()
 
     for m in rows:
@@ -576,6 +694,52 @@ def _history(session: Session, account_id: str) -> list[dict]:
             msgs.append({"role": m.role.value, "content": m.content})
     flush()
     return msgs
+
+
+def _transcript(session: Session, rows: list[ChatMessage], limit: int = 14000) -> str:
+    jobs = _jobs(session, rows)
+    lines = []
+    for m in rows:
+        if m.role == ChatRole.tool:
+            lines.append(f"[小媒做了 {m.tool_name}] {_tool_text(session, m, jobs)[:400]}")
+        else:
+            lines.append(f"{'用户' if m.role == ChatRole.user else '小媒'}：{m.content[:1200]}")
+    text = "\n".join(lines)
+    return text if len(text) <= limit else "…（更早的略）\n" + text[-limit:]
+
+
+async def remember(session: Session, llm: LLM, account_id: str) -> bool:
+    """聊得多了，把较早的几轮压成长期记忆要点（滚动更新），最近 MEMORY_KEEP_TURNS 轮留着原样。
+    每轮聊完在后台调一次；没攒够就什么都不做。返回这次有没有更新记忆。"""
+    acc = session.get(Account, account_id)
+    if acc is None:
+        return False
+    recent = _recent(session, acc)  # 新的在前
+    users = [i for i, m in enumerate(recent) if m.role == ChatRole.user]
+    size = sum(len(m.content) for m in recent if m.role != ChatRole.tool)
+    if len(users) <= HISTORY_TURNS and size < HISTORY_CHARS:
+        return False
+    cut = users[MEMORY_KEEP_TURNS - 1] if len(users) >= MEMORY_KEEP_TURNS else users[-1]
+    old = list(reversed(recent[cut + 1:]))  # 留下的最早一轮之前的，按时间顺序
+    if not old:
+        return False
+    mem = acc.chat_memory or {}
+    try:
+        data = await complete_json(llm, [
+            {"role": "system", "content": prompts.CHAT_MEMORY_SYSTEM},
+            {"role": "user", "content": f"之前的要点：\n{mem.get('summary') or '（还没有）'}\n\n"
+             f"更早的聊天记录：\n{_transcript(session, old)}"},
+        ], temperature=0.2)
+    except LLMError as e:
+        logger.warning("整理聊天记忆失败：%s", e)
+        return False
+    summary = str(data.get("summary") or "").strip()
+    if not summary:
+        return False
+    acc.chat_memory = {"summary": summary[:1500], "upto": old[-1].created_at.isoformat(), "at": utcnow().isoformat()}
+    session.add(acc)
+    session.commit()
+    return True
 
 
 NUDGE = ("（系统：你在回复里用文字写了「我执行了…」之类的话，但并没有真正调用工具——设置没有保存、按钮也没显示。"
@@ -690,7 +854,8 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
             raise LookupError("账号不存在")
         t_all = time.monotonic()
         box = Toolbox(session, llm, acc, fetch, draft_id)
-        history = _history(session, account_id)
+        history = _history(session, acc)
+        memory = (acc.chat_memory or {}).get("summary") or ""
         cur = box.current_draft()
         yield {"type": "user", "message": _msg_out(_save(session, acc, ChatRole.user, text,
                                                          payload={"draft_id": cur["id"], "draft_title": cur["title"]} if cur else None))}
@@ -698,6 +863,7 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
         messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT + "\n\n【当前账号状态】\n"
              + json.dumps(box.snapshot(), ensure_ascii=False, indent=1)
+             + (f"\n\n【之前聊过的要点（更早的聊天记录不再原样给你，这是整理出的要点，用户提到以前说过的话先看这里）】\n{memory}" if memory else "")
              + ("\n\n【用户正在看的草稿（「这篇」「第二张」指的就是它）】\n" + json.dumps(cur, ensure_ascii=False, indent=1) if cur else "")},
             *history,
             {"role": "user", "content": text},
@@ -847,6 +1013,12 @@ def start_chat(llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = 
             q.put_nowait({"type": "error", "detail": str(e) or e.__class__.__name__})
         finally:
             q.put_nowait(None)
+        try:  # 聊完再整理长期记忆，不耽误这一轮的回复
+            with Session(get_engine(), expire_on_commit=False) as s:
+                async with _locks[account_id]:
+                    await remember(s, llm, account_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("整理聊天记忆失败")
 
     t = asyncio.create_task(run())
     _running.add(t)

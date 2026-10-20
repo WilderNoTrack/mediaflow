@@ -134,6 +134,8 @@ class Account(SQLModel, table=True):
     # 账号配图模板（看对标账号的图学出来的）：{spec, pages: [{type, desc, when, examples: [_refs/…]}], tips, source, at}
     # 有模板时每篇配图都照它，整个账号看起来是一套
     visual: dict = json_obj_col()
+    # 小媒的长期记忆：早的聊天滚动压成要点 {summary, upto(压到哪条消息的时间), at}，最近的聊天原样给模型
+    chat_memory: dict = json_obj_col()
     # 自动模式
     auto_enabled: bool = False
     auto_frequency: AutoFrequency = AutoFrequency.daily

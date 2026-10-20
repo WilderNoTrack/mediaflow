@@ -46,7 +46,8 @@ class FakeLLM:
                              ("bench_analyze", prompts.BENCH_ANALYZE_SYSTEM), ("bench_adapt", prompts.BENCH_ADAPT_SYSTEM),
                              ("bench_pick", prompts.BENCH_PICK_SYSTEM), ("ref_pick", prompts.REF_PICK_SYSTEM),
                              ("visual_learn", prompts.VISUAL_LEARN_SYSTEM), ("visual_update", prompts.VISUAL_UPDATE_SYSTEM),
-                             ("image_check", prompts.IMAGE_CHECK_SYSTEM), ("title_fit", prompts.TITLE_FIT_SYSTEM)):
+                             ("image_check", prompts.IMAGE_CHECK_SYSTEM), ("title_fit", prompts.TITLE_FIT_SYSTEM),
+                             ("memory", prompts.CHAT_MEMORY_SYSTEM)):
             if system.startswith(marker[:30]):
                 return kind
         return "other"

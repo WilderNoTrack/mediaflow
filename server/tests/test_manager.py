@@ -248,3 +248,96 @@ async def test_update_visual_without_template_creates_one(session, llm, account)
     session.refresh(account)
     assert account.visual["source"]["names"] == ["按你的描述"] and account.visual["pages"][0]["examples"] == []
     assert "还没有配图模板" in llm.prompts_of("visual_update")[0]
+
+
+def _turns(session, account, n, start=0, tools=0):
+    from mediaflow.agents.manager import _save
+
+    for i in range(start, start + n):
+        _save(session, account, ChatRole.user, f"第{i}句：我说过的事情{i}")
+        for k in range(tools):
+            _save(session, account, ChatRole.tool, "{}", "research_search",
+                  {"args": {"keyword": f"词{i}-{k}"}, "result": {"ok": True, "items": ["x" * 3000]}})
+        _save(session, account, ChatRole.assistant, f"好的，记下第{i}件事")
+
+
+async def test_history_counts_turns_not_rows(session, llm, account):
+    """调研一轮能产生十几条工具记录：历史按「用户说了几轮」截，不按条数截，不然没几轮就忘了。"""
+    _turns(session, account, 12, tools=6)
+    llm.push("manager", say("记得"))
+    await chat(session, llm, account.id, "还记得我第一句说了啥吗")
+    sent = llm.calls[-1][1]
+    texts = [m.get("content") or "" for m in sent]
+    assert any("第0句" in t for t in texts) and any("第11句" in t for t in texts)
+    tool_msgs = [m for m in sent if m["role"] == "tool"]
+    assert tool_msgs and all(len(m["content"]) <= 900 for m in tool_msgs)  # 工具结果只留摘要
+    first = next(i for i, m in enumerate(sent) if m["role"] != "system")
+    assert sent[first]["role"] == "user"  # 窗口从一轮的开头开始
+
+
+async def test_history_keeps_candidate_links_and_job_outcomes(session, llm, account):
+    """「选第 3 个」「刚才那篇」要指得上：找对标的候选链接、写稿任务后来写成了哪篇，都留在历史里。"""
+    from mediaflow.agents.manager import _save
+    from mediaflow.domain.models import Draft, JobKind, JobStatus
+
+    cands = [{"name": f"博主{i}", "url": f"https://www.xiaohongshu.com/user/profile/u{i}", "avatar": "a" * 300,
+              "reason": "很长的理由" * 80, "fans": 1000 * i} for i in range(1, 7)]
+    _save(session, account, ChatRole.user, "帮我找几个对标")
+    _save(session, account, ChatRole.tool, "{}", "find_benchmarks", {"args": {}, "result": {"ok": True, "candidates": cands}})
+    _save(session, account, ChatRole.assistant, "找到 6 个")
+    d = Draft(user_id="local", account_id=account.id, title="通勤包里的5件小物", body="b", original_title="t",
+              original_body="b", score=8.2)
+    job = Job(user_id="local", account_id=account.id, kind=JobKind.write_draft, status=JobStatus.succeeded,
+              result={"draft_id": d.id, "score": 8.2})
+    session.add(d)
+    session.add(job)
+    session.commit()
+    _save(session, account, ChatRole.user, "写一篇")
+    _save(session, account, ChatRole.tool, "{}", "write_post", {"args": {"hint": "通勤"}, "result": {"ok": True, "job_id": job.id}})
+    _save(session, account, ChatRole.assistant, "开始写了")
+    llm.push("manager", say("好"))
+    await chat(session, llm, account.id, "选第 6 个，然后刚才那篇再改改")
+    sent = llm.calls[-1][1]
+    tools = {m["tool_call_id"]: m["content"] for m in sent if m["role"] == "tool"}
+    bench = next(v for v in tools.values() if "博主6" in v)
+    assert "xiaohongshu.com/user/profile/u6" in bench and "很长的理由" not in bench
+    assert any("通勤包里的5件小物" in v and "8.2" in v for v in tools.values())
+
+
+async def test_old_turns_roll_into_long_term_memory(session, llm, account):
+    """聊得很长：早的几轮压成要点放进系统提示，最近的原样带；要点滚动更新。"""
+    from mediaflow.agents.manager import HISTORY_TURNS, MEMORY_KEEP_TURNS, remember
+
+    _turns(session, account, HISTORY_TURNS + 4)
+    llm.push("memory", {"summary": "- 用户是宝妈，晚上 9 点后才有空\n- 不喜欢太鸡汤的文案"})
+    assert await remember(session, llm, account.id)
+    assert "第0句" in llm.prompts_of("memory")[0] and f"第{HISTORY_TURNS + 3}句" not in llm.prompts_of("memory")[0]
+    session.refresh(account)
+    assert "宝妈" in account.chat_memory["summary"] and account.chat_memory["upto"]
+    assert not await remember(session, llm, account.id)  # 没攒够新的，不再调模型
+
+    llm.push("manager", say("记得，你晚上 9 点后有空"))
+    await chat(session, llm, account.id, "我什么时候有空来着")
+    sent = llm.calls[-1][1]
+    assert "宝妈，晚上 9 点后才有空" in sent[0]["content"]
+    texts = " ".join(m.get("content") or "" for m in sent[1:])
+    assert "第0句" not in texts and f"第{HISTORY_TURNS + 4 - MEMORY_KEEP_TURNS}句" in texts
+
+    _turns(session, account, HISTORY_TURNS, start=100)
+    llm.push("memory", {"summary": "- 用户是宝妈\n- 第100句的事"})
+    assert await remember(session, llm, account.id)
+    assert "宝妈，晚上 9 点后才有空" in llm.prompts_of("memory")[1]  # 旧要点带进去一起更新
+
+
+async def test_snapshot_lists_recent_drafts_topics_and_candidates(session, llm, account):
+    from mediaflow.domain.models import Draft
+
+    session.add(Draft(user_id="local", account_id=account.id, title="早八通勤妆", body="b", original_title="t", original_body="b"))
+    session.add(Topic(user_id="local", account_id=account.id, title="秋天第一件风衣"))
+    account.bench_candidates = {"candidates": [{"name": "穿搭阿梨", "url": "https://www.xiaohongshu.com/user/profile/abc"}]}
+    session.add(account)
+    session.commit()
+    llm.push("manager", say("好"))
+    await chat(session, llm, account.id, "在吗")
+    system = llm.calls[-1][1][0]["content"]
+    assert "早八通勤妆" in system and "秋天第一件风衣" in system and "user/profile/abc" in system
