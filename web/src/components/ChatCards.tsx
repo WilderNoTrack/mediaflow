@@ -73,7 +73,9 @@ export function DraftCard({ account, draftId }: { account: Account; draftId: str
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-1.5 text-xs text-emerald-700"><CheckCircle2 className="size-3.5" />写好了</div>
         <div className="mt-0.5 line-clamp-2 font-medium">{d.title}</div>
-        {typeof d.reference?.title === "string" && <div className="mt-0.5 truncate text-xs text-muted-foreground">照着「{d.reference.title}」做的</div>}
+        {typeof d.reference?.title === "string" && <div className="mt-0.5 truncate text-xs text-muted-foreground">
+          照着「{d.reference.title}」{Array.isArray(d.reference.extra) && d.reference.extra.length > 0 ? `等 ${d.reference.extra.length + 1} 篇` : ""}做的
+        </div>}
         <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           {d.score != null && <Badge className={d.needs_attention ? "bg-amber-100 text-amber-700" : "bg-indigo-50 text-indigo-600"}>AI 打分 {d.score.toFixed(1)}</Badge>}
           {imgs && <span>{d.images_busy ? <>配图出到 {imgs}…</> : imgs}</span>}

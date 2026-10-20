@@ -146,9 +146,10 @@ export function DraftPage() {
   );
 }
 
-type Ref = { title?: string; url?: string; creator?: string; likes?: string; why?: string; source?: string; local?: string[] };
+type RefPost = { title?: string; url?: string; creator?: string; likes?: string; why?: string; kind?: string };
+type Ref = RefPost & { source?: string; local?: string[]; extra?: RefPost[] };
 
-/** 这篇照着哪篇帖子写、出图；可以贴一篇小红书笔记换掉，再「按它全部重新出图」。 */
+/** 这篇参考了哪些帖子：文案可以学好几篇，配图只照主参考帖一篇（一套图统一）。主参考帖可以贴链接换掉，再「按它全部重新出图」。 */
 function ReferenceCard({ d }: { d: DraftDetail }) {
   const act = useDraftActions(d.id);
   const ref = (d.reference ?? {}) as Ref;
@@ -162,9 +163,10 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
   const busy = d.images.some((x) => x.status === "pending" || x.status === "running");
   return (
     <Card>
-      <CardHead icon={<Link2 />} title="照着这篇帖子"
-        action={!editing && <button className="cursor-pointer text-xs text-indigo-600 hover:underline" onClick={() => setEditing(true)}>{ref.title ? "换一篇" : "指定一篇"}</button>} />
+      <CardHead icon={<Link2 />} title="参考帖"
+        action={!editing && <button className="cursor-pointer text-xs text-indigo-600 hover:underline" onClick={() => setEditing(true)}>{ref.title ? "换配图照的那篇" : "指定一篇"}</button>} />
       <CardBody className="space-y-3">
+        {ref.title && <div className="text-[11px] font-medium text-muted-foreground">配图统一照这篇{(ref.extra?.length ?? 0) > 0 && "，文案也学它"}</div>}
         {ref.title ? (
           <div className="flex gap-3">
             {n > 0
@@ -182,13 +184,31 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
           <p className="text-xs leading-relaxed text-muted-foreground">这篇没有照着具体的帖子做（没找到合适的对标爆款）。贴一篇小红书图文笔记，配图就会一张对一张照着它的版式出。</p>
         )}
         {ref.title && n > 0 && !editing && !justSet && (
-          <p className="text-xs leading-relaxed text-muted-foreground">文案学它的结构和节奏；配图一张对一张照着它的版式、文字位置和配色重做，内容换成这篇的。</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">配图一张对一张照着它的版式、文字位置和配色重做，内容换成这篇的；整套用同一份视觉规范，翻起来是一套。</p>
+        )}
+        {ref.title && n === 0 && (
+          <p className="text-xs leading-relaxed text-muted-foreground">这篇的原图没拿到，配图按账号的配图风格统一出。</p>
+        )}
+        {(ref.extra?.length ?? 0) > 0 && (
+          <div className="border-t pt-2.5">
+            <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">文案还参考了（只学标题和结构，不参与出图）</div>
+            <ul className="space-y-1.5">
+              {ref.extra!.map((x, k) => (
+                <li key={k} className="text-xs">
+                  {x.url
+                    ? <a href={x.url} target="_blank" rel="noreferrer" className="line-clamp-1 font-medium hover:text-indigo-600">{x.title}<ExternalLink className="ml-1 inline size-3 text-muted-foreground" /></a>
+                    : <span className="line-clamp-1 font-medium">{x.title}</span>}
+                  <span className="text-muted-foreground">{[x.creator, x.likes && `${x.likes} 赞`, x.kind === "视频" && "视频"].filter(Boolean).join(" · ")}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         {editing && (
           <div className="space-y-2">
             <div className="flex gap-2">
               <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} autoFocus
-                placeholder="粘贴小红书笔记链接或分享文字"
+                placeholder="粘贴一篇小红书图文笔记的链接或分享文字"
                 className="min-w-0 flex-1 rounded-md border bg-input-background px-2.5 py-1.5 text-xs outline-none focus:border-indigo-400" />
               <Button size="xs" loading={act.reference.isPending} disabled={!url.trim()} onClick={submit}>确定</Button>
               <Button size="xs" variant="ghost" onClick={() => { setEditing(false); act.reference.reset(); }}>取消</Button>
@@ -198,7 +218,7 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
         )}
         {justSet && d.images.length > 0 && (
           <div className="flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
-            <span className="flex-1">换好了。文案不动，配图要按它重新出吗？</span>
+            <span className="flex-1">换好了。文案不动，配图要按它整套重新出吗？</span>
             <Button size="xs" disabled={busy} loading={act.images.isPending}
               onClick={() => act.images.mutate("all", { onSuccess: () => setJustSet(false) })}>按它全部重新出图</Button>
           </div>
@@ -285,6 +305,7 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
             </div>
           </div>
         ) : <p className="text-xs text-muted-foreground">这篇没有配图描述</p>}
+        {d.image_spec && <SpecNote spec={d.image_spec} />}
         {!skipped && d.images.length > 0 && (
           <Button variant="outline" size="sm" className="w-full" disabled={busy > 0} loading={act.images.isPending && act.images.variables === "all"}
             onClick={() => confirm(`${d.images.length} 张全部重新出？会用掉 ${d.images.length} 次生图额度`) && act.images.mutate("all")}>
@@ -294,6 +315,18 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
         <ErrorText error={act.images.error} />
       </CardBody>
     </Card>
+  );
+}
+
+/** 这套图统一的视觉规范：每张都带着它出，重出某一张也沿用 */
+function SpecNote({ spec }: { spec: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <button onClick={() => setOpen(!open)} className="block w-full cursor-pointer rounded-md bg-muted/60 px-3 py-2 text-left text-xs text-muted-foreground hover:bg-muted">
+      <span className="font-medium text-foreground">整套统一的风格</span>
+      <span className="ml-1">（每张都照它，重出某张也不变）</span>
+      <span className={cn("mt-1 block leading-relaxed", !open && "line-clamp-2")}>{spec}</span>
+    </button>
   );
 }
 
