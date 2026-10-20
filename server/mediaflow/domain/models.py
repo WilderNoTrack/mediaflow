@@ -7,7 +7,8 @@
 - 草稿保留「生成原稿」快照（original_*），用于对比用户修改、学习口味。
 """
 
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -20,8 +21,20 @@ def _id() -> str:
     return uuid4().hex
 
 
+_clock_lock = threading.Lock()
+_last_now: datetime | None = None
+
+
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    """当前 UTC 时间，同一进程里严格递增：连着取到同一个时刻（时钟精度不够、或被往回调）时，
+    就在上一次的基础上加 1 微秒。聊天记录、长期记忆的截断点都按 created_at 排序，时间相同顺序就乱了。"""
+    global _last_now
+    now = datetime.now(timezone.utc)
+    with _clock_lock:
+        if _last_now is not None and now <= _last_now:
+            now = _last_now + timedelta(microseconds=1)
+        _last_now = now
+    return now
 
 
 def json_col() -> Any:

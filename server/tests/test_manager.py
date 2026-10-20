@@ -329,6 +329,47 @@ async def test_old_turns_roll_into_long_term_memory(session, llm, account):
     assert "宝妈，晚上 9 点后才有空" in llm.prompts_of("memory")[1]  # 旧要点带进去一起更新
 
 
+def _coarse_clock(monkeypatch):
+    """模拟时钟精度很粗的机器（比如 Windows）：一段时间里每次取到的都是同一个时刻。"""
+    from datetime import datetime
+
+    from mediaflow.domain import models
+
+    frozen = datetime.now(models.timezone.utc)
+
+    class Coarse(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(models, "datetime", Coarse)
+
+
+def test_chat_timestamps_are_unique_and_ordered(session, account, monkeypatch):
+    """连着存很多条消息，时间戳也不能撞：历史和记忆截断点都按 created_at 排，撞了顺序就乱、消息会被漏掉。"""
+    from mediaflow.agents.manager import _save
+    from mediaflow.domain.models import ChatMessage
+
+    _coarse_clock(monkeypatch)
+    saved = [_save(session, account, ChatRole.user, f"第{i}条").id for i in range(120)]
+    rows = session.exec(select(ChatMessage).where(ChatMessage.account_id == account.id)
+                        .order_by(ChatMessage.created_at)).all()
+    assert len({r.created_at for r in rows}) == len(rows) == 120
+    assert [r.id for r in rows] == saved
+
+
+def test_utcnow_strictly_increases_across_threads(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from mediaflow.domain.models import utcnow
+
+    _coarse_clock(monkeypatch)
+    with ThreadPoolExecutor(8) as ex:
+        got = [t for chunk in ex.map(lambda _: [utcnow() for _ in range(500)], range(8)) for t in chunk]
+    assert len(set(got)) == len(got)
+    assert all(t.tzinfo is not None for t in got)
+
+
 async def test_snapshot_lists_recent_drafts_topics_and_candidates(session, llm, account):
     from mediaflow.domain.models import Draft
 
