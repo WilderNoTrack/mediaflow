@@ -59,7 +59,7 @@ PYTHON_IMAGE=docker.m.daocloud.io/library/python:3.12-slim
 CADDY_IMAGE=docker.m.daocloud.io/library/caddy:2-alpine
 ```
 
-npm、pip 默认已经走 npmmirror 和阿里云 PyPI（见 `Dockerfile` 的 `NPM_REGISTRY`、`PIP_INDEX_URL`）。
+npm、pip、apt 默认已经走 npmmirror、阿里云 PyPI 和阿里云 Debian 源（见 `Dockerfile` 的 `NPM_REGISTRY`、`PIP_INDEX_URL`、`APT_MIRROR`）。镜像里会装中文字体 `fonts-noto-cjk`，代码排版配图要用。
 
 ### 2.2 启动
 
@@ -91,6 +91,8 @@ Caddy 会自动给 `DOMAIN` 申请 HTTPS 证书（需要 80/443 能从公网访�
 sudo apt update
 # Ubuntu 24.04 自带 python3.12；22.04 用 python3.11
 sudo apt install -y python3.12 python3.12-venv nginx || sudo apt install -y python3.11 python3.11-venv nginx
+# 中文字体：代码排版配图（文字卡片、照片叠字）要用
+sudo apt install -y fonts-noto-cjk
 # Node 从 npmmirror 下载（官方源在国内很慢）
 curl -fsSL https://registry.npmmirror.com/-/binary/node/v20.18.0/node-v20.18.0-linux-x64.tar.xz | sudo tar -xJ -C /opt
 sudo ln -sf /opt/node-v20.18.0-linux-x64/bin/{node,npm,npx} /usr/local/bin/

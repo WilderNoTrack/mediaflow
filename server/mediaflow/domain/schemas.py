@@ -24,6 +24,7 @@ class AccountPatch(BaseModel):
     audience: str | None = None
     content_style: str | None = None
     image_style: str | None = None
+    image_mode: Literal["ai", "mixed", "card", "photo", "auto"] | None = None
     topic_type: str | None = None
     keywords: list[str] | None = None
     auto_enabled: bool | None = None
@@ -52,6 +53,7 @@ class AccountOut(BaseModel):
     audience: str
     content_style: str
     image_style: str
+    image_mode: str = "ai"
     topic_type: str
     keywords: list[str]
     auto_enabled: bool
@@ -186,6 +188,11 @@ class ImageOut(BaseModel):
     ref_url: str | None = Field(None, description="这张照着参考帖哪张原图出的（本地缓存地址）")
     page_type: str = Field("", description="用的账号配图模板里哪种页")
     review: dict = Field(default={}, description="出图后看图自检：ok/problems/redone（重出过一次）/before（重出前的问题）")
+    mode: str = Field("", description="用户给这张指定的做法，空 = 跟账号设定")
+    made_by: str = Field("", description="实际怎么做的：ai / ai_text / card / photo")
+    layout: dict = Field(default={}, description="代码排上去的字（能直接改）")
+    source: dict = Field(default={}, description="网上找的图的出处：url / link / site / title / query；fallback = 没找到图改成了卡片")
+    base_url: str | None = Field(None, description="没叠字的底图")
 
 
 class DraftOut(BaseModel):
@@ -246,12 +253,34 @@ class WriteIn(BaseModel):
     reference_url: str = Field("", max_length=3000, description="照着这些小红书笔记写（可以多个链接/分享文字，第一篇图文笔记当配图模板；不填就自动挑）")
 
 
+class CompareSide(BaseModel):
+    title: str = Field("", max_length=12)
+    items: list[str] = Field(default=[], max_length=6)
+
+
+class ImageLayout(BaseModel):
+    """代码排上去的字。kind：cover 封面大字 / list 清单 / steps 步骤 / compare 对比 / quote 金句"""
+    kind: Literal["cover", "list", "steps", "compare", "quote"] | None = None
+    title: str | None = Field(None, max_length=90)
+    subtitle: str | None = Field(None, max_length=90)
+    tag: str | None = Field(None, max_length=14)
+    highlight: str | None = Field(None, max_length=30)
+    items: list[str] | None = Field(None, max_length=8)
+    left: CompareSide | None = None
+    right: CompareSide | None = None
+    position: Literal["top", "center", "bottom"] | None = None
+    palette: str | None = Field(None, max_length=20)
+
+
 class ImageOp(BaseModel):
-    op: Literal["update", "add", "remove", "move", "redo"]
+    op: Literal["update", "add", "remove", "move", "redo", "mode", "text"]
     no: int | None = Field(None, description="第几张（按改之前的顺序，从 1 开始）")
     after: int | None = Field(None, description="add：加在第几张后面，0 = 放最前，不填放最后")
     to: int | None = Field(None, description="move：挪到第几张")
     description: str = Field("", max_length=500, description="update/add：这张图的中文画面描述")
+    mode: Literal["", "ai", "ai_text", "card", "photo"] | None = Field(
+        None, description="mode/add：这张怎么做 ai 整张 AI 画 / ai_text AI 画面 + 代码排字 / card 排版卡片 / photo 网上找图 + 排字，空 = 跟账号设定")
+    layout: ImageLayout | None = Field(None, description="text：改后的字（只传要改的），马上重排、不重新生图")
 
 
 class ImageEditIn(BaseModel):

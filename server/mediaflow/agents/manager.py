@@ -33,6 +33,7 @@ from mediaflow.jobs.queue import JobConflict, enqueue
 from mediaflow.llm.client import LLM, LLMError, complete_json, stream_complete
 from mediaflow.research import service as research
 from mediaflow.research.types import Unsupported
+from mediaflow.services.images import ACCOUNT_MODES, image_configured
 from mediaflow.services.topics import Fetcher, propose_topics
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,13 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    【账号配图模板】学完对标后会看对标账号的图，学出一套配图模板（整体视觉 + 几种页型，各有样例图，见下方账号状态 visual）。
    有模板时每篇配图都照模板出（每张选一种页型、照样例版式），整个账号像同一个博主做的；参考帖只管文案，用户自己给了参考帖的那篇才照它出图。
    用户想换配图风格：说的是「照这几篇的图来」就 learn_visual 带上链接；说的是具体要求（「封面别放人」「颜色换成莫兰迪」「加一种对比页」）用 update_visual；
+   【配图不止 AI 画】账号状态里的 image_mode 是默认做法：ai 整张 AI 画 / mixed AI 画画面、字用代码排（字一定对）/
+   card 代码排版的文字卡片（清单、步骤、对比、金句，不用生图额度）/ photo 去网上找真实图片当底图、代码叠字 / auto 每张自动挑。
+   用户嫌「AI 图太假」「想要真实照片」→ photo；「图上的字老写错」→ mixed 或 card；「做成干货文字卡片」「没有生图额度」→ card；
+   只说这一篇/这一张就 edit_images 用 op=mode 换做法重出；说以后都这样就 update_profile 改 image_mode（这篇也要换就再 edit_images）。
+   代码排的字能直接改：「封面标题改成…」「第三条要点换成…」用 op=text 传改后的字（get_draft 里有每张现在的 text），当场改好、不重新出图；
+   AI 直接画的图（made_by=ai）改字只能 update 描述重出，或换 mode=ai_text 以后就能直接改。网上找图是真能找（不要说做不到），
+   图会标出处，提醒用户网上的图版权归原作者，发之前确认能用，商用最好换成自己拍的。
    想重新学对标的图就 learn_visual 不带链接。没有对标账号、用户也没给链接时不要调 learn_visual；用户描述了想要的配图感觉，就 update_profile 存进 image_style，再 update_visual 按描述起一套模板（还没有模板也可以）。出完的图会自动看一遍有没有错字、内容不对、风格跑偏，有问题自动重出一次。
 8. AI 写完会自己挑问题、自己按意见改好，不用让用户去逐条改；草稿页列着改了哪些地方。
 9. 用户要改已有的稿子，你直接动手改，不要让用户自己去页面上改：
@@ -154,6 +162,9 @@ TOOLS = [
         "audience": {"type": "string", "description": "目标受众"},
         "content_style": {"type": "string", "description": "文案风格"},
         "image_style": {"type": "string", "description": "配图视觉风格，尽量保留用户原话"},
+        "image_mode": {"type": "string", "enum": ["ai", "mixed", "card", "photo", "auto"],
+                       "description": "以后每篇配图默认怎么做：ai 整张 AI 画 / mixed AI 画画面、字用代码排（字不会错）/ "
+                                      "card 代码排版的文字卡片（不用生图额度）/ photo 网上找真实图片 + 代码排字 / auto 每张自动挑"},
         "topic_type": {"type": "string", "description": "选题方向/类别"},
         "keywords": {"type": "array", "items": {"type": "string"}},
         "name": {"type": "string", "description": "账号名称"},
@@ -178,13 +189,26 @@ TOOLS = [
           "整套沿用同一份视觉风格。编号一律按改之前的顺序（get_draft 里的 no）", {
               "draft_id": {"type": "string", "description": "不传就是用户正在看的那篇"},
               "ops": {"type": "array", "items": {"type": "object", "properties": {
-                  "op": {"type": "string", "enum": ["update", "add", "remove", "move", "redo"],
-                         "description": "update 改描述 / add 加一张 / remove 删掉 / move 挪位置 / redo 描述不变、重新出"},
+                  "op": {"type": "string", "enum": ["update", "add", "remove", "move", "redo", "mode", "text"],
+                         "description": "update 改描述 / add 加一张 / remove 删掉 / move 挪位置 / redo 描述不变、重新出 / "
+                                        "mode 换这张的做法重出 / text 直接改代码排上去的字（马上改好，不重新出图）"},
                   "no": {"type": "integer", "description": "第几张（update/remove/move/redo）"},
                   "after": {"type": "integer", "description": "add：加在第几张后面，0 放最前，不填放最后"},
                   "to": {"type": "integer", "description": "move：挪到第几张"},
-                  "description": {"type": "string", "description": "update/add：这张图完整的新中文画面描述——"
+                  "description": {"type": "string", "description": "update/add（mode 时可选）：这张图完整的新中文画面描述——"
                                   "保留原描述里用户没要求改的部分，把用户的要求写具体（放什么、怎么构图、图上写哪几个字）"},
+                  "mode": {"type": "string", "enum": ["ai", "ai_text", "card", "photo", ""],
+                           "description": "mode/add：ai 整张 AI 画 / ai_text AI 画画面、字用代码排 / card 排版卡片 / "
+                                          "photo 网上找真实图片 + 代码排字 / 空 = 跟账号设定"},
+                  "layout": {"type": "object", "description": "text：改后的字，只传要改的（get_draft 里这张的 text）",
+                             "properties": {
+                                 "kind": {"type": "string", "enum": ["cover", "list", "steps", "compare", "quote"]},
+                                 "title": {"type": "string"}, "subtitle": {"type": "string"}, "tag": {"type": "string"},
+                                 "highlight": {"type": "string", "description": "标题里高亮的词"},
+                                 "items": {"type": "array", "items": {"type": "string"}},
+                                 "left": {"type": "object", "properties": {"title": {"type": "string"}, "items": {"type": "array", "items": {"type": "string"}}}},
+                                 "right": {"type": "object", "properties": {"title": {"type": "string"}, "items": {"type": "array", "items": {"type": "string"}}}},
+                                 "position": {"type": "string", "enum": ["top", "center", "bottom"]}}},
               }, "required": ["op"]}},
           }, ["ops"]),
     _tool("revise_post", "按用户的要求改一篇草稿的文案（标题/正文/标签），后台改、改完 AI 复核，改得更好才替换", {
@@ -244,7 +268,7 @@ def visual_pages(v: dict | None) -> list[dict]:
     return pages(v)
 
 
-PROFILE_FIELDS = ("name", "theme", "audience", "content_style", "image_style", "topic_type", "keywords")
+PROFILE_FIELDS = ("name", "theme", "audience", "content_style", "image_style", "image_mode", "topic_type", "keywords")
 
 
 def _bench_state(s: Session, account_id: str) -> dict:
@@ -292,6 +316,7 @@ class Toolbox:
             "notes": [{"id": n.id, "title": n.title} for n in notes],
             "name": a.name, "theme": a.theme, "audience": a.audience,
             "content_style": a.content_style, "image_style": a.image_style,
+            "image_mode": f"{a.image_mode or 'ai'}（{ACCOUNT_MODES.get(a.image_mode or 'ai', '')}）",
             "topic_type": a.topic_type, "keywords": a.keywords,
             "rules": [{"id": r.id, "text": r.text} for r in rules],
             "auto_enabled": a.auto_enabled, "auto_frequency": a.auto_frequency.value,
@@ -340,6 +365,10 @@ class Toolbox:
                 continue
             if k == "keywords":
                 v = [str(x).strip() for x in v if str(x).strip()]
+            elif k == "image_mode":
+                v = str(v).strip().lower()
+                if v not in ACCOUNT_MODES:
+                    return {"ok": False, "error": f"image_mode 只能是 {' / '.join(ACCOUNT_MODES)}"}
             else:
                 v = str(v).strip()
             setattr(self.acc, k, v)
@@ -349,7 +378,13 @@ class Toolbox:
         self.acc.updated_at = utcnow()
         self.s.add(self.acc)
         self.s.commit()
-        return {"ok": True, "updated": changed}
+        out: dict[str, Any] = {"ok": True, "updated": changed}
+        if "image_mode" in changed:
+            m = changed["image_mode"]
+            out["note"] = f"以后配图默认：{ACCOUNT_MODES[m]}（已出好的图不变，想让某篇也换就 edit_images 用 mode 重出）"
+            if m in ("ai", "mixed") and not image_configured():
+                out["warning"] = "还没配置 AI 配图（生图 Key），没配之前要 AI 画的会改用排版卡片/跳过；不用额度的做法是 card / photo"
+        return out
 
     async def t_add_rule(self, text: str) -> dict:
         text = text.strip()
@@ -416,6 +451,8 @@ class Toolbox:
         except draft_edit.EditError as e:
             return {"ok": False, "error": str(e)}
         out: dict[str, Any] = {"ok": True, "draft_id": d.id, **res}
+        if res.get("retexted"):
+            out["text_note"] = f"第 {'、'.join(map(str, res['retexted']))} 张的字已经直接改好了（代码排的字，没重新出图）"
         if res["changed"]:
             job = enqueue(self.s, JobKind.generate_images, user_id=d.user_id, account_id=d.account_id,
                           payload={"draft_id": d.id})

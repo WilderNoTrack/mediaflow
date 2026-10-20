@@ -37,7 +37,9 @@ def _out(s: Session, d: Draft, detail: bool = False) -> DraftOut | DraftDetail:
         return DraftOut(**base)
     return DraftDetail(**base, images=[
         ImageOut(id=i.id, idx=i.idx, prompt=i.prompt, status=i.status, url=_img_url(i), error=i.error,
-                 ref_url=_ref_url(d, i), page_type=i.page_type, review=i.review or {}) for i in imgs
+                 ref_url=_ref_url(d, i), page_type=i.page_type, review=i.review or {}, mode=i.mode, made_by=i.made_by,
+                 layout=i.layout or {}, source={k: v for k, v in (i.source or {}).items() if k != "base"},
+                 base_url=f"/files/images/{i.source['base']}" if (i.source or {}).get("base") else None) for i in imgs
     ])
 
 
@@ -180,11 +182,12 @@ def regenerate_images(idx: int | None = None, all: bool = False, d: Draft = Depe
 
 @router.post("/api/drafts/{draft_id}/images/edit", response_model=DraftDetail)
 def edit_images(body: ImageEditIn, d: Draft = Depends(owned_draft), s: Session = Depends(get_session)):
-    """改配图：改描述 / 加一张 / 删一张 / 调顺序 / 照原描述重出（编号按改之前的顺序）。改过的马上重出，其余不动。"""
+    """改配图：改描述 / 加一张 / 删一张 / 调顺序 / 照原描述重出 / 换做法 / 直接改代码排的字（编号按改之前的顺序）。
+    改过的马上重出（改字的当场重排好，不用等），其余不动。"""
     from mediaflow.services import draft_edit
 
     try:
-        res = draft_edit.apply_ops(s, d, [o.model_dump() for o in body.ops])
+        res = draft_edit.apply_ops(s, d, [o.model_dump(exclude_none=True) for o in body.ops])
     except draft_edit.EditError as e:
         raise HTTPException(409 if "正在出图" in str(e) else 400, str(e)) from e
     if body.regenerate and res["changed"]:

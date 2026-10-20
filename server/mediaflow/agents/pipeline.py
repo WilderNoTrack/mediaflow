@@ -24,10 +24,10 @@ from mediaflow.agents.checks import (
 )
 from mediaflow.agents.context import AccountContext, load_context
 from mediaflow.domain.models import (
-    Draft, DraftImage, ImageStatus, Topic, TopicStatus, Trigger, utcnow,
+    Account, Draft, DraftImage, ImageStatus, Topic, TopicStatus, Trigger, utcnow,
 )
 from mediaflow.llm.client import LLM, LLMError, complete_json
-from mediaflow.services.images import image_configured
+from mediaflow.services.images import can_make
 from mediaflow.services.topics import Fetcher, propose_topics
 
 logger = logging.getLogger(__name__)
@@ -616,7 +616,7 @@ async def write_draft(
     )
     session.add(draft)
     session.flush()
-    status = ImageStatus.pending if image_configured() else ImageStatus.skipped
+    status = ImageStatus.pending if can_make(session.get(Account, account_id)) else ImageStatus.skipped
     if plan:  # 改稿时模型可能动了配图描述：张数和每张要什么，还是以用户说的为准
         best.image_prompts = _apply_plan(best.image_prompts, plan)
     for i, p in enumerate(best.image_prompts):
