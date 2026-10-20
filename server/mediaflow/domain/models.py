@@ -136,6 +136,8 @@ class Account(SQLModel, table=True):
     visual: dict = json_obj_col()
     # 小媒的长期记忆：早的聊天滚动压成要点 {summary, upto(压到哪条消息的时间), at}，最近的聊天原样给模型
     chat_memory: dict = json_obj_col()
+    # 配图默认怎么出：ai 整张 AI 画 / mixed AI 画面 + 代码排字 / card 代码排版卡片 / photo 网上找图 + 代码排字 / auto 每张自己挑
+    image_mode: str = "ai"
     # 自动模式
     auto_enabled: bool = False
     auto_frequency: AutoFrequency = AutoFrequency.daily
@@ -242,6 +244,10 @@ class DraftImage(SQLModel, table=True):
     ref_path: str = ""  # 照着原帖哪张图出的（相对 data/images，_refs/ 下的缓存）
     page_type: str = ""  # 账号配图模板里的哪种页（封面/清单页/对比页…）
     review: dict = json_obj_col()  # 出图后看图自检：{ok, problems, fix, redone, at}
+    mode: str = ""  # 用户给这张指定的做法（ai / ai_text / card / photo），空 = 跟账号设定走
+    made_by: str = ""  # 这张实际是怎么做的：ai / ai_text（AI 画面 + 代码排字）/ card（代码排版）/ photo（网上找图 + 代码排字）
+    layout: dict = json_obj_col()  # 代码排的字：{kind, title, subtitle, items, left, right, tag, highlight, position, palette}
+    source: dict = json_obj_col()  # 底图从哪来：{base: 底图本地路径, url, link, site, title, query}（网上找的图记出处）
     error: str = ""
     updated_at: datetime = Field(default_factory=utcnow)
 

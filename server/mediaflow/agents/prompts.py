@@ -289,7 +289,33 @@ IMAGE_SET_USER = """账号配图风格：{image_style}
 这次要出：{targets}
 {mold_block}
 {template_block}
-输出 JSON：{{"spec": "统一视觉规范", "prompts": [{{"idx": 第几张, "prompt": "这一张的提示词"{type_field}}}]}}"""
+{modes_block}
+输出 JSON：{{"spec": "统一视觉规范"{palette_field}, "prompts": [{{"idx": 第几张, "prompt": "这一张的提示词"{type_field}{mode_fields}}}]}}"""
+
+IMAGE_MODES_BLOCK = """
+【这一套图不全靠 AI 画：每张写清做法 mode】可选的做法：
+{options}
+这次每张能选的做法：{allowed}
+每张除了 idx，还要给：
+- mode：从这张能选的做法里挑最合适的
+- layout（ai_text / card / photo 必须给）：代码排上去的字，一字不会错，所以要出现在图上的字都放这里，不要写进 prompt：
+  {{"kind": "cover 封面大字 / list 清单 / steps 步骤 / compare 对比 / quote 金句",
+    "title": "大标题（封面 8-16 字）", "highlight": "标题里要高亮的 2-4 个字", "subtitle": "一句补充（可省略）",
+    "tag": "左上角小标签 2-6 字（可省略）", "items": ["清单/步骤每条一句，10-22 字，3-6 条"],
+    "left": {{"title": "对比左栏 2-5 字", "items": ["…"]}}, "right": {{"title": "…", "items": ["…"]}},
+    "position": "叠在画面上时字放哪：top / center / bottom（避开主体）"}}
+  描述里写了图上要出现的字，就一字不改地放进 layout；没写就按笔记内容提炼，字少而精
+- prompt（ai / ai_text 必须给）：画面描述。ai_text 的画面里不要任何文字，写明在 position 那一侧留出干净、颜色单一的空白给排字
+- query（photo 必须给）：去图片网站搜真实照片用的 2-3 个关键词组（中文，具体到画面，比如「减脂便当 俯拍」「地铁站 通勤 女生 背影」），不要人名和品牌
+还要给整套的 palette（代码排字和卡片的配色，整套一个）：{palettes}
+"""
+
+IMAGE_MODE_OPTIONS = {
+    "ai": "ai：AI 直接画整张图，字也让 AI 写（偶尔会写错字）",
+    "ai_text": "ai_text：AI 只画画面、不写字，标题和要点由代码排上去（字一定对）——要好看的画面又要写字时用",
+    "card": "card：纯代码排版的文字卡片（不画画面，不用生图额度）——清单、步骤、对比、金句这类以字为主的页最合适",
+    "photo": "photo：去网上找真实照片当底图，代码叠字——食物、场景、好物、风景这类要真实感的页",
+}
 
 IMAGE_SPEC_FIXED = """
 【统一视觉规范（这一套已经按它出过别的图，必须原样沿用，spec 字段原样返回）】
