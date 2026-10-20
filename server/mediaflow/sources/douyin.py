@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from urllib.parse import quote, urlencode
 
 import httpx
@@ -77,18 +78,66 @@ def _clean(s: str) -> str:
     return " ".join((s or "").split())
 
 
+def _first(d: dict | None) -> str:
+    return next(iter((d or {}).get("url_list") or []), "")
+
+
+def _cover(aw: dict) -> str:
+    imgs = aw.get("images") or []
+    return _first(imgs[0]) if imgs else _first((aw.get("video") or {}).get("cover"))
+
+
+def _url(aw: dict) -> str:
+    return f"https://www.douyin.com/{'note' if aw.get('images') else 'video'}/{aw.get('aweme_id')}"
+
+
 def _post(aw: dict, author: str = ""):
     from mediaflow.research.types import Post, fmt_count, ms_date
 
     st = aw.get("statistics") or {}
+    a = aw.get("author") or {}
     return Post(
         platform="douyin", title=_clean(aw.get("desc"))[:80] or "（无文案）", native=str(aw.get("aweme_id")),
-        url=f"https://www.douyin.com/video/{aw.get('aweme_id')}",
-        author=author or (aw.get("author") or {}).get("nickname", ""),
+        url=_url(aw), author=author or a.get("nickname", ""),
         likes=fmt_count(st.get("digg_count", "")), comments=fmt_count(st.get("comment_count", "")),
         collects=fmt_count(st.get("collect_count", "")), shares=fmt_count(st.get("share_count", "")),
         published=ms_date(aw.get("create_time")), kind="图文" if aw.get("images") else "视频",
+        author_native=a.get("sec_uid", ""), cover=_cover(aw),
     )
+
+
+# 综合搜索只看图文（content_type=2）：我们做的是图文号，抖音上的图文博主才学得来
+_IMAGE_ONLY = '{"sort_type":"0","publish_time":"0","filter_duration":"","search_range":"0","content_type":"2"}'
+
+
+async def search_hot_authors(keyword: str, timeout: float = 15) -> list[dict]:
+    """按关键词搜抖音上的热门图文，带出作者（找同领域对标账号用）。"""
+    from mediaflow.research.types import fmt_count
+
+    cookie = _need_cookie()
+    async with httpx.AsyncClient(timeout=timeout) as c:
+        for attempt in range(2):  # 偶尔无理由返回空列表，重试一次通常就有
+            data = await api(c, "/aweme/v1/web/general/search/single/", {
+                "search_channel": "aweme_general", "enable_history": "1", "keyword": keyword,
+                "search_source": "tab_search", "query_correct_type": "1", "is_filter_search": "1",
+                "from_group_id": "", "offset": "0", "count": "20", "need_filter_settings": "1", "list_type": "multi",
+                "filter_selected": _IMAGE_ONLY,
+            }, cookie, referer=f"https://www.douyin.com/search/{quote(keyword)}?type=general")
+            if data.get("data") or attempt:
+                break
+            await asyncio.sleep(1)
+    out = []
+    for raw in data.get("data") or []:
+        aw = raw.get("aweme_info") if isinstance(raw, dict) else None
+        a = (aw or {}).get("author") or {}
+        title = _clean((aw or {}).get("desc"))
+        if not aw or not a.get("sec_uid") or not title:
+            continue
+        out.append({"user_id": a["sec_uid"], "name": a.get("nickname", ""), "avatar": _first(a.get("avatar_thumb")),
+                    "native": a["sec_uid"], "title": title[:60],
+                    "likes": fmt_count((aw.get("statistics") or {}).get("digg_count", "")),
+                    "cover": _cover(aw), "kind": "图文" if aw.get("images") else "视频", "url": _url(aw)})
+    return out
 
 
 async def search_creators(name: str, limit: int = 5, timeout: float = 15):
@@ -160,6 +209,35 @@ async def post_detail(native: str, comments: int = 8, timeout: float = 15):
     top = sorted(cm.get("comments") or [], key=lambda x: -count_num(x.get("digg_count")))
     return PostDetail(
         **base.__dict__, content=(aw.get("desc") or "").strip()[:1500],
+        images=[u for u in (_first(im) for im in aw.get("images") or []) if u][:18],
         tags=[t["hashtag_name"] for t in aw.get("text_extra") or [] if t.get("hashtag_name")],
         top_comments=[f"{x.get('digg_count', 0)}赞｜{_clean(x.get('text'))[:120]}" for x in top[:comments] if x.get("text")],
     )
+
+
+_USER = re.compile(r"douyin\.com/(?:share/)?user/([\w\-]{20,})")
+_ITEM = re.compile(r"(?:douyin\.com/(?:share/)?(?:video|note|slides)/|modal_id=|aweme_id=|item_ids=)(\d{15,})")
+
+
+async def resolve_link(text: str, timeout: float = 10) -> tuple[str, str]:
+    """把用户贴的抖音链接解析成 (kind, native)：creator=主页（sec_uid）、post=作品（aweme_id）；认不出返回 ("", "")。
+    支持 v.douyin.com 分享短链（跟随跳转到 iesdouyin.com/share/...）。"""
+    from urllib.parse import unquote
+
+    m = re.search(r"https?://\S+", text or "")
+    if not m:
+        return "", ""
+    url = m.group(0)
+    if "v.douyin.com" in url or "iesdouyin.com" in url:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers={"User-Agent": UA}) as c:
+                r = await c.get(url)
+            url = " ".join([str(h.headers.get("location", "")) for h in r.history] + [str(r.url)])
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"抖音短链打不开：{e}") from e
+    url = unquote(url).replace("iesdouyin.com", "douyin.com")
+    if u := _USER.search(url):
+        return "creator", u.group(1)
+    if i := _ITEM.search(url):
+        return "post", i.group(1)
+    return "", ""

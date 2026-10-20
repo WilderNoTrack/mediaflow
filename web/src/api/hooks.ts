@@ -100,8 +100,10 @@ export function useFindCandidates(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationKey: ["find-cands", id],
-    mutationFn: (body: { query: string; prefer: string }) =>
-      unwrap(api.POST("/api/accounts/{account_id}/benchmark/candidates", { params: { path: { account_id: id } }, body })),
+    mutationFn: (body: { query: string; prefer: string; platform?: string }) =>
+      unwrap(api.POST("/api/accounts/{account_id}/benchmark/candidates", {
+        params: { path: { account_id: id } }, body: { platform: "xiaohongshu", ...body },
+      })),
     onSettled: () => qc.invalidateQueries({ queryKey: ["jobs", id] }),
   });
 }

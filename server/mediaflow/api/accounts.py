@@ -133,7 +133,7 @@ def find_candidates(body: CandidatesIn, acc: Account = Depends(owned_account), s
     """按方向找同领域、有爆款的小红书博主（后台任务，大约半分钟到一分钟）。结果存到账号的 bench_candidates，
     对标页按小红书的样子展示，用户勾选后再调 POST /benchmark。"""
     get_llm()
-    return JobOut(**bench.start_find(s, acc, body.query, body.prefer).model_dump())
+    return JobOut(**bench.start_find(s, acc, body.query, body.prefer, body.platform).model_dump())
 
 
 @router.post("/{account_id}/visual/learn", response_model=JobOut, status_code=202)

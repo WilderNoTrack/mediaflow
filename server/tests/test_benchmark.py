@@ -375,3 +375,69 @@ def test_duplicate_ready_benchmarks_collapse(session, account, client):
 def test_plan_text_is_for_image_posts():
     assert bench._no_video("口语化，常说想说的都在视频里了，不端着。") == "口语化，不端着。"
     assert bench._no_video("视频封面用真人；图文封面用大字") == "图文封面用大字"
+
+
+async def test_find_candidates_on_douyin(session, account, llm, monkeypatch):
+    """抖音（只看图文）也能找对标：候选链接是抖音主页，进度写「在抖音搜」，打分提示词里写的是抖音。"""
+    sec = "MS4wLjABAAAA" + "x" * 30
+
+    async def hot(platform, kw):
+        assert platform == "douyin"
+        return [{"user_id": sec, "name": "抖音穿搭姐", "avatar": "http://a", "native": sec, "title": "一周通勤穿搭",
+                 "likes": "2万", "url": "https://www.douyin.com/note/1", "kind": "图文", "cover": "http://c"},
+                {"user_id": "v" * 30, "name": "视频号", "avatar": "", "native": "v" * 30, "title": "视频",
+                 "likes": "9万", "url": "https://www.douyin.com/video/2", "kind": "视频"}]
+
+    async def creators(platform, kw, n=10):
+        return []
+
+    async def posts(platform, native, n=60):
+        return (Creator(platform=platform, name="抖音穿搭姐", native=native, fans="12万", url=f"https://www.douyin.com/user/{native}"),
+                [Post(platform=platform, title=f"图文{i}", native=str(i), likes="3000", kind="图文", cover=f"http://c{i}",
+                      published=f"2024-05-0{i + 1}") for i in range(4)])
+
+    monkeypatch.setattr(research, "hot_authors_raw", hot)
+    monkeypatch.setattr(research, "creators_raw", creators)
+    monkeypatch.setattr(research, "creator_posts_raw", posts)
+    llm.push("bench_pick", {"picks": [{"no": 1, "fit": 9, "reason": "图文合集"}]})
+    events = []
+    out = await bench.find_candidates(llm, "通勤穿搭", platform="douyin", emit=lambda st, m, d=None: events.append(m))
+    c = out["candidates"][0]
+    assert out["platform"] == "douyin" and c["platform"] == "douyin" and c["url"] == f"https://www.douyin.com/user/{sec}"
+    assert [x["name"] for x in out["candidates"]] == ["抖音穿搭姐"] and c["notes"][0]["cover"].startswith("http://c")
+    assert any("在抖音搜" in m for m in events) and "在抖音按这个方向" in llm.prompts_of("bench_pick")[0]
+
+
+async def test_find_candidates_unsupported_platform(llm):
+    from mediaflow.research.types import Unsupported
+
+    with pytest.raises(Unsupported, match="知乎暂时不能找对标"):
+        await bench.find_candidates(llm, "通勤穿搭", platform="zhihu")
+
+
+def test_add_infers_platform_from_link(session, account):
+    with pytest.raises(ValueError, match="知乎的博主暂时不能对标"):
+        bench.add(session, account, ["https://www.zhihu.com/people/abc"])
+    job, new = bench.add(session, account, ["https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrstu",
+                                            "https://weibo.com/u/1234567890", "程十安an"])
+    assert [b.platform for b in new] == ["douyin", "weibo", "xiaohongshu"]
+
+
+async def test_resolve_links_for_douyin_and_weibo(monkeypatch):
+    from mediaflow.sources import douyin, weibo
+
+    assert await douyin.resolve_link("https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrstu?from=x") == \
+        ("creator", "MS4wLjABAAAAabcdefghijklmnopqrstu")
+    assert await douyin.resolve_link("看看这个 https://www.douyin.com/note/7412345678901234567 不错") == ("post", "7412345678901234567")
+    assert await douyin.resolve_link("https://www.douyin.com/jingxuan?modal_id=7412345678901234567") == ("post", "7412345678901234567")
+    assert weibo.resolve_link("https://weibo.com/u/1005177335") == ("creator", "1005177335")
+    assert weibo.resolve_link("https://weibo.com/1561285607/Pz1AbCdEf") == ("post", "Pz1AbCdEf||1561285607")
+    assert research.platform_of("https://v.douyin.com/abc/") == "douyin" and research.platform_of("程十安") == "xiaohongshu"
+
+    async def detail(platform, native):
+        assert platform == "weibo" and native == "Pz1AbCdEf||1561285607"
+        return PostDetail(platform="weibo", title="t", native=native, author_native="1561285607")
+
+    monkeypatch.setattr(research, "post_detail_raw", detail)
+    c = await research.resolve_creator("weibo", "https://weibo.com/1561285607/Pz1AbCdEf")
+    assert c.native == "1561285607"

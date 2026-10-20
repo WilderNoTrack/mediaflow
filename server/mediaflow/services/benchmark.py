@@ -23,7 +23,7 @@ from mediaflow.domain.models import (
 )
 from mediaflow.llm.client import LLM, complete_json
 from mediaflow.research import service as research
-from mediaflow.research.types import Post, count_num
+from mediaflow.research.types import Post, Unsupported, count_num
 
 logger = logging.getLogger(__name__)
 
@@ -157,8 +157,12 @@ def add(s: Session, acc: Account, targets: list[str], *, theme: str = "", platfo
     if theme.strip() and theme.strip() != acc.theme:
         acc.theme, acc.updated_at = theme.strip(), utcnow()
         s.add(acc)
-    new = [Benchmark(user_id=acc.user_id, account_id=acc.id, platform=platform, target=t, theme=theme.strip(),
-                     creator_name=(names or {}).get(t, "")[:60]) for t in fresh]
+    new = [Benchmark(user_id=acc.user_id, account_id=acc.id, platform=research.platform_of(t, platform), target=t,
+                     theme=theme.strip(), creator_name=(names or {}).get(t, "")[:60]) for t in fresh]
+    bad = [b for b in new if b.platform not in FIND_PLATFORMS]
+    if bad:
+        raise ValueError(f"{research.PLATFORM_LABELS.get(bad[0].platform, bad[0].platform)}的博主暂时不能对标（拿不到图文作品），"
+                         "现在能对标小红书、抖音（图文）、微博的博主")
     s.add_all(new)
     s.commit()
     job = enqueue(s, JobKind.clone_creator, user_id=acc.user_id, account_id=acc.id,
@@ -279,7 +283,7 @@ async def _analyze_one(s: Session, llm: LLM, b: Benchmark, acc: Account, emit: E
 
     if (stats.get("video_share") or 0) > MAX_VIDEO_SHARE:
         emit("warning", f"{prefix}「{b.creator_name}」主要做视频（{int(stats['video_share'] * 100)}%），只拆它的图文笔记", None)
-    pics = [p for p in posts if p.kind != "视频"]
+    pics = [p for p in posts if p.kind == "图文"] or [p for p in posts if p.kind != "视频"]
     hits = sorted(pics or posts, key=lambda p: -_score(p))[:N_HITS]
     details: list[dict] = []
     for i, p in enumerate(hits[:N_DETAILS]):
@@ -316,7 +320,8 @@ async def _analyze_one(s: Session, llm: LLM, b: Benchmark, acc: Account, emit: E
 def _creator_line(b: Benchmark) -> str:
     info = {k: b.creator_info.get(k) for k in ("posts_read", "per_week", "median_likes", "hit_rate", "video_share")
             if b.creator_info.get(k) is not None}
-    return (f"{b.creator_name}｜粉丝 {b.creator_info.get('fans', '?')}｜简介：{b.creator_info.get('desc', '')}"
+    where = "" if b.platform == "xiaohongshu" else f"（{research.PLATFORM_LABELS.get(b.platform, b.platform)}博主）"
+    return (f"{b.creator_name}{where}｜粉丝 {b.creator_info.get('fans', '?')}｜简介：{b.creator_info.get('desc', '')}"
             f"｜{json.dumps(info, ensure_ascii=False)}")
 
 
@@ -485,6 +490,9 @@ def plan_text(acc: Account, benches: list[Benchmark], limit: int = 1800) -> str:
 
 # ── 找同领域候选 ──────────────────────────────────────────────────────────
 
+# 能找对标的平台：要能按关键词搜热门图文（带作者）、看博主作品列表。知乎/B站/公众号拿不到图文博主，暂不支持
+FIND_PLATFORMS = ("xiaohongshu", "douyin", "weibo")
+
 
 async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: list[str] | None = None,
                           exclude: list[str] | None = None, platform: str = "xiaohongshu", limit: int = 6,
@@ -495,10 +503,14 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
         raise ValueError("先说一下想做什么方向，才能找同领域的对标账号")
     queries = [theme] + [k for k in keywords or [] if k and k not in theme][:2]
     skip = {x for x in exclude or [] if x}
+    label = research.PLATFORM_LABELS.get(platform, platform)
+    if platform not in FIND_PLATFORMS:
+        raise Unsupported(f"{label}暂时不能找对标（拿不到博主的作品列表），现在能找的平台："
+                          + "、".join(research.PLATFORM_LABELS[p] for p in FIND_PLATFORMS))
     authors: dict[str, dict] = {}
     notes: list[str] = []
     for q in queries:
-        emit("search", f"在小红书搜「{q}」的热门笔记…", None)
+        emit("search", f"在{label}搜「{q}」的热门{'笔记' if platform == 'xiaohongshu' else '图文'}…", None)
         try:
             rows = await research.hot_authors_raw(platform, q)
         except Exception as e:  # noqa: BLE001 - 一个词搜失败换下一个
@@ -507,8 +519,8 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
         for r in rows:
             if r["name"] in skip or r["user_id"] in skip:
                 continue
-            if r.get("kind") == "视频":
-                continue  # 只要图文
+            if r.get("kind") and r["kind"] != "图文":
+                continue  # 只要图文（微博纯文字、各平台的视频都不要）
             a = authors.setdefault(r["user_id"], {**r, "hits": []})
             if all(h["title"] != r["title"] for h in a["hits"]):
                 a["hits"].append({"title": r["title"], "likes": r["likes"], "url": r["url"],
@@ -547,13 +559,14 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
             continue  # 主要做视频的号：我们做图文，学不来
         if (stats.get("median_likes") or 0) < 20 and count_num(creator.fans) < 1e4:
             continue  # 几乎没互动的小号不值得对标
-        posts = [p for p in posts if p.kind != "视频"] or posts
+        posts = [p for p in posts if p.kind == "图文"] or [p for p in posts if p.kind != "视频"] or posts
         uid, _, tok = a["native"].partition("|")
+        url = (f"https://www.xiaohongshu.com/user/profile/{uid}" + (f"?xsec_token={tok}&xsec_source=pc_search" if tok else "")
+               if platform == "xiaohongshu" else creator.url or a.get("url", ""))
         cands.append({
             "name": creator.name or a["name"], "avatar": a["avatar"] or creator.extra.get("avatar", ""),
-            "fans": creator.fans,
-            "desc": creator.desc[:80], "url": f"https://www.xiaohongshu.com/user/profile/{uid}"
-                                             + (f"?xsec_token={tok}&xsec_source=pc_search" if tok else ""),
+            "fans": creator.fans, "platform": platform,
+            "desc": creator.desc[:80], "url": url,
             **{k: stats[k] for k in ("median_likes", "hit_rate", "per_week", "last_post", "posts_read") if k in stats},
             "hits": a["hits"][:2],
             "top": [{"title": p.title, "likes": p.likes, "url": p.url}
@@ -572,7 +585,7 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
         out = await complete_json(llm, [
             {"role": "system", "content": prompts.BENCH_PICK_SYSTEM},
             {"role": "user", "content": prompts.BENCH_PICK_USER.format(
-                untrusted_notice=prompts.UNTRUSTED_NOTICE, theme=theme, prefer=prefer.strip() or "无",
+                untrusted_notice=prompts.UNTRUSTED_NOTICE, theme=theme, prefer=prefer.strip() or "无", platform=label,
                 candidates="\n".join(
                     f"{i + 1}｜{c['name']}｜{c['fans'] or '?'}｜{c['desc']}｜中位赞 {c.get('median_likes', '?')}，"
                     f"爆款率 {c.get('hit_rate', '?')}，周更 {c.get('per_week', '?')}，最近 {c.get('last_post', '?')}"
@@ -591,7 +604,7 @@ async def find_candidates(llm: LLM, theme: str, *, prefer: str = "", keywords: l
     good = [c for c in cands if c["fit"] >= 5]
     dropped = len(cands) - len(good)
     good.sort(key=lambda c: (-c["fit"], -(c.get("median_likes") or 0)))
-    res: dict[str, Any] = {"theme": theme, "candidates": good[:limit]}
+    res: dict[str, Any] = {"theme": theme, "platform": platform, "candidates": good[:limit]}
     if dropped:
         notes.append(f"另有 {dropped} 个博主主要不做这个方向，没放进来")
     if notes:
@@ -606,27 +619,31 @@ def store_candidates(s: Session, acc: Account, res: dict, prefer: str = "") -> N
     s.commit()
 
 
-def start_find(s: Session, acc: Account, query: str = "", prefer: str = ""):
+def start_find(s: Session, acc: Account, query: str = "", prefer: str = "", platform: str = "xiaohongshu"):
     """排一个「找同领域对标候选」的后台任务，进度在对标页显示。"""
     from mediaflow.jobs.queue import enqueue
 
     query = (query or acc.theme).strip()
     if not query:
         raise ValueError("先说一下想做什么方向，才能找同领域的对标账号")
+    if platform not in FIND_PLATFORMS:
+        raise ValueError(f"{research.PLATFORM_LABELS.get(platform, platform)}暂时不能找对标")
     return enqueue(s, JobKind.find_benchmarks, user_id=acc.user_id, account_id=acc.id,
-                   payload={"query": query, "prefer": prefer.strip()})
+                   payload={"query": query, "prefer": prefer.strip(), "platform": platform})
 
 
-async def run_find(s: Session, llm: LLM, account_id: str, query: str, prefer: str = "", emit: Emit = _noop) -> dict:
+async def run_find(s: Session, llm: LLM, account_id: str, query: str, prefer: str = "", emit: Emit = _noop,
+                   platform: str = "xiaohongshu") -> dict:
     acc = s.get(Account, account_id)
     if acc is None:
         raise LookupError("账号不存在")
     have = [x for b in listing(s, acc.id) for x in (b.creator_name, b.target) if x]
-    res = await find_candidates(llm, query, prefer=prefer, keywords=acc.keywords, exclude=have, emit=emit)
+    res = await find_candidates(llm, query, prefer=prefer, keywords=acc.keywords, exclude=have, emit=emit,
+                                platform=platform)
     store_candidates(s, acc, res, prefer)
     n = len(res["candidates"])
     from mediaflow.agents.manager import post_note
-    post_note(s, acc, f"按「{query}」在小红书找了 {n} 个同领域的号，放在「对标」页了，能看到各自的数据和最火的几篇。"
+    post_note(s, acc, f"按「{query}」在{research.PLATFORM_LABELS.get(platform, platform)}找了 {n} 个同领域的号，放在「对标」页了，能看到各自的数据和最火的几篇。"
                       "挑 1-3 个点「学习选中的」；想换方向或有特别要求（比如粉丝少一点的、做图文的）直接跟我说。"
               if n else f"按「{query}」没找到合适的同领域账号，换个说法或者直接贴想对标的号给我。")
     emit("done", f"找到 {n} 个候选", {"count": n})

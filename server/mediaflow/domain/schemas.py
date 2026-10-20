@@ -89,12 +89,13 @@ class BenchmarkIn(BaseModel):
     target: str = Field("", max_length=500, description="只对标一个时也可以用这个字段")
     names: list[str] = Field(default=[], max_length=3, description="可选：和 targets 一一对应的博主名字（从候选里选时带上，拆解前就能显示）")
     theme: str = Field("", max_length=100, description="想换成的主题，留空用账号现有主题")
-    platform: str = "xiaohongshu"
+    platform: str = Field("xiaohongshu", description="只写了名字时去哪个平台找；给的是链接就按链接认平台（小红书/抖音/微博）")
 
 
 class CandidatesIn(BaseModel):
     query: str = Field("", max_length=100, description="方向，留空用账号主题")
     prefer: str = Field("", max_length=200, description="额外要求，如「粉丝少一点」「做通勤穿搭」")
+    platform: str = Field("xiaohongshu", description="在哪个平台找：xiaohongshu / douyin（只看图文）/ weibo")
 
 
 class ReviseIn(BaseModel):

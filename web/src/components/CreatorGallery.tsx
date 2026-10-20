@@ -1,10 +1,25 @@
 import { Check, CheckCircle2, ExternalLink, Heart, PlayCircle, RefreshCw, Search, SlidersHorizontal, Wand2 } from "lucide-react";
 import { useState } from "react";
-import type { Account, Candidate, Job, JobEvent, NoteCard } from "../api/client";
-import { useClone, useFindCandidates } from "../api/hooks";
+import { BENCH_PLATFORMS, platformLabel, type Account, type BenchPlatform, type Candidate, type Job, type JobEvent, type NoteCard } from "../api/client";
+import { useClone, useCredentials, useFindCandidates } from "../api/hooks";
 import { cn } from "../lib/utils";
 import { hitText, isBenchmarked, MAX_BENCH } from "./CandidatePicker";
-import { Avatar, Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Spinner } from "./ui";
+import { Avatar, Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Pills, Spinner } from "./ui";
+
+/** 在哪个平台找对标：小红书 / 抖音图文 / 微博；没连的平台提示先去连接 */
+export function PlatformPick({ value, onChange }: { value: BenchPlatform; onChange: (v: BenchPlatform) => void }) {
+  const { data: creds } = useCredentials();
+  const cur = BENCH_PLATFORMS.find((p) => p.value === value)!;
+  const ok = creds?.find((c) => c.key === cur.cred)?.configured ?? true;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-muted-foreground">在哪找</span>
+      <Pills<BenchPlatform> value={value} onChange={onChange} items={BENCH_PLATFORMS.map((p) => ({ value: p.value, label: p.label }))} />
+      {!ok && <span className="text-amber-600">{platformLabel(value)}还没连，先去首页「连接平台」里连上</span>}
+      {ok && value !== "xiaohongshu" && <span className="text-muted-foreground">只找做图文的号，学到的打法会换成小红书的写法</span>}
+    </div>
+  );
+}
 
 const fmt = (n?: number) => (n == null ? "" : n >= 10000 ? `${(n / 10000).toFixed(1)}万` : String(n));
 
@@ -56,7 +71,7 @@ export function NoteGrid({ notes, className }: { notes: NoteCard[]; className?: 
   );
 }
 
-type Found = { theme?: string; prefer?: string; candidates?: Candidate[]; notes?: string[] };
+type Found = { theme?: string; prefer?: string; platform?: string; candidates?: Candidate[]; notes?: string[] };
 
 /** 对标页里的候选：每个号一行，像小红书主页一样能看到 TA 最火的几篇，勾选 1-3 个开始学 */
 export function CandidateGallery({ account, found, collapsed }: { account: Account; found: Found; collapsed?: boolean }) {
@@ -66,17 +81,20 @@ export function CandidateGallery({ account, found, collapsed }: { account: Accou
   const [tuning, setTuning] = useState(false);
   const [query, setQuery] = useState(found.theme || account.theme);
   const [prefer, setPrefer] = useState(found.prefer || "");
+  const [platform, setPlatform] = useState<BenchPlatform>((found.platform as BenchPlatform) || "xiaohongshu");
   const [open, setOpen] = useState(!collapsed);
   const cands = found.candidates ?? [];
   const slots = MAX_BENCH - account.benchmarks.filter((b) => b.status !== "failed").length;
   const toggle = (url: string) =>
     setPicked((p) => (p.includes(url) ? p.filter((x) => x !== url) : p.length >= slots ? p : [...p, url]));
-  const again = (q = query, p = prefer) => find.mutate({ query: q.trim() || account.theme, prefer: p });
+  const again = (q = query, p = prefer, pf: string = tuning ? platform : found.platform || "xiaohongshu") =>
+    find.mutate({ query: q.trim() || account.theme, prefer: p, platform: pf });
+  const where = platformLabel(found.platform);
 
   return (
     <Card className="border-indigo-200">
       <CardHead icon={<Search />}
-        title={<>按「{found.theme}」找到的同领域账号 <span className="font-normal text-muted-foreground">{cands.length}</span></>}
+        title={<>按「{found.theme}」在{where}找到的同领域账号 <span className="font-normal text-muted-foreground">{cands.length}</span></>}
         desc={slots > 0 ? `看看各自最火的几篇，挑 ${slots > 1 ? `1-${slots}` : "1"} 个学；点封面看原帖${found.prefer ? `（要求：${found.prefer}）` : ""}` : `已经对标 ${MAX_BENCH} 个了，想换就先在上面删掉一个`}
         action={
           <div className="flex gap-1.5">
@@ -86,12 +104,15 @@ export function CandidateGallery({ account, found, collapsed }: { account: Accou
           </div>
         } />
       {tuning && (
-        <form className="grid gap-2 border-b bg-slate-50/60 px-5 py-3 sm:grid-cols-[1fr_1.4fr_auto]"
-          onSubmit={(e) => { e.preventDefault(); again(); setTuning(false); }}>
-          <Input value={query} placeholder="方向，例如：通勤穿搭" onChange={(e) => setQuery(e.target.value)} />
-          <Input value={prefer} placeholder="额外要求：粉丝少一点、做图文的、最近还在更…" onChange={(e) => setPrefer(e.target.value)} />
-          <Button type="submit" variant="gradient" disabled={!query.trim()}><Search />重新找</Button>
-        </form>
+        <div className="space-y-2 border-b bg-slate-50/60 px-5 py-3">
+          <PlatformPick value={platform} onChange={setPlatform} />
+          <form className="grid gap-2 sm:grid-cols-[1fr_1.4fr_auto]"
+            onSubmit={(e) => { e.preventDefault(); again(query, prefer, platform); setTuning(false); }}>
+            <Input value={query} placeholder="方向，例如：通勤穿搭" onChange={(e) => setQuery(e.target.value)} />
+            <Input value={prefer} placeholder="额外要求：粉丝少一点、最近还在更…" onChange={(e) => setPrefer(e.target.value)} />
+            <Button type="submit" variant="gradient" disabled={!query.trim()}><Search />重新找</Button>
+          </form>
+        </div>
       )}
       {open && (
         <CardBody className="space-y-4">
@@ -114,6 +135,7 @@ export function CandidateGallery({ account, found, collapsed }: { account: Accou
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-base font-semibold">{c.name}</span>
                       {c.level && <Badge className="bg-indigo-50 text-indigo-600">{c.level}</Badge>}
+                      {c.platform && c.platform !== "xiaohongshu" && <Badge className="bg-slate-100 text-slate-600">{platformLabel(c.platform)}</Badge>}
                       <a href={c.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
                         className="inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"><ExternalLink className="size-3" />主页</a>
                     </div>
@@ -170,7 +192,7 @@ export function FindProgress({ job }: { job: Job }) {
   const cur = last ? Math.max(0, FIND_STEPS.findIndex((s) => s.stage === last.stage)) : 0;
   return (
     <Card className="border-indigo-200">
-      <CardHead icon={<Search />} title={`正在小红书上找「${String((job.payload as Record<string, unknown>).query ?? "")}」的同领域账号`}
+      <CardHead icon={<Search />} title={`正在${platformLabel(String((job.payload as Record<string, unknown>).platform ?? ""))}上找「${String((job.payload as Record<string, unknown>).query ?? "")}」的同领域账号`}
         desc="大约半分钟到一分钟，找到后直接在这里挑" />
       <CardBody className="space-y-4">
         <div className="space-y-2.5">

@@ -71,6 +71,51 @@ def _fmt(n) -> str:
     return fmt_count(n) if isinstance(n, int) else str(n or "")
 
 
+def _pic(pid: str, size: str = "orj360") -> str:
+    return f"https://wx1.sinaimg.cn/{size}/{pid}.jpg" if pid else ""
+
+
+def _pics(m: dict, size: str = "large") -> list[str]:
+    """一条微博的配图地址；size=orj360 是列表里用的小图（封面），large 是原图（学配图模板用）。"""
+    infos = m.get("pic_infos") or {}
+    out = []
+    for pid in m.get("pic_ids") or []:
+        info = infos.get(pid) or {}
+        url = (info.get(size) or {}).get("url") if size in info else ""
+        out.append(url or (_pic(pid, size) if size == "orj360" else ((info.get("largest") or {}).get("url") or _pic(pid, size))))
+    return [u for u in out if u]
+
+
+async def search_hot_authors(keyword: str, timeout: float = 15) -> list[dict]:
+    """按关键词搜微博「热门」，带出作者（找同领域对标账号用）。只留带图的微博——我们做的是图文号。"""
+    from bs4 import BeautifulSoup
+
+    async with _client(timeout) as c:
+        r = await c.get("https://s.weibo.com/weibo", params={"q": keyword, "xsort": "hot", "suball": "1", "Refer": "g"})
+    if r.status_code != 200:
+        raise RuntimeError("微博搜索失败：Cookie 可能过期了，请在「数据来源」里重新填写")
+    out = []
+    for card in BeautifulSoup(r.text, "html.parser").select('div.card-wrap[mid]'):
+        a = card.select_one("a.name")
+        m = re.search(r"weibo\.com/(?:u/)?(\d{5,})", a.get("href", "")) if a else None
+        el = card.select_one("p.txt")
+        if not m or not el:
+            continue
+        text = re.sub(r"\s*(全文|收起)\s*$", "", el.get_text(" ", strip=True)).strip()
+        pics = [i.get("src", "") for i in card.select("div.media img") if i.get("src")]
+        video = card.select_one("div.media video, div.media [action-data*=video], .WB_video")
+        acts = [li.get_text(strip=True) for li in card.select("div.card-act li")]
+        link = card.select_one("div.from a[href]")
+        href = link["href"] if link else ""
+        avatar = card.select_one("div.avator img")
+        out.append({"user_id": m.group(1), "name": a.get_text(strip=True), "native": m.group(1),
+                    "avatar": avatar.get("src", "") if avatar else "", "title": text[:60],
+                    "likes": re.sub(r"\D", "", acts[-1]) if acts else "", "cover": ("https:" + pics[0]) if pics and pics[0].startswith("//") else (pics[0] if pics else ""),
+                    "kind": "视频" if video else ("图文" if pics else "文字"),
+                    "url": ("https:" + href.split("?")[0]) if href.startswith("//") else href.split("?")[0]})
+    return out
+
+
 async def search_creators(name: str, limit: int = 5, timeout: float = 15):
     from bs4 import BeautifulSoup
 
@@ -113,7 +158,8 @@ async def creator_posts(native: str, limit: int = 10, timeout: float = 15):
                           native=f"{m['mblogid']}|{m.get('id', '')}|{native}", author=creator.name,
                           url=f"https://weibo.com/{native}/{m['mblogid']}", likes=_fmt(m.get("attitudes_count")),
                           comments=_fmt(m.get("comments_count")), shares=_fmt(m.get("reposts_count")),
-                          published=_date(m.get("created_at", "")), kind=_kind(m)))
+                          published=_date(m.get("created_at", "")), kind=_kind(m),
+                          cover=next(iter(_pics(m, "orj360")), "")))
     return creator, posts[:limit]
 
 
@@ -134,7 +180,28 @@ async def post_detail(native: str, comments: int = 8, timeout: float = 15):
         author=(m.get("user") or {}).get("screen_name", ""), likes=_fmt(m.get("attitudes_count")),
         comments=_fmt(m.get("comments_count")), shares=_fmt(m.get("reposts_count")),
         published=_date(m.get("created_at", "")), kind=_kind(m), content=content.strip()[:1500],
+        author_native=uid, images=_pics(m)[:18], cover=next(iter(_pics(m, "orj360")), ""),
         tags=[t["topic_title"] for t in m.get("topic_struct") or [] if t.get("topic_title")],
         top_comments=[f"{x.get('like_counts', 0)}赞｜{_text(x.get('text_raw') or x.get('text'))[:120]}"
                       for x in top[:comments] if x.get("text_raw") or x.get("text")],
     )
+
+
+_UID = re.compile(r"(?:weibo\.com|weibo\.cn)/(?:u/|profile/)?(\d{5,})(?:[/?#]|$)")
+_MBLOG = re.compile(r"weibo\.com/(\d{5,})/([A-Za-z0-9]{8,})")
+_MID = re.compile(r"m\.weibo\.cn/(?:detail|status)/([A-Za-z0-9]{8,})")
+
+
+def resolve_link(text: str) -> tuple[str, str]:
+    """把用户贴的微博链接解析成 (kind, native)：creator=主页（uid）、post=一条微博（mblogid||uid）；认不出返回 ("", "")。"""
+    m = re.search(r"https?://\S+", text or "")
+    if not m:
+        return "", ""
+    url = m.group(0)
+    if p := _MBLOG.search(url):
+        return "post", f"{p.group(2)}||{p.group(1)}"
+    if p := _MID.search(url):
+        return "post", f"{p.group(1)}||"
+    if u := _UID.search(url):
+        return "creator", u.group(1)
+    return "", ""

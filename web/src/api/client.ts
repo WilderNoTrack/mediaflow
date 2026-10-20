@@ -17,8 +17,17 @@ export type Candidate = {
   name: string; url: string; avatar?: string; fans?: string; desc?: string;
   median_likes?: number; hit_rate?: number; per_week?: number | null; last_post?: string;
   hits?: NoteCard[]; top?: NoteCard[]; notes?: NoteCard[];
-  fit?: number; level?: string; reason?: string; learn?: string;
+  fit?: number; level?: string; reason?: string; learn?: string; platform?: string;
 };
+/** 能找对标的平台（抖音只看图文号） */
+export type BenchPlatform = "xiaohongshu" | "douyin" | "weibo";
+export const BENCH_PLATFORMS: { value: BenchPlatform; label: string; cred: string }[] = [
+  { value: "xiaohongshu", label: "小红书", cred: "xhs_cookie" },
+  { value: "douyin", label: "抖音图文", cred: "douyin_cookie" },
+  { value: "weibo", label: "微博", cred: "weibo_cookie" },
+];
+export const platformLabel = (p?: string) =>
+  ({ xiaohongshu: "小红书", douyin: "抖音", weibo: "微博", bilibili: "B站", zhihu: "知乎" } as Record<string, string>)[p ?? ""] ?? "小红书";
 export type NoteCard = { title: string; likes: string; url: string; cover?: string; kind?: string; date?: string };
 export type JobEvent = { at: string; stage: string; message: string; data: Record<string, unknown> };
 

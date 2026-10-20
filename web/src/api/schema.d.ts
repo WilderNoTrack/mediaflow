@@ -1131,6 +1131,7 @@ export interface components {
             theme: string;
             /**
              * Platform
+             * @description 只写了名字时去哪个平台找；给的是链接就按链接认平台（小红书/抖音/微博）
              * @default xiaohongshu
              */
             platform: string;
@@ -1198,6 +1199,12 @@ export interface components {
              * @default
              */
             prefer: string;
+            /**
+             * Platform
+             * @description 在哪个平台找：xiaohongshu / douyin（只看图文）/ weibo
+             * @default xiaohongshu
+             */
+            platform: string;
         };
         /** ChatIn */
         ChatIn: {

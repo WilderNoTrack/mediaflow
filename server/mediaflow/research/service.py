@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -226,6 +227,33 @@ async def hot_authors_raw(platform: str, keyword: str) -> list[dict]:
     return await _throttled(platform, ("ha", platform, keyword), lambda: fn(keyword))
 
 
+def platform_of(target: str, default: str = "xiaohongshu") -> str:
+    """从链接认平台（小红书 / 抖音 / 微博 / B站 / 知乎），认不出（比如只写了名字）就用 default。"""
+    t = (target or "").lower()
+    for key, p in (("xiaohongshu.com", "xiaohongshu"), ("xhslink.com", "xiaohongshu"), ("douyin.com", "douyin"),
+                   ("weibo.com", "weibo"), ("weibo.cn", "weibo"), ("bilibili.com", "bilibili"), ("b23.tv", "bilibili"),
+                   ("zhihu.com", "zhihu")):
+        if key in t:
+            return p
+    return default
+
+
+async def _resolve_link(platform: str, target: str) -> tuple[str, str]:
+    if platform == "xiaohongshu":
+        from mediaflow.sources import xhs
+        return await xhs.resolve_link(target)
+    if platform == "douyin":
+        from mediaflow.sources import douyin
+        return await douyin.resolve_link(target)
+    if platform == "weibo":
+        from mediaflow.sources import weibo
+        return weibo.resolve_link(target)
+    if platform == "bilibili":
+        m = re.search(r"space\.bilibili\.com/(\d+)", target)
+        return ("creator", m.group(1)) if m else ("", "")
+    return "", ""
+
+
 def _norm(s: str) -> str:
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
@@ -238,19 +266,17 @@ async def resolve_creator(platform: str, target: str) -> Creator:
     target = (target or "").strip()
     if not target:
         raise ValueError("请给一个对标账号：主页链接、笔记链接或博主名字")
-    if platform == "xiaohongshu":
-        from mediaflow.sources import xhs
-
-        kind, native = await xhs.resolve_link(target)
+    if target.startswith("http") or "http" in target:
+        kind, native = await _resolve_link(platform, target)
         if kind == "post":
             d = await post_detail_raw(platform, native)
             if not d.author_native:
-                raise LookupError("这篇笔记没拿到作者信息，换成博主主页链接试试")
+                raise LookupError("这篇作品没拿到作者信息，换成博主主页链接试试")
             kind, native = "creator", d.author_native
         if kind == "creator":
             return Creator(platform=platform, name="", native=native)
-    elif target.startswith("http"):
-        raise Unsupported(f"{PLATFORM_LABELS.get(platform, platform)}暂不支持用链接找博主，请直接写博主名字")
+        if target.startswith("http"):
+            raise Unsupported(f"认不出这个{PLATFORM_LABELS.get(platform, platform)}链接，换成博主主页链接，或者直接写博主名字")
     fn = _need(platform, "search_creators", "搜博主")
     found: list[Creator] = await _throttled(platform, ("sc", platform, target, 10), lambda: fn(target, 10))
     if not found:

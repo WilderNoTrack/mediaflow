@@ -98,7 +98,10 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
 【对标账号】用户想照着别人的路子做（「对标」「复刻」「照着某某做」「按这个博主的路子起号」），一个账号最多同时对标 3 个：
 - 用户给了链接、名字或小红书号：直接 clone_creator（targets 原样传，可以一次传多个）。
 - 用户只说了方向、没指定是谁（「帮我找几个做穿搭的号」）：用 find_benchmarks 找同领域、有爆款的博主。
-  结果会以卡片形式展示在对话里，同时按小红书主页的样子（带作品封面）放到「对标」页，你不用逐个复述，只用两三句话点出最值得学的 1-2 个和理由，
+- 默认在小红书找；用户想看抖音、微博上的图文博主（「抖音上做图文的」「微博上的穿搭博主」）就 find_benchmarks 带 platform，
+  抖音只找图文号（视频号学不来）。别的平台的打法会换成小红书图文的写法再用。知乎、B站、公众号暂时不能对标（拿不到图文博主的作品），
+  用户要的话如实说，可以改用 research_* 调研那边的内容。
+  结果会以卡片形式展示在对话里，同时按主页的样子（带作品封面）放到「对标」页，你不用逐个复述，只用两三句话点出最值得学的 1-2 个和理由，
   然后说「勾选后点『学习选中的』，或者直接告诉我选哪几个」。用户说「选第 1 和第 3 个」就把对应的 url 传给 clone_creator。
   用户说「再找一批」「要粉丝少一点的」就再调 find_benchmarks，把要求写进 prefer。
 - 默认只找同领域；用户明确要跨领域借鉴（比如「学美妆博主的标题写法」）才放宽，写进 prefer。
@@ -205,10 +208,12 @@ TOOLS = [
         "content": {"type": "string", "description": "要点，400 字以内"},
     }, ["title", "content"]),
     _tool("remove_note", "删除一条运营笔记（ID 见账号状态）", {"note_id": {"type": "string"}}, ["note_id"]),
-    _tool("find_benchmarks", "按方向找同领域、有爆款的小红书博主当对标候选（带粉丝、点赞中位数、爆款率、值得学的地方），"
-          "结果会以可勾选的卡片展示给用户。大约半分钟到一分钟", {
+    _tool("find_benchmarks", "按方向找同领域、有爆款的图文博主当对标候选（带粉丝、点赞中位数、爆款率、值得学的地方），"
+          "默认在小红书找，也能在抖音（只看图文）、微博找。结果会以可勾选的卡片展示给用户。大约半分钟到一分钟", {
               "query": {"type": "string", "description": "方向，如「通勤穿搭」；不传用账号主题"},
               "prefer": {"type": "string", "description": "可选：用户的额外要求，如「粉丝少一点」「要做视频的」"},
+              "platform": {"type": "string", "enum": ["xiaohongshu", "douyin", "weibo"],
+                           "description": "在哪个平台找，默认 xiaohongshu；用户说「抖音上的」「微博上的」才换"},
           }),
     _tool("ask_user", "问用户一个有常见答案的问题，或者请用户拍板一个提议：选项显示成按钮，用户点一下就行（也能自己打字）。"
           "调用后这一轮对话就结束、等用户回答，所以要先把该做的工具调用做完（可以同一步一起发）", {
@@ -218,10 +223,13 @@ TOOLS = [
               "multi": {"type": "boolean", "description": "可以多选时为 true（比如受众可以同时是几类人）"},
               "kind": {"type": "string", "enum": ["choice", "confirm"], "description": "choice 选答案；confirm 确认一个提议"},
           }, ["question", "options"]),
-    _tool("clone_creator", "对标 1-3 个小红书账号：后台读作品、逐个拆打法、合成一套并换成新主题，自动更新定位/规则/选题库", {
+    _tool("clone_creator", "对标 1-3 个图文博主（小红书、抖音图文、微博都行）：后台读作品、逐个拆打法、合成一套并换成新主题，"
+          "自动更新定位/规则/选题库", {
         "targets": {"type": "array", "items": {"type": "string"},
-                    "description": "对标账号列表：主页链接、笔记链接、博主名字或小红书号，原样传"},
+                    "description": "对标账号列表：主页链接、作品链接、博主名字或小红书号，原样传（链接会自动认平台）"},
         "theme": {"type": "string", "description": "用户想换成的主题；用户没说且账号已有主题时可以不传"},
+        "platform": {"type": "string", "enum": ["xiaohongshu", "douyin", "weibo"],
+                     "description": "只给了名字时去哪个平台找，默认 xiaohongshu；给的是链接不用传"},
     }, ["targets"]),
 ]
 
@@ -450,22 +458,23 @@ class Toolbox:
             return {**_already(e, "这篇已经在改了（没有重复开），改完草稿页会更新；新要求等这轮改完再说"), "draft_id": d.id}
         return {"ok": True, "job_id": job.id, "draft_id": d.id, "note": "在后台改，大约 1 分钟，改完草稿页会更新"}
 
-    async def t_find_benchmarks(self, query: str = "", prefer: str = "") -> dict:
+    async def t_find_benchmarks(self, query: str = "", prefer: str = "", platform: str = "xiaohongshu") -> dict:
         from mediaflow.services import benchmark as bench
 
         rows = bench.listing(self.s, self.acc.id)
         have = [x for b in rows for x in (b.creator_name, b.target) if x]
         out = await bench.find_candidates(self.llm, query.strip() or self.acc.theme, prefer=prefer,
-                                          keywords=self.acc.keywords, exclude=have)
+                                          keywords=self.acc.keywords, exclude=have, platform=platform or "xiaohongshu")
         bench.store_candidates(self.s, self.acc, out, prefer)
         return {"ok": True, **out, "slots_left": bench.MAX_BENCH - len(rows)}
 
-    async def t_clone_creator(self, targets: list[str] | str = "", theme: str = "", target: str = "") -> dict:
+    async def t_clone_creator(self, targets: list[str] | str = "", theme: str = "", target: str = "",
+                              platform: str = "xiaohongshu") -> dict:
         from mediaflow.services import benchmark as bench
 
         items = [targets] if isinstance(targets, str) else list(targets or [])
         try:
-            job, new = bench.add(self.s, self.acc, [*items, target], theme=theme)
+            job, new = bench.add(self.s, self.acc, [*items, target], theme=theme, platform=platform or "xiaohongshu")
         except JobConflict as e:
             return _already(e, "对标账号已经在学了（没有重复开），学完会自动更新定位和选题库")
         except ValueError as e:
@@ -624,7 +633,8 @@ def _tool_text(session: Session, m: ChatMessage, jobs: dict[str, Job]) -> str:
     if not isinstance(r, dict):
         return m.content[:HISTORY_TOOL_CHARS]
     if name == "find_benchmarks":
-        r = {"ok": r.get("ok"), **({"error": r["error"]} if r.get("error") else {}), "candidates": [
+        r = {"ok": r.get("ok"), **({"error": r["error"]} if r.get("error") else {}),
+             **({"platform": r["platform"]} if r.get("platform") else {}), "candidates": [
             {"no": i + 1, **{k: c[k] for k in ("name", "url", "fans", "median_likes", "level") if c.get(k) not in (None, "")}}
             for i, c in enumerate(r.get("candidates") or [])]}
         return _clip(r, 1500)

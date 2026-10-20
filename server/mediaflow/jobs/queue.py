@@ -132,7 +132,7 @@ async def _handle_find(job: Job, emit) -> dict:
     p = job.payload
     with session_scope() as s:
         return await benchmark.run_find(s, get_llm(), job.account_id or "", p.get("query") or "", p.get("prefer") or "",
-                                        emit=emit)
+                                        emit=emit, platform=p.get("platform") or "xiaohongshu")
 
 
 async def _handle_revise(job: Job, emit) -> dict:

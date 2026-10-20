@@ -4,11 +4,11 @@ import {
   Plus, RefreshCw, Search, Sparkles, Trash2, Wand2, X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Account, Benchmark, Candidate, Job, JobEvent } from "../api/client";
+import { platformLabel, type Account, type Benchmark, type BenchPlatform, type Candidate, type Job, type JobEvent } from "../api/client";
 import { isActive, useClone, useCredentials, useFindCandidates, useIsAdmin, usePendingChat, useRemoveBenchmark } from "../api/hooks";
 import { cn } from "../lib/utils";
 import { hitText, MAX_BENCH } from "./CandidatePicker";
-import { CandidateGallery, FindProgress, NoteGrid, uniqNotes } from "./CreatorGallery";
+import { CandidateGallery, FindProgress, NoteGrid, PlatformPick, uniqNotes } from "./CreatorGallery";
 import { QrLogin } from "./QrLogin";
 import { Markdown } from "./Markdown";
 import { Avatar, Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Label, Modal, Pills, Spinner, Textarea } from "./ui";
@@ -153,6 +153,7 @@ function AddBenchmark({ account, onCancel, onStarted, compact }: { account: Acco
   const clone = useClone(account.id);
   const [query, setQuery] = useState(account.theme);
   const [prefer, setPrefer] = useState("");
+  const [platform, setPlatform] = useState<BenchPlatform>("xiaohongshu");
   const [links, setLinks] = useState("");
   const [theme, setTheme] = useState(account.theme);
   const slots = MAX_BENCH - account.benchmarks.filter((b) => b.status !== "failed").length;
@@ -167,16 +168,17 @@ function AddBenchmark({ account, onCancel, onStarted, compact }: { account: Acco
           { value: "find", label: "帮我找同领域的号" }, { value: "link", label: "我有想对标的号" },
         ]} />
         {mode === "find" ? <>
-          <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(e) => { e.preventDefault(); if (query.trim()) find.mutate({ query: query.trim(), prefer }, { onSuccess: () => onStarted?.() }); }}>
+          <PlatformPick value={platform} onChange={setPlatform} />
+          <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={(e) => { e.preventDefault(); if (query.trim()) find.mutate({ query: query.trim(), prefer, platform }, { onSuccess: () => onStarted?.() }); }}>
             <Input value={query} placeholder="方向，例如：通勤穿搭" onChange={(e) => setQuery(e.target.value)} />
-            <Input value={prefer} placeholder="额外要求（可选），如：粉丝少一点、做图文的" onChange={(e) => setPrefer(e.target.value)} />
+            <Input value={prefer} placeholder="额外要求（可选），如：粉丝少一点、最近还在更" onChange={(e) => setPrefer(e.target.value)} />
             <Button type="submit" variant="gradient" loading={find.isPending} disabled={!query.trim()}>{!find.isPending && <Search />}找候选</Button>
           </form>
           <ErrorText error={find.error} />
         </> : <>
           <div>
-            <Label hint="每行一个：主页链接、笔记链接、博主名字或小红书号">对标账号</Label>
-            <Textarea rows={3} value={links} placeholder={"https://www.xiaohongshu.com/user/profile/…\n程十安an"} onChange={(e) => setLinks(e.target.value)} />
+            <Label hint="每行一个：主页链接或作品链接（小红书、抖音、微博都行）、博主名字或小红书号">对标账号</Label>
+            <Textarea rows={3} value={links} placeholder={"https://www.xiaohongshu.com/user/profile/…\nhttps://www.douyin.com/user/…\n程十安an"} onChange={(e) => setLinks(e.target.value)} />
           </div>
           {!account.theme && (
             <div>
@@ -211,10 +213,11 @@ function BenchCard({ account, bench: b, busy }: { account: Account; bench: Bench
   return (
     <div className={cn("group relative rounded-xl border-2 bg-card p-4", failed && "border-red-200 bg-red-50/40")}>
       <div className="flex items-center gap-3">
-        {avatar ? <img src={avatar} alt="" referrerPolicy="no-referrer" className="size-10 rounded-full object-cover" /> : <Avatar name={b.creator_name || (b.target.startsWith("http") ? "红" : b.target) || "?"} size="sm" />}
+        {avatar ? <img src={avatar} alt="" referrerPolicy="no-referrer" className="size-10 rounded-full object-cover" /> : <Avatar name={b.creator_name || (b.target.startsWith("http") ? platformLabel(b.platform).slice(0, 1) : b.target) || "?"} size="sm" />}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="truncate font-medium">{b.creator_name || (b.target.startsWith("http") ? "小红书账号" : b.target)}</span>
+            <span className="truncate font-medium">{b.creator_name || (b.target.startsWith("http") ? `${platformLabel(b.platform)}账号` : b.target)}</span>
+            {b.platform && b.platform !== "xiaohongshu" && <Badge className="shrink-0 bg-slate-100 text-slate-600">{platformLabel(b.platform)}</Badge>}
             {b.creator_url && <a href={b.creator_url} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground" aria-label="主页"><ExternalLink className="size-3" /></a>}
           </div>
           <div className="truncate text-xs text-muted-foreground">

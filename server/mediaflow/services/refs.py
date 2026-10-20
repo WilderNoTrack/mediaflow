@@ -22,6 +22,15 @@ _HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Apple
                           "Chrome/124.0 Safari/537.36", "Referer": "https://www.xiaohongshu.com/"}
 
 
+def _referer(url: str) -> str:
+    """各家图床认自己的 Referer（微博图床见到别家的 Referer 会 403）。"""
+    if "sinaimg.cn" in url:
+        return "https://weibo.com/"
+    if "douyinpic.com" in url or "douyin" in url:
+        return "https://www.douyin.com/"
+    return "https://www.xiaohongshu.com/"
+
+
 def _key(url: str) -> str:
     # 小红书图片地址形如 https://sns-webpic-qc.xhscdn.com/<时间戳>/<签名>/<图片ID>!nd_dft_wlteh_webp_3，
     # 只有图片 ID 是稳定的，用它做缓存键
@@ -47,7 +56,7 @@ async def _fetch(c: httpx.AsyncClient, url: str) -> bytes | None:
     if path.exists():
         return path.read_bytes()
     try:
-        r = await c.get(url)
+        r = await c.get(url, headers={"Referer": _referer(url)})
         r.raise_for_status()
         data = await asyncio.to_thread(_to_jpeg, r.content)
     except Exception as e:  # noqa: BLE001 - 参考图拿不到就少一张，不影响出图
