@@ -1,4 +1,4 @@
-import { Brain, ChevronDown, ChevronRight, MessageCircle, Send, X } from "lucide-react";
+import { Brain, Check, ChevronDown, ChevronRight, MessageCircle, PenLine, Send, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Account, Candidate, ChatMessage } from "../api/client";
 import { type ChatStep, useChat, useLiveChat, usePendingChat, useSendChat } from "../api/hooks";
@@ -40,6 +40,7 @@ function toolSummary(m: ChatMessage) {
   const args = (m.payload?.args ?? {}) as Record<string, string>;
   const result = (m.payload?.result ?? {}) as Record<string, unknown>;
   if (result.ok === false) return `没成功：${String(result.error ?? "")}`;
+  if (result.already_running) return "已经在做了，没有重复开，进度见下方";
   if (m.tool_name.startsWith("research_")) {
     const what = [PLATFORM_LABEL[args.platform] ?? args.platform, args.keyword ?? args.name].filter(Boolean).join(" · ");
     const n = Array.isArray(result.items) ? result.items.length : Array.isArray(result.creators) ? result.creators.length
@@ -84,7 +85,16 @@ export function ChatPanel({ account, onClose, wide, draft }: {
 }) {
   const { data: msgs = [], isLoading } = useChat(account.id);
   const send = useSendChat(account.id, draft?.id);
-  const [text, setText] = useState("");
+  // 没发出去的话按账号（和正在看的草稿）存在本地：切到别的页面再回来还在
+  const draftKey = `mf-chat-draft:${account.id}:${draft?.id ?? ""}`;
+  const [text, setTextRaw] = useState(() => localStorage.getItem(draftKey) ?? "");
+  useEffect(() => { setTextRaw(localStorage.getItem(draftKey) ?? ""); }, [draftKey]);
+  const setText = (v: string) => {
+    setTextRaw(v);
+    if (v) localStorage.setItem(draftKey, v);
+    else localStorage.removeItem(draftKey);
+  };
+  const input = useRef<HTMLTextAreaElement>(null);
   const pending = usePendingChat(account.id).at(-1) ?? null;
   const { data: live } = useLiveChat(account.id);
   const box = useRef<HTMLDivElement>(null);
@@ -102,9 +112,12 @@ export function ChatPanel({ account, onClose, wide, draft }: {
   const submit = (t = text) => {
     const v = t.trim();
     if (!v || pending) return;
-    setText("");
+    if (t === text) setText("");
     send.mutate(v);
   };
+  // 小媒最后一句是带选项的提问、用户还没回：在它下面放按钮
+  const lastMsg = [...msgs].reverse().find((m) => m.role !== "tool");
+  const ask = !pending && !live && lastMsg?.role === "assistant" ? (lastMsg.payload?.ask as Ask | undefined) : undefined;
 
   const welcome = `你好！我是小媒，帮你打理「${account.name}」。\n\n不知道从哪开始？点下面的按钮就行：\n- **找对标账号**：我去小红书找几个做得好的同类账号，学 TA 们的套路\n- **今天写一篇**：选题、文案、配图我来，你看看、改改就能发\n\n有想法也可以直接打字，比如「我是二胎宝妈，想分享带娃省钱经验」。`;
 
@@ -136,6 +149,7 @@ export function ChatPanel({ account, onClose, wide, draft }: {
               {(g.payload.steps as ChatStep[]).map((st) => st.message_id && byId.get(st.message_id)
                 ? <ToolCard key={st.id} account={account} m={byId.get(st.message_id)!} /> : null)}
               <Bubble role="assistant" text={g.content} />
+              {ask && g.id === lastMsg?.id && <AskButtons key={g.id} ask={ask} onPick={(t) => submit(t)} onSelf={() => input.current?.focus()} />}
             </div>
           ) : <Bubble key={g.id} role={g.role} text={g.content} />,
         )}
@@ -151,7 +165,7 @@ export function ChatPanel({ account, onClose, wide, draft }: {
       </div>
 
       <div className="border-t p-3">
-        {!pending && (
+        {!pending && !ask && (
           <div className="-mx-3 mb-2 flex gap-1.5 overflow-x-auto px-3 pb-0.5">
             {(draft ? DRAFT_SUGGESTIONS : suggestions(account)).map((s) => (
               <button key={s} onClick={() => submit(s)} className="shrink-0 cursor-pointer rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs text-indigo-600 transition-colors hover:bg-indigo-100">{s}</button>
@@ -160,9 +174,10 @@ export function ChatPanel({ account, onClose, wide, draft }: {
         )}
         <div className="flex items-end gap-2">
           <Textarea
+            ref={input}
             rows={1}
             value={text}
-            placeholder={draft ? "比如「第 3 张换成前后对比」「开头再口语一点」…" : "聊定位、改配置、或说「写一篇试试」…"} title="Enter 发送，Shift+Enter 换行"
+            placeholder={ask ? "点上面的选项，或者自己说…" : draft ? "比如「第 3 张换成前后对比」「开头再口语一点」…" : "聊定位、改配置、或说「写一篇试试」…"} title="Enter 发送，Shift+Enter 换行"
             className="max-h-32 min-h-9 resize-none py-2"
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); } }}
@@ -174,6 +189,65 @@ export function ChatPanel({ account, onClose, wide, draft }: {
       </div>
     </div>
   );
+}
+
+type Ask = { question?: string; options: string[]; multi?: boolean; kind?: "choice" | "confirm" };
+
+/** 小媒问的选择题 / 确认：点一下就当用户说了这句话；多选的先勾再点确定；也可以自己打字 */
+function AskButtons({ ask, onPick, onSelf }: { ask: Ask; onPick: (t: string) => void; onSelf: () => void }) {
+  const [sel, setSel] = useState<string[]>([]);
+  const own = ask.options.some((o) => /我来|自己/.test(o));
+  const pill = "flex cursor-pointer items-center gap-1 rounded-full border px-3 py-1.5 text-sm transition-colors";
+  const self = !own && (
+    <button onClick={onSelf} className={cn(pill, "border-dashed border-slate-300 bg-white text-muted-foreground hover:text-foreground")}>
+      <PenLine className="size-3.5" />我自己说
+    </button>
+  );
+  if (ask.multi) {
+    const toggle = (o: string) => setSel(sel.includes(o) ? sel.filter((x) => x !== o) : [...sel, o]);
+    return (
+      <div className="ml-10 space-y-1.5">
+        <div className="text-xs text-muted-foreground">可以多选</div>
+        <div className="flex flex-wrap gap-1.5">
+          {ask.options.map((o) => {
+            const on = sel.includes(o);
+            return (
+              <button key={o} onClick={() => toggle(o)} aria-pressed={on}
+                className={cn(pill, on ? "border-indigo-500 bg-indigo-500 text-white" : "border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-50")}>
+                {on && <Check className="size-3.5" />}{o}
+              </button>
+            );
+          })}
+          <Button size="sm" variant="gradient" className="rounded-full" disabled={!sel.length} onClick={() => onPick(sel.join("、"))}>
+            确定{sel.length > 0 && `（${sel.length}）`}
+          </Button>
+          {self}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="ml-10 flex flex-wrap gap-1.5">
+      {ask.options.map((o, i) => (
+        <button key={o} onClick={() => onPick(o)}
+          className={cn(pill, ask.kind === "confirm" && i === 0
+            ? "border-transparent bg-brand-gradient font-medium text-white shadow-sm hover:opacity-90"
+            : "border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-50")}>
+          {ask.kind === "confirm" && i === 0 && <Check className="size-3.5" />}{o}
+        </button>
+      ))}
+      {self}
+    </div>
+  );
+}
+
+/** 没成功、但后面同一个操作又做成了的（小媒自己改了参数重试）：不算失败 */
+function retriedOk<T extends { name: string; ok?: boolean }>(list: T[]): Set<number> {
+  const out = new Set<number>();
+  list.forEach((t, i) => {
+    if (t.ok === false && list.slice(i + 1).some((x) => x.name === t.name && x.ok !== false)) out.add(i);
+  });
+  return out;
 }
 
 /** 连续的工具记录合成一组，默认折叠成一行「做了 N 件事」 */
@@ -191,21 +265,25 @@ function groupTools(msgs: ChatMessage[]): (ChatMessage | ChatMessage[])[] {
 
 function ToolGroup({ items }: { items: ChatMessage[] }) {
   const [open, setOpen] = useState(items.length <= 2);
-  const failed = items.filter((m) => (m.payload?.result as { ok?: boolean })?.ok === false).length;
+  const flat = items.map((m) => ({ name: m.tool_name, ok: (m.payload?.result as { ok?: boolean })?.ok }));
+  const retried = retriedOk(flat);
+  const bad = items.filter((_, i) => flat[i].ok === false && !retried.has(i));
+  const failed = bad.length;
   return (
     <div className="ml-10 rounded-lg border border-indigo-100 bg-indigo-50/50 text-xs text-indigo-800">
       {items.length > 2 && (
         <button onClick={() => setOpen(!open)} className="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-left font-medium">
-          <span>⚙️</span>做了 {items.length} 件事{failed > 0 && <span className="text-red-600">（{failed} 件没成功）</span>}
+          <span>⚙️</span>做了 {items.length} 件事{failed > 0 && <span className="truncate text-red-600">
+            （{failed === 1 ? `${TOOL_META[bad[0].tool_name]?.label ?? bad[0].tool_name}没成功：${String((bad[0].payload?.result as { error?: string })?.error ?? "").slice(0, 40)}` : `${failed} 件没成功`}）</span>}
           <ChevronDown className={cn("ml-auto size-3.5 transition-transform", open && "rotate-180")} />
         </button>
       )}
       {open && (
         <div className={cn("space-y-1 px-2.5 py-1.5", items.length > 2 && "border-t border-indigo-100")}>
-          {items.map((m) => {
+          {items.map((m, i) => {
             const meta = TOOL_META[m.tool_name];
-            const sum = toolSummary(m);
-            const bad = sum.startsWith("没成功");
+            const sum = retried.has(i) ? "这次没成功，后面换了个方式重试成功了" : toolSummary(m);
+            const bad = !retried.has(i) && sum.startsWith("没成功");
             return (
               <div key={m.id} className="flex items-center gap-1.5">
                 <span>{meta?.icon ?? "🔧"}</span>
@@ -256,7 +334,10 @@ function Process({ steps, byId, live, started, total }: {
   const now = useNow(!!live);
   const tools = steps.filter((s) => s.kind === "tool");
   const thinkMs = steps.filter((s) => s.kind === "thinking").reduce((a, s) => a + (s.ms ?? (live && s.started ? now - s.started : 0)), 0);
-  const failed = tools.filter((s) => s.ok === false).length;
+  const retried = retriedOk(tools.map((t) => ({ name: t.name ?? "", ok: t.ok })));
+  const bad = tools.filter((t, i) => t.ok === false && !retried.has(i));
+  const failed = bad.length;
+  const retriedIds = new Set(tools.filter((_, i) => retried.has(i)).map((t) => t.id));
   const simple = !tools.length && !steps.some((s) => s.kind === "note" || s.text);
   if (simple && !live) return <div className="ml-10 flex items-center gap-1 text-xs text-muted-foreground"><Brain className="size-3" />思考了 {secs(thinkMs)}</div>;
   const elapsed = live && started ? now - started : total ?? 0;
@@ -268,20 +349,22 @@ function Process({ steps, byId, live, started, total }: {
         <span className="font-medium">{live ? "小媒正在处理" : "处理完了"}</span>
         <span className="text-indigo-600/70">
           · {live ? "已" : ""}用时 {secs(elapsed)}{thinkMs > 0 && ` · 思考 ${secs(thinkMs)}`}{tools.length > 0 && ` · 做了 ${tools.length} 件事`}
-          {failed > 0 && <span className="text-red-600">（{failed} 件没成功）</span>}
+          {failed > 0 && <span className="text-red-600">（{failed === 1
+            ? `${TOOL_META[bad[0].name ?? ""]?.label ?? bad[0].name}没成功${bad[0].error ? `：${bad[0].error.slice(0, 40)}` : ""}`
+            : `${failed} 件没成功，点开看原因`}）</span>}
         </span>
         {!live && <ChevronDown className={cn("ml-auto size-3.5 shrink-0 transition-transform", open && "rotate-180")} />}
       </button>
       {show && (
         <div className="space-y-0.5 border-t border-indigo-100 px-1.5 py-1">
-          {steps.map((st) => <StepRow key={st.id} st={st} m={st.message_id ? byId.get(st.message_id) : undefined} now={now} live={!!live} />)}
+          {steps.map((st) => <StepRow key={st.id} st={st} m={st.message_id ? byId.get(st.message_id) : undefined} now={now} live={!!live} retried={retriedIds.has(st.id)} />)}
         </div>
       )}
     </div>
   );
 }
 
-function StepRow({ st, m, now, live }: { st: ChatStep; m?: ChatMessage; now: number; live: boolean }) {
+function StepRow({ st, m, now, live, retried }: { st: ChatStep; m?: ChatMessage; now: number; live: boolean; retried?: boolean }) {
   const [open, setOpen] = useState(false);
   const running = st.kind !== "note" && st.ms == null && live;
   const ms = st.ms ?? (running && st.started ? now - st.started : undefined);
@@ -297,7 +380,9 @@ function StepRow({ st, m, now, live }: { st: ChatStep; m?: ChatMessage; now: num
     head = <>
       <span>{meta?.icon ?? "🔧"}</span>
       <span className="shrink-0 font-medium">{meta?.label ?? st.name}{running && "…"}</span>
-      {st.ok === false ? <span className="truncate text-red-600">没成功</span> : sum && <span className="truncate text-indigo-600/70" title={sum}>{sum}</span>}
+      {st.ok === false ? (retried ? <span className="truncate text-amber-600">没成功，后面重试成功了</span>
+        : <span className="truncate text-red-600" title={st.error}>没成功{st.error ? `：${st.error}` : ""}</span>)
+        : sum && <span className="truncate text-indigo-600/70" title={sum}>{sum}</span>}
     </>;
     const args = Object.entries(st.args ?? {}).filter(([, v]) => v !== "" && v != null);
     detail = (

@@ -319,7 +319,9 @@ async def revise(s: Session, llm: LLM, acc: Account, instruction: str) -> dict:
     acc.updated_at = utcnow()
     s.add(acc)
     s.commit()
-    return {"changed": str(raw.get("changed") or ("按描述起了一套配图模板" if fresh else ""))[:100],
+    changed = (f"按你的描述起了一套配图模板：{len(tpl['pages'])} 种页（{'、'.join(p['type'] for p in tpl['pages'])}）" if fresh
+               else str(raw.get("changed") or ""))
+    return {"changed": changed[:100],
             "pages": [p["type"] for p in tpl["pages"]], "spec": tpl["spec"], **({"created": True} if fresh else {})}
 
 

@@ -54,7 +54,7 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    有常见答案的问题（受众是谁、文案什么调调、配图什么感觉、多久发一篇）用 ask_user 给 3-4 个选项按钮，用户点一下就行，也能自己打字；
    你拟好一个具体方案想让用户拍板时（帮他起的定位、配图风格、选题），用 ask_user kind=confirm，选项如「就按这个定」「换一个」「我来改改」。
    用户点了同意就马上调用对应工具落实（update_profile / update_visual / write_post），不要再问一遍；点了「换一个」就换个方案再问；点了「我来改改」就问他想改哪里。
-   开放的问题（「你想分享哪方面的经验」）直接问，不用按钮。ask_user 调用后这一轮就结束了，问题写在 question 里，回复里不要再重复。
+   问之前先把用户这句话里已经说清楚的信息存下（update_profile 和 ask_user 同一步一起发）。开放的问题（「你想分享哪方面的经验」）直接问，不用按钮。ask_user 调用后这一轮就结束了，问题写在 question 里，回复里不要再重复。
 4. 用户想要选题，用 find_topics；想写一篇，用 write_post（可以带选题 ID 或方向）。写稿在后台进行，对话里会出现进度卡片，写好后卡片会变成稿子（带封面和打分），你只需一句话说「开始写了，大概 1-3 分钟」。
    find_topics 的结果也会以卡片列在对话里（每个都有「写这篇」按钮），不要逐条复述，挑 1-2 个说说为什么值得写即可。
 5. 工具结果里有失败或降级（比如热点来源没抓到），必须如实告诉用户，不能装作正常。
@@ -589,6 +589,14 @@ def _sanitize(reply: str) -> str:
     return "\n\n".join(keep).strip()
 
 
+def _same_words(lead: str, q: str) -> bool:
+    """调 ask_user 前说的话和问题差不多（模型常把方案说一遍、问题里又说一遍）：只留问题，不重复。"""
+    from difflib import SequenceMatcher
+
+    a, b = (re.sub(r"[\W_*]+", "", x) for x in (lead, q))
+    return not a or a in b or (len(a) >= 12 and a[:12] in b) or SequenceMatcher(None, a, b).ratio() > 0.5
+
+
 def _ask(args: dict) -> tuple[str, dict | None]:
     """ask_user 的参数 → (问题, 按钮)。选项不到 2 个就当普通提问。"""
     q = str(args.get("question") or "").strip()
@@ -785,7 +793,7 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
                 # 问用户：同一步的其他操作做完后这一轮就结束，问题当回复，选项存进消息给界面画按钮
                 q, ask = _ask(asks[0].arguments if not asks[0].error else {})
                 lead = _sanitize(lead)
-                reply = (q if not lead or lead in q else lead if q in lead else f"{lead}\n\n{q}") or "你看怎么定？"
+                reply = (q if not lead or _same_words(lead, q) else lead if q in lead else f"{lead}\n\n{q}") or "你看怎么定？"
                 break
         else:
             # 步数用完：不再给工具，让模型基于已做的操作给用户一个交代（类似 Agents SDK 的 max_turns 收尾）

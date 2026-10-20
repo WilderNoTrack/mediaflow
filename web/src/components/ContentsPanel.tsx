@@ -3,7 +3,7 @@ import { AlertTriangle, ChevronRight, FileText, PenLine, Sparkles, Trash2, Trend
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, unwrap, type Account, type Draft } from "../api/client";
-import { useDrafts, useWrite } from "../api/hooks";
+import { useDrafts, useTopics, useWrite } from "../api/hooks";
 import { cn, DRAFT_STATUS, timeAgo } from "../lib/utils";
 import { Badge, Button, Empty, ErrorText, Input, Pills, Spinner } from "./ui";
 
@@ -16,7 +16,12 @@ export function ContentsPanel({ account, busy, onGoTopics }: { account: Account;
   const qc = useQueryClient();
   const nav = useNavigate();
   const [filter, setFilter] = useState<Filter>("all");
-  const [hint, setHint] = useState("");
+  const { data: topics = [] } = useTopics(accountId);
+  // 输入框的例子跟着账号走：选题库里还没写的 > 账号关键词 > 主题
+  const example = (topics.find((t) => t.status === "new")?.title || account.keywords[0] || account.theme || "").slice(0, 20);
+  const draftKey = `mf-write-hint:${accountId}`;
+  const [hint, setHintRaw] = useState(() => localStorage.getItem(draftKey) ?? "");
+  const setHint = (v: string) => { setHintRaw(v); v ? localStorage.setItem(draftKey, v) : localStorage.removeItem(draftKey); };
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
@@ -42,7 +47,7 @@ export function ContentsPanel({ account, busy, onGoTopics }: { account: Account;
         <div className="mb-2 flex items-center gap-2 text-sm font-medium"><Sparkles className="size-4 text-indigo-500" />立即创作一篇</div>
         <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); start(); }}>
           <Input
-            placeholder={account.theme ? "想写什么？比如「月薪5千怎么存钱」；留空就按账号定位挑选题" : "先在「账号设定」或跟小媒聊聊定位，写出来会更准"}
+            placeholder={account.theme ? `想写什么？${example ? `比如「${example}」；` : ""}留空就按账号定位挑选题` : "先在「账号设定」或跟小媒聊聊定位，写出来会更准"}
             value={hint}
             onChange={(e) => setHint(e.target.value)}
           />
