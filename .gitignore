@@ -17,3 +17,7 @@ server/data/
 # 构建产物
 web/dist/
 *.tsbuildinfo
+
+# 在线版部署
+deploy/online.env
+/data/

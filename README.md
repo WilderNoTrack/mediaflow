@@ -2,7 +2,7 @@
 
 小红书 AI 运营助手：和「运营管家」聊出账号定位，自动找热点选题、写稿、自检改稿、配图，最后**导出图文包由你手动发布**。
 
-> v2 是完全重写的版本，专注「AI 写好内容」这件事，本地运行、无需登录。旧版代码保留在 `main` 分支历史中。
+> v2 是完全重写的版本，专注「AI 写好内容」这件事。默认本地运行、无需登录；也可以部署成**在线版**给几个人一起用（见 [DEPLOY.md](DEPLOY.md)）。旧版代码保留在 `main` 分支历史中。
 
 ## 功能
 
@@ -41,6 +41,19 @@ uv run mediaflow            # 自动打开 http://127.0.0.1:8765
 | `MEDIAFLOW_PORT` | 否 | 端口，默认 8765 |
 
 完整列表见 `server/.env.example`。
+
+### 在线版（多人使用）
+
+设置 `MEDIAFLOW_AUTH=password` 即开启登录：管理员配好模型 Key 和平台登录态，在「成员管理」里给别人开账号；每个人的账号、草稿互相隔离，成员有每日写稿 / 对话额度。部署到服务器（Docker 或 systemd + nginx、国内镜像源、HTTPS、备案、备份）见 **[DEPLOY.md](DEPLOY.md)**。
+
+| 变量 | 说明 |
+| --- | --- |
+| `MEDIAFLOW_AUTH` | `password` 开启在线版；不设为本地版 |
+| `MEDIAFLOW_SECRET` | 登录签名密钥（在线版必填，`openssl rand -hex 32`） |
+| `MEDIAFLOW_ADMIN_USER` / `MEDIAFLOW_ADMIN_PASSWORD` | 首次启动时创建的管理员 |
+| `MEDIAFLOW_DAILY_WRITES` / `MEDIAFLOW_DAILY_CHATS` | 成员每日额度，默认 20 / 200，0 不限 |
+
+忘了密码：`mediaflow reset-password <用户名>`。
 
 ### 数据来源（选题搜索）
 
@@ -104,4 +117,5 @@ cd web && npm run gen:api
 - [ ] 发布前预览更接近小红书真实效果
 - [ ] 数据回流：导入笔记数据，反哺选题和写法
 - [ ] 稳定的自动发布（视平台情况）
-- [ ] 多用户 / SaaS（数据模型已预留 `user_id`）
+- [x] 多用户在线版（登录、成员管理、数据隔离、每日额度）
+- [ ] 成员自己连平台账号、按人计费

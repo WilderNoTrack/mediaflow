@@ -32,3 +32,20 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build image
+        run: docker build --build-arg NPM_REGISTRY=https://registry.npmjs.org --build-arg PIP_INDEX_URL=https://pypi.org/simple -t mediaflow:ci .
+      - name: smoke test（在线版：要登录、管理员能登进去、前端能打开）
+        run: |
+          docker run -d --name mf -p 8765:8765 -e MEDIAFLOW_AUTH=password -e MEDIAFLOW_SECRET=ci-secret-0123456789abcdef -e MEDIAFLOW_ADMIN_PASSWORD=ci-admin-123 mediaflow:ci
+          for i in $(seq 30); do curl -sf localhost:8765/health && break; sleep 2; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8765/api/accounts)" = 401
+          curl -sf -c cj -X POST localhost:8765/api/auth/login -H 'content-type: application/json' -d '{"username":"admin","password":"ci-admin-123"}'
+          curl -sf -b cj localhost:8765/api/accounts
+          curl -sf localhost:8765/ | grep -q 'id="root"'
+      - if: always()
+        run: docker logs mf || true

@@ -1,0 +1,5 @@
+# DOMAIN 来自 deploy/online.env，例如 mf.example.com；Caddy 会自动申请并续期 HTTPS 证书
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:8765
+}

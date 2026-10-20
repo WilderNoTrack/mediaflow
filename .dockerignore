@@ -1,0 +1,12 @@
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+web/dist
+server/data
+server/.env
+deploy/online.env
+data
+*.db
+*.log
