@@ -7,15 +7,16 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from mediaflow import __version__
-from mediaflow.api import accounts, drafts, misc, settings, topics
+from mediaflow.api import accounts, auth as auth_api, drafts, misc, settings, topics
+from mediaflow.api.deps import current_user
 from mediaflow.config import get_settings
-from mediaflow.db import init_db
+from mediaflow.db import init_db, session_scope
 from mediaflow.jobs.queue import JobConflict, recover_interrupted, worker_loop
 from mediaflow.jobs.scheduler import scheduler_loop
 from mediaflow.llm.client import LLMError, LLMNotConfigured
@@ -27,6 +28,12 @@ WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    from mediaflow.services import auth
+
+    with session_scope() as s:
+        auth.bootstrap_admin(s)
+    if auth.enabled():
+        auth._secret()  # 没配签名密钥直接启动失败，别等到登录时才发现
     n = recover_interrupted()
     if n:
         logger.warning("上次有 %d 个任务没跑完，已标记为失败", n)
@@ -48,8 +55,11 @@ def create_app(*, background: bool = True) -> FastAPI:
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                        allow_methods=["*"], allow_headers=["*"])
 
+    app.include_router(auth_api.router)
+    app.include_router(auth_api.admin)
+    login = [Depends(current_user)]  # 在线版：除了登录接口，全部要先登录
     for r in (accounts.router, topics.router, drafts.router, misc.router, settings.router):
-        app.include_router(r)
+        app.include_router(r, dependencies=login)
 
     @app.exception_handler(LookupError)
     async def _404(_: Request, e: LookupError):
@@ -75,15 +85,36 @@ def create_app(*, background: bool = True) -> FastAPI:
     def health():
         return {"status": "ok", "version": __version__}
 
-    app.mount("/files/images", StaticFiles(directory=get_settings().images_dir, check_dir=False), name="images")
+    @app.get("/files/images/{path:path}", include_in_schema=False)
+    def image_file(path: str, u=Depends(current_user)):
+        """配图只给本人看：第一级目录是草稿 ID，对得上才返回。_refs（对标原图缓存）登录即可看，_test 只给管理员。"""
+        from mediaflow.domain.models import Draft
+        from mediaflow.services import auth
+
+        root = get_settings().images_dir.resolve()
+        f = (root / path).resolve()
+        if root not in f.parents or not f.is_file():
+            raise HTTPException(404)
+        top = f.relative_to(root).parts[0]
+        if auth.enabled() and top != "_refs":
+            if top == "_test":
+                ok = u.is_admin
+            else:
+                with session_scope() as s:
+                    d = s.get(Draft, top)
+                    ok = d is not None and d.user_id == u.id
+            if not ok:
+                raise HTTPException(404)
+        return FileResponse(f, headers={"Cache-Control": "private, max-age=86400"})
 
     if WEB_DIST.exists():
         app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
-            f = WEB_DIST / path
-            if path and f.is_file():
+            root = WEB_DIST.resolve()
+            f = (root / path).resolve()
+            if path and root in f.parents and f.is_file():  # 防止 ../ 读到前端目录以外的文件
                 return FileResponse(f)
             return FileResponse(WEB_DIST / "index.html")
 

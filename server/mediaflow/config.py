@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     worker_concurrency: int = 2
     scheduler_interval_seconds: int = 60
 
+    # 在线版（部署到服务器给几个人用）
+    mediaflow_auth: str = "none"        # none=本地单人版，不用登录；password=账号密码登录
+    mediaflow_secret: str = ""          # 登录 Cookie 的签名密钥，password 模式必填（随机长字符串）
+    mediaflow_admin_user: str = "admin"  # 首次启动时自动建的管理员
+    mediaflow_admin_password: str = ""
+    mediaflow_daily_writes: int = 20    # 每个普通成员每天最多写几篇（0=不限），管理员不限
+    mediaflow_daily_chats: int = 200    # 每个普通成员每天最多和小媒说几句（0=不限）
+
     @property
     def data_dir(self) -> Path:
         p = Path(self.mediaflow_data_dir).expanduser().resolve()

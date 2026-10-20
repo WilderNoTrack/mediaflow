@@ -48,6 +48,10 @@ def enqueue(session: Session, kind: JobKind, *, user_id: str, account_id: str | 
         existing = active_write_job(session, account_id, kind)
         if existing:
             raise JobConflict(existing)
+    if kind == JobKind.write_draft:
+        from mediaflow.services.auth import check_quota
+
+        check_quota(session, user_id, "writes")
     job = Job(kind=kind, user_id=user_id, account_id=account_id, payload=payload)
     session.add(job)
     session.commit()

@@ -1,5 +1,5 @@
 import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap, type Job, type S } from "./client";
+import { api, ApiError, unwrap, type Job, type S } from "./client";
 
 const ACTIVE = ["queued", "running"];
 
@@ -299,4 +299,58 @@ export function useSaveLlmKey() {
       qc.invalidateQueries({ queryKey: ["system"] });
     },
   });
+}
+
+// ─── 登录（在线版） ─────────────────────────────────────────────────────────
+
+export type Me = S["MeOut"];
+
+/** 我是谁；在线版没登录时是 null（页面显示登录框）。本地版永远是默认用户。 */
+export const useMe = () =>
+  useQuery({
+    queryKey: ["me"],
+    queryFn: async () => {
+      const { data, response } = await api.GET("/api/auth/me");
+      if (response.status === 401) return null;
+      if (!response.ok || !data) throw new ApiError(`请求失败（${response.status}）`, response.status, null);
+      return data;
+    },
+    retry: false,
+  });
+
+/** 管理员才能改全站设置（Key、平台账号）；本地版自己就是管理员 */
+export const useIsAdmin = () => useMe().data?.is_admin ?? false;
+
+export function useLogin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: S["LoginIn"]) => unwrap(api.POST("/api/auth/login", { body })),
+    onSuccess: (me) => { qc.clear(); qc.setQueryData(["me"], me); },
+  });
+}
+
+export function useLogout() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(api.POST("/api/auth/logout")),
+    onSuccess: () => { qc.clear(); qc.setQueryData(["me"], null); },
+  });
+}
+
+export const useChangePassword = () =>
+  useMutation({ mutationFn: (body: S["PasswordIn"]) => unwrap(api.POST("/api/auth/password", { body })) });
+
+export const useUsers = () => useQuery({ queryKey: ["users"], queryFn: () => unwrap(api.GET("/api/admin/users")) });
+
+export function useUserActions() {
+  const qc = useQueryClient();
+  const inv = () => qc.invalidateQueries({ queryKey: ["users"] });
+  return {
+    add: useMutation({ mutationFn: (body: S["UserIn"]) => unwrap(api.POST("/api/admin/users", { body })), onSuccess: inv }),
+    update: useMutation({
+      mutationFn: ({ id, ...body }: S["UserPatch"] & { id: string }) =>
+        unwrap(api.PATCH("/api/admin/users/{user_id}", { params: { path: { user_id: id } }, body })),
+      onSuccess: inv,
+    }),
+  };
 }

@@ -10,6 +10,7 @@ from mediaflow.domain.models import Account, ChatMessage, Job
 from mediaflow.domain.schemas import ChatIn, ChatMessageOut, CreatorOut, JobOut, SystemStatus
 from mediaflow.llm.client import get_llm
 from mediaflow.llm.client import llm_configured
+from mediaflow.services import auth
 from mediaflow.services.images import image_configured
 
 router = APIRouter(tags=["misc"])
@@ -32,6 +33,7 @@ def chat_history(acc: Account = Depends(owned_account), s: Session = Depends(get
 
 @router.post("/api/accounts/{account_id}/chat", response_model=list[ChatMessageOut])
 async def send_chat(body: ChatIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    auth.check_quota(s, acc.user_id, "chats")
     msgs = await manager.chat(s, get_llm(), acc.id, body.text.strip())
     return [ChatMessageOut(**m.model_dump()) for m in msgs]
 

@@ -105,6 +105,13 @@ class ChatRole(str, Enum):
 class User(SQLModel, table=True):
     id: str = Field(default_factory=_id, primary_key=True)
     name: str = "本地用户"
+    # 在线版登录用；本地版的默认用户这些都为空
+    username: str | None = Field(default=None, index=True, unique=True)
+    password_hash: str = ""
+    is_admin: bool = False
+    disabled: bool = False
+    token_version: int = 0  # 改密码 / 停用时 +1，旧的登录全部失效
+    last_login_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 

@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from mediaflow import credentials
+from mediaflow.api.deps import require_admin
 from mediaflow.config import get_settings
 from mediaflow.domain.schemas import SourceStatusOut
 from mediaflow.services import images
 from mediaflow.sources.registry import fetch_all
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+ADMIN = Depends(require_admin)  # Key、平台账号是全站共用的，只有管理员能改
 
 
 class CredentialOut(BaseModel):
@@ -77,7 +79,7 @@ def update_credentials(body: CredentialsIn):
     return _list()
 
 
-@router.post("/sources/test", response_model=SourceTestOut)
+@router.post("/sources/test", response_model=SourceTestOut, dependencies=[ADMIN])
 async def test_sources(body: SourceTestIn):
     kw = body.keyword.strip() or "秋季穿搭"
     report = await fetch_all(kw, limit=5)
@@ -100,32 +102,32 @@ class QrPollOut(BaseModel):
     message: str = ""
 
 
-@router.post("/bilibili/qrcode", response_model=QrOut)
+@router.post("/bilibili/qrcode", response_model=QrOut, dependencies=[ADMIN])
 async def bilibili_qrcode():
     from mediaflow.sources.bili_auth import qr_generate
     return QrOut(**await qr_generate())
 
 
-@router.get("/bilibili/qrcode/{key}", response_model=QrPollOut)
+@router.get("/bilibili/qrcode/{key}", response_model=QrPollOut, dependencies=[ADMIN])
 async def bilibili_qrcode_poll(key: str):
     from mediaflow.sources.bili_auth import qr_poll
     return QrPollOut(**await qr_poll(key))
 
 
-@router.post("/bilibili/refresh", response_model=QrPollOut)
+@router.post("/bilibili/refresh", response_model=QrPollOut, dependencies=[ADMIN])
 async def bilibili_refresh():
     from mediaflow.sources.bili_auth import refresh_if_needed
     res = await refresh_if_needed(force=False)
     return QrPollOut(status=res.split(":")[0], message=res.partition(":")[2])
 
 
-@router.post("/xiaohongshu/qrcode", response_model=QrOut)
+@router.post("/xiaohongshu/qrcode", response_model=QrOut, dependencies=[ADMIN])
 async def xiaohongshu_qrcode():
     from mediaflow.sources.xhs import qr_create
     return QrOut(**await qr_create())
 
 
-@router.get("/xiaohongshu/qrcode/{key}", response_model=QrPollOut)
+@router.get("/xiaohongshu/qrcode/{key}", response_model=QrPollOut, dependencies=[ADMIN])
 async def xiaohongshu_qrcode_poll(key: str):
     from mediaflow.sources.xhs import qr_poll
     return QrPollOut(**await qr_poll(key))
@@ -179,7 +181,7 @@ def get_llm_settings():
     return _llm_out()
 
 
-@router.put("/llm", response_model=LlmSettingsOut)
+@router.put("/llm", response_model=LlmSettingsOut, dependencies=[ADMIN])
 async def update_llm_settings(body: LlmSettingsIn):
     """先用这个 Key 实际问一句，能用才保存（填错了当场就知道）；空字符串清除。"""
     key = body.api_key.strip()
@@ -191,7 +193,7 @@ async def update_llm_settings(body: LlmSettingsIn):
     return _llm_out()
 
 
-@router.post("/llm/test", response_model=LlmTestOut)
+@router.post("/llm/test", response_model=LlmTestOut, dependencies=[ADMIN])
 async def test_llm(body: LlmSettingsIn):
     return await _try_llm(body.api_key.strip() or None)
 
@@ -232,7 +234,7 @@ def get_image_settings():
     return _image_out()
 
 
-@router.put("/image", response_model=ImageSettingsOut)
+@router.put("/image", response_model=ImageSettingsOut, dependencies=[ADMIN])
 def update_image_settings(body: ImageSettingsIn):
     if body.model is not None and body.model and body.model not in {m.id for m in images.MODELS}:
         raise HTTPException(400, "不支持这个配图模型")
@@ -241,7 +243,7 @@ def update_image_settings(body: ImageSettingsIn):
     return _image_out()
 
 
-@router.post("/image/test", response_model=ImageTestOut)
+@router.post("/image/test", response_model=ImageTestOut, dependencies=[ADMIN])
 async def test_image(body: ImageSettingsIn):
     """用一句固定的封面描述实际出一张图（会消耗一次生图额度），确认 Key 和模型能用、看看效果。"""
     model = body.model or images.image_model()

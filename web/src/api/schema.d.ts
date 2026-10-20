@@ -4,6 +4,115 @@
  */
 
 export interface paths {
+    "/api/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login */
+        post: operations["login_api_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["logout_api_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Me */
+        get: operations["me_api_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change Password */
+        post: operations["change_password_api_auth_password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Users */
+        get: operations["list_users_api_admin_users_get"];
+        put?: never;
+        /**
+         * Add User
+         * @description 给人开账号（不开放注册）。把用户名和密码发给 TA，TA 登录后可以自己改密码。
+         */
+        post: operations["add_user_api_admin_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update User
+         * @description 重置密码、改名字、停用 / 恢复、设为管理员。停用和改密码会让 TA 的旧登录立即失效。
+         */
+        patch: operations["update_user_api_admin_users__user_id__patch"];
+        trace?: never;
+    };
     "/api/accounts": {
         parameters: {
             query?: never;
@@ -1328,6 +1437,45 @@ export interface components {
              */
             error: string;
         };
+        /** LoginIn */
+        LoginIn: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+        };
+        /** MeOut */
+        MeOut: {
+            /** Id */
+            id: string;
+            /** Username */
+            username: string;
+            /** Name */
+            name: string;
+            /** Is Admin */
+            is_admin: boolean;
+            /**
+             * Auth
+             * @description none=本地版不用登录；password=在线版
+             */
+            auth: string;
+            /**
+             * Usage
+             * @description 今天用了多少：writes / chats
+             * @default {}
+             */
+            usage: {
+                [key: string]: unknown;
+            };
+            /**
+             * Limits
+             * @description 每天上限：writes / chats，0 表示不限
+             * @default {}
+             */
+            limits: {
+                [key: string]: unknown;
+            };
+        };
         /** NoteOut */
         NoteOut: {
             /** Id */
@@ -1341,6 +1489,13 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** PasswordIn */
+        PasswordIn: {
+            /** Old Password */
+            old_password: string;
+            /** New Password */
+            new_password: string;
         };
         /** QrOut */
         QrOut: {
@@ -1533,6 +1688,71 @@ export interface components {
          * @enum {string}
          */
         Trigger: "manual" | "chat" | "auto";
+        /** UserIn */
+        UserIn: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Is Admin
+             * @default false
+             */
+            is_admin: boolean;
+        };
+        /** UserOut */
+        UserOut: {
+            /** Id */
+            id: string;
+            /** Username */
+            username: string;
+            /** Name */
+            name: string;
+            /** Is Admin */
+            is_admin: boolean;
+            /** Disabled */
+            disabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Last Login At */
+            last_login_at: string | null;
+            /**
+             * Accounts
+             * @default 0
+             */
+            accounts: number;
+            /**
+             * Drafts
+             * @default 0
+             */
+            drafts: number;
+            /**
+             * Usage
+             * @default {}
+             */
+            usage: {
+                [key: string]: unknown;
+            };
+        };
+        /** UserPatch */
+        UserPatch: {
+            /** Password */
+            password?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Disabled */
+            disabled?: boolean | null;
+            /** Is Admin */
+            is_admin?: boolean | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1571,6 +1791,196 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    login_api_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_api_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    me_api_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeOut"];
+                };
+            };
+        };
+    };
+    change_password_api_auth_password_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_api_admin_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"][];
+                };
+            };
+        };
+    };
+    add_user_api_admin_users_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_user_api_admin_users__user_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_accounts_api_accounts_get: {
         parameters: {
             query?: never;
