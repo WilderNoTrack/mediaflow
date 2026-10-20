@@ -29,3 +29,12 @@ def test_duplicate_detection_catches_rephrasing():
     assert is_duplicate("学生党秋季通勤穿搭", ["秋季通勤穿搭（学生党版）"])
     assert not is_duplicate("宿舍收纳神器推荐", ["秋季通勤叠穿公式"])
     assert similarity("", "abc") == 0
+
+
+def test_shorten_title():
+    from mediaflow.agents.checks import shorten_title
+
+    assert shorten_title("刚工作别急着存钱！先花3个月把账记明白，我多存了5000块") == "刚工作别急着存钱！先花3个月把账记明白"
+    assert shorten_title("短标题") == "短标题"
+    assert shorten_title("这" * 25) == "这" * 20
+    assert len(shorten_title("月薪5千，发薪日先做3件事，一年存下1万2不是梦")) <= 20

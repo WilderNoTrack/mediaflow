@@ -45,11 +45,46 @@ async def test_external_data_is_fenced(session, llm, account):
 
 
 async def test_hard_issue_triggers_rewrite_with_feedback(session, llm, account):
-    llm.push("writer", post(title="这" * 25), post()).push("eval", evaluation(9), evaluation(8))
+    llm.push("writer", post(title="全网第一的通勤穿搭"), post()).push("eval", evaluation(9), evaluation(8))
     d, _ = await run(session, llm, account)
     assert d.attempts == 2 and d.title == "通勤穿搭3个小心机" and d.check_issues == []
-    assert "超过小红书上限" in llm.prompts_of("reviser")[0]
-    assert "这" * 25 in llm.prompts_of("reviser")[0]  # 是在上一版上改，不是重写
+    assert "违规风险词" in llm.prompts_of("reviser")[0]
+    assert "全网第一的通勤穿搭" in llm.prompts_of("reviser")[0]  # 是在上一版上改，不是重写
+
+
+async def test_long_title_is_fixed_by_code_not_left_to_model(session, llm, account):
+    """标题超 20 字不靠模型自觉：要 5 个候选，代码数字数挑第一个合格的；不合格的不收。"""
+    long = "刚工作别急着存钱！先花3个月把账记明白，我多存了5000块"
+    llm.push("writer", post(title=long, images=[f"封面：女生拿着账本，大字「{long}」", "内页：记账APP截图"])).push("eval", evaluation(9))
+    llm.push("title_fit", {"titles": ["刚工作别急着存钱！先花3个月记账多存5000块", "全网第一记账法", "记账3个月，我多存了5000块"]})
+    d, events = await run(session, llm, account)
+    assert d.title == "记账3个月，我多存了5000块" and d.check_issues == [] and d.attempts == 1
+    assert "29 字" in llm.prompts_of("title_fit")[0]
+    ch = [c for c in d.evaluation["changes"] if c["where"] == "标题"]
+    assert ch and ch[-1]["before"] == long and "超过小红书上限" in ch[-1]["why"]
+    assert any("改短" in m for _, m in events)
+    imgs = session.exec(select(DraftImage).where(DraftImage.draft_id == d.id).order_by(DraftImage.idx)).all()
+    assert imgs[0].prompt == "封面：女生拿着账本，大字「记账3个月，我多存了5000块」"
+
+
+async def test_long_title_retries_then_cuts_at_punctuation(session, llm, account):
+    long = "刚工作别急着存钱！先花3个月把账记明白，我多存了5000块"
+    llm.push("writer", post(title=long)).push("eval", evaluation(9))
+    llm.push("title_fit", {"titles": [long]}, {"titles": ["刚工作别急着存钱！先花三个月把账记明白多存钱"]})
+    d, _ = await run(session, llm, account)
+    assert len(llm.prompts_of("title_fit")) == 2 and "上次给的都超了" in llm.prompts_of("title_fit")[1]
+    assert d.title == "刚工作别急着存钱！先花3个月把账记明白" and d.check_issues == []
+
+
+async def test_reviser_making_title_long_again_is_fixed(session, llm, account):
+    """改稿时模型又把标题改长了，也一样兜住：留在稿子上的标题一定不超 20 字。"""
+    llm.push("writer", post(title="通勤穿搭3个小心机", tags=["穿搭", "学生党"]))
+    llm.push("reviser", {"title": "学生党通勤穿搭3个小心机，照着穿气质翻倍不费钱", "edits": []})
+    llm.push("eval", evaluation(5), evaluation(9))
+    llm.push("title_fit", {"titles": ["通勤穿搭3个小心机，气质翻倍"]})
+    d, _ = await run(session, llm, account)
+    assert d.title == "通勤穿搭3个小心机，气质翻倍" and len(d.title) <= 20
+    assert len(d.tags) >= 3  # 标签少了从账号关键词里补
 
 
 async def test_low_score_retries_then_keeps_best(session, llm, account):

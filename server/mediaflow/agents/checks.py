@@ -29,6 +29,23 @@ def text_len(s: str) -> int:
     return len((s or "").strip())
 
 
+_TITLE_CUT = re.compile(r"(?<=[，,！!？?。；;：:|｜、…~～])")
+
+
+def shorten_title(title: str, limit: int = TITLE_MAX) -> str:
+    """模型怎么都改不短时的最后一道兜底：按标点一段段留，留到不超过上限；第一段就超了才硬截。"""
+    t = (title or "").strip()
+    if text_len(t) <= limit:
+        return t
+    out = ""
+    for seg in _TITLE_CUT.split(t):
+        if text_len(out + seg) > limit:
+            break
+        out += seg
+    out = out.strip().rstrip("，,、：:；;|｜ ")
+    return out if len(out) >= 4 else t[:limit]
+
+
 def hard_check(title: str, body: str, tags: list[str], image_prompts: list[str],
                rules: Iterable[str] = ()) -> list[str]:
     """平台硬限制 + 账号规则里能用代码判断的部分（目前是正文字数）。"""

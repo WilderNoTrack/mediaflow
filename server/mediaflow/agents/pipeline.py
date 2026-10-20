@@ -18,7 +18,9 @@ from typing import Any
 from sqlmodel import Session, col, select
 
 from mediaflow.agents import prompts
-from mediaflow.agents.checks import body_len, body_range, clean_tags, hard_check
+from mediaflow.agents.checks import (
+    RISKY_WORDS, TAGS_MAX, TITLE_MAX, body_len, body_range, clean_tags, hard_check, shorten_title, tags_min, text_len,
+)
 from mediaflow.agents.context import AccountContext, load_context
 from mediaflow.domain.models import (
     Draft, DraftImage, ImageStatus, Topic, TopicStatus, Trigger, utcnow,
@@ -234,6 +236,61 @@ def user_sentences(original: str, current: str) -> list[str]:
         return []
     orig = {x.strip() for x in _SENT.findall(original)}
     return [x.strip() for x in _SENT.findall(current) if len(x.strip()) >= 4 and x.strip() not in orig][:30]
+
+
+async def _fit_title(llm: LLM, ctx: AccountContext, c: Candidate) -> str:
+    """标题超过 20 字的不靠模型自觉：让它一次给 5 个短的，代码数字数，挑第一个合格的；都不合格带上字数再要一次；
+    还不行按标点截短。返回改动说明（没改返回空）。"""
+    if text_len(c.title) <= TITLE_MAX:
+        return ""
+    old, n = c.title, text_len(c.title)
+    bad: list[str] = []
+    for _ in range(2):
+        retry = ("上次给的都超了（" + "；".join(f"{t}（{text_len(t)} 字）" for t in bad[:5])
+                 + f"），这次每个必须不超过 {TITLE_MAX - 4} 个字，数清楚再给。\n") if bad else ""
+        try:
+            data = await complete_json(llm, [
+                {"role": "system", "content": prompts.TITLE_FIT_SYSTEM.format(limit=TITLE_MAX - 2)},
+                {"role": "user", "content": prompts.TITLE_FIT_USER.format(
+                    rules=ctx.rules_text(), title=old, n=n, body=c.body[:200], retry=retry)},
+            ], temperature=0.6)
+        except LLMError:
+            logger.warning("改短标题失败", exc_info=True)
+            break
+        got = [str(t).strip().strip("「」\"") for t in data.get("titles") or [] if str(t).strip()]
+        ok = [t for t in got if 4 <= text_len(t) <= TITLE_MAX and not any(w in t for w in RISKY_WORDS)]
+        if ok:
+            c.title = ok[0]
+            break
+        bad = got or bad
+    if text_len(c.title) > TITLE_MAX:
+        c.title = shorten_title(old)
+    why = f"标题 {n} 字超过小红书上限 {TITLE_MAX} 字，自动改短到 {text_len(c.title)} 字"
+    # 封面描述里照抄了原标题的大字也跟着换，不然图上还是那句长的
+    c.image_prompts = [p.replace(f"「{old}」", f"「{c.title}」") for p in c.image_prompts]
+    c.changes = [*c.changes, {"where": "标题", "before": old, "after": c.title, "why": why}]
+    return why
+
+
+def _fit_tags(ctx: AccountContext, c: Candidate) -> None:
+    """标签个数由代码定：多了留前 10 个，少了从账号关键词里补。"""
+    lo = tags_min(ctx.rules)
+    tags = c.tags[:TAGS_MAX]
+    for k in ctx.keywords:
+        if len(tags) >= lo:
+            break
+        k = k.strip().lstrip("#")
+        if k and k not in tags:
+            tags.append(k[:20])
+    c.tags = tags
+
+
+async def _enforce(llm: LLM, ctx: AccountContext, c: Candidate, emit: Emit) -> None:
+    """平台硬限制（标题 20 字、标签个数）交给代码落实，模型写出来的每一版都过一遍，保证听话。"""
+    why = await _fit_title(llm, ctx, c)
+    if why:
+        emit("write", f"{why}：{c.title}", None)
+    _fit_tags(ctx, c)
 
 
 def _n_problems(c: Candidate) -> int:
@@ -464,6 +521,7 @@ async def write_draft(
     emit("write", "第 1 版写作中…", {"attempt": 1})
     plan = [p.strip() for p in image_plan or [] if p.strip()][:9]
     c = await _generate(llm, ctx, topic, hint, "", ref, plan)
+    await _enforce(llm, ctx, c, emit)
     if await _check(llm, ctx, c):
         eval_failed = True
         emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
@@ -484,6 +542,7 @@ async def write_draft(
         except LLMError as e:
             emit("warning", f"第 {attempt} 版生成失败（{e}），使用已有的最好版本", None)
             break
+        await _enforce(llm, ctx, c, emit)
         if _unchanged(c, base):
             emit("warning", "这一轮编辑没找到能改的地方，用已有的最好版本", None)
             break
@@ -568,6 +627,7 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
                 emit("warning", f"这一轮没改成（{e}），用已经改好的版本", None)
                 break
             raise
+        await _enforce(llm, ctx, c, emit)
         if _unchanged(c, base):
             emit("warning", "这一轮编辑没找到能改的地方，停下来", None)
             break

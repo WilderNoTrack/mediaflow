@@ -46,7 +46,7 @@ class FakeLLM:
                              ("bench_analyze", prompts.BENCH_ANALYZE_SYSTEM), ("bench_adapt", prompts.BENCH_ADAPT_SYSTEM),
                              ("bench_pick", prompts.BENCH_PICK_SYSTEM), ("ref_pick", prompts.REF_PICK_SYSTEM),
                              ("visual_learn", prompts.VISUAL_LEARN_SYSTEM), ("visual_update", prompts.VISUAL_UPDATE_SYSTEM),
-                             ("image_check", prompts.IMAGE_CHECK_SYSTEM)):
+                             ("image_check", prompts.IMAGE_CHECK_SYSTEM), ("title_fit", prompts.TITLE_FIT_SYSTEM)):
             if system.startswith(marker[:30]):
                 return kind
         return "other"
@@ -63,6 +63,8 @@ class FakeLLM:
         if not q:
             if kind == "image":
                 return LLMResponse(content=json.dumps({"spec": "奶油白底、圆润粗黑体、同一个短发女生", "prompts": []}))
+            if kind == "title_fit":
+                return LLMResponse(content=json.dumps({"titles": []}))  # 没准备就走代码截短
             if kind == "topic":
                 return LLMResponse(content=json.dumps({"topics": [
                     {"title": "秋季通勤叠穿公式", "angle": "三件单品搞定", "reason": "换季刚需", "source": "weibo"}]}))
