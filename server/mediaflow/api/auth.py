@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, col, func, select
 
-from mediaflow.api.deps import current_user, require_admin
+from mediaflow.api.deps import current_user, is_admin, require_admin
 from mediaflow.config import get_settings
 from mediaflow.db import get_session
 from mediaflow.domain.models import Account, Draft, User
@@ -25,17 +25,17 @@ class MeOut(BaseModel):
     username: str
     name: str
     is_admin: bool
-    auth: str = Field(description="none=本地版不用登录；password=在线版")
+    auth: str = Field(description="none=本地版；demo=演示版（不用登录，大家共用）；password=登录版")
     usage: dict = Field(default={}, description="今天用了多少：writes / chats")
     limits: dict = Field(default={}, description="每天上限：writes / chats，0 表示不限")
 
 
-def _me(s: Session, u: User) -> MeOut:
+def _me(s: Session, u: User, admin: bool) -> MeOut:
     cfg = get_settings()
-    on = auth.enabled()
-    limited = on and not u.is_admin
-    return MeOut(id=u.id, username=u.username or "", name=u.name, is_admin=u.is_admin or not on,
-                 auth="password" if on else "none", usage=auth.usage_today(s, u.id) if on else {},
+    m = auth.mode()
+    limited = m == "demo" or (m == "password" and not admin)
+    return MeOut(id=u.id, username=u.username or "", name=u.name, is_admin=admin, auth=m,
+                 usage=auth.usage_today(s, u.id) if m != "none" else {},
                  limits={"writes": cfg.mediaflow_daily_writes, "chats": cfg.mediaflow_daily_chats} if limited else {})
 
 
@@ -49,7 +49,7 @@ def login(body: LoginIn, request: Request, response: Response, s: Session = Depe
         raise HTTPException(401, str(e)) from e
     secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
     response.set_cookie(auth.COOKIE, auth.make_token(u), max_age=auth.MAX_AGE, httponly=True, samesite="lax", secure=secure)
-    return _me(s, u)
+    return _me(s, u, u.is_admin)
 
 
 @router.post("/api/auth/logout", status_code=204)
@@ -58,8 +58,34 @@ def logout(response: Response):
 
 
 @router.get("/api/auth/me", response_model=MeOut)
-def me(u: User = Depends(current_user), s: Session = Depends(get_session)):
-    return _me(s, u)
+def me(request: Request, u: User = Depends(current_user), s: Session = Depends(get_session)):
+    return _me(s, u, is_admin(request, u))
+
+
+class UnlockIn(BaseModel):
+    token: str = Field(max_length=200)
+
+
+@router.post("/api/auth/unlock", response_model=MeOut)
+def unlock(body: UnlockIn, request: Request, response: Response, u: User = Depends(current_user),
+           s: Session = Depends(get_session)):
+    """演示版：输入管理员口令，这个浏览器就能改 Key、连平台（记住 30 天）"""
+    if not auth.demo():
+        raise HTTPException(400, "只有演示版需要管理员口令")
+    try:
+        value = auth.unlock_admin(body.token.strip())
+    except PermissionError as e:
+        raise HTTPException(403, str(e)) from e  # 不用 401：前端把 401 当成“掉登录了”
+    secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    response.set_cookie(auth.ADMIN_COOKIE, value, max_age=auth.MAX_AGE, httponly=True, samesite="lax", secure=secure)
+    return _me(s, u, True)
+
+
+@router.post("/api/auth/lock", response_model=MeOut)
+def lock(response: Response, u: User = Depends(current_user), s: Session = Depends(get_session)):
+    """演示版：退出管理员（这个浏览器回到普通访客）"""
+    response.delete_cookie(auth.ADMIN_COOKIE)
+    return _me(s, u, False)
 
 
 class PasswordIn(BaseModel):

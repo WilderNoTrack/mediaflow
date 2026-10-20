@@ -340,6 +340,21 @@ export function useLogout() {
   });
 }
 
+/** 演示版：输入管理员口令 / 退出管理员 */
+export function useAdminUnlock() {
+  const qc = useQueryClient();
+  return {
+    unlock: useMutation({
+      mutationFn: (token: string) => unwrap(api.POST("/api/auth/unlock", { body: { token } })),
+      onSuccess: (me) => qc.setQueryData(["me"], me),
+    }),
+    lock: useMutation({
+      mutationFn: () => unwrap(api.POST("/api/auth/lock")),
+      onSuccess: (me) => qc.setQueryData(["me"], me),
+    }),
+  };
+}
+
 export const useChangePassword = () =>
   useMutation({ mutationFn: (body: S["PasswordIn"]) => unwrap(api.POST("/api/auth/password", { body })) });
 

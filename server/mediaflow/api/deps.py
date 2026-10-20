@@ -20,10 +20,18 @@ def current_user_id(u: User = Depends(current_user)) -> str:
     return u.id
 
 
-def require_admin(u: User = Depends(current_user)) -> User:
-    """改模型 Key、连平台账号这些全站共用的设置，只有管理员能动（本地版自己就是管理员）。"""
-    if auth.enabled() and not u.is_admin:
-        raise HTTPException(403, "这个设置只有管理员能改")
+def is_admin(request: Request, u: User) -> bool:
+    """本地版：自己就是管理员；演示版：输过管理员口令的浏览器；登录版：管理员账号"""
+    m = auth.mode()
+    if m == "demo":
+        return auth.is_demo_admin(request.cookies.get(auth.ADMIN_COOKIE))
+    return m == "none" or u.is_admin
+
+
+def require_admin(request: Request, u: User = Depends(current_user)) -> User:
+    """改模型 Key、连平台账号这些全站共用的设置，只有管理员能动。"""
+    if not is_admin(request, u):
+        raise HTTPException(403, "演示版不能改设置，需要管理员口令" if auth.demo() else "这个设置只有管理员能改")
     return u
 
 

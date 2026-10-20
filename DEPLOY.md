@@ -1,11 +1,14 @@
 # MediaFlow 在线版部署指南
 
-> 写给负责部署的人或 AI agent。目标：把 MediaFlow 部署到一台**国内云服务器**（2 核 2G 够用），用域名 + HTTPS 访问，管理员给成员开账号使用。
+> 写给负责部署的人或 AI agent。目标：把 MediaFlow 部署到一台**国内云服务器**（2 核 2G 够用），用域名 + HTTPS 访问。现阶段用**演示版**：打开网址就能用，不用注册登录。
 
 ## 0. 先了解这几件事
 
-- **在线版 = 本地版 + 登录。** 设置 `MEDIAFLOW_AUTH=password` 就是在线版：要登录、每人的账号/草稿互相隔离、成员有每日额度；不设就是本地版（不登录）。
-- **管理员提供一切：** DeepSeek Key、生图 Key、小红书等平台的登录态都由管理员配一次，所有成员共用。成员只管用，看不到这些配置入口。
+- **三种模式**（`MEDIAFLOW_AUTH`）：
+  - `demo` **演示版（现在用这个）**：谁打开网址都能直接用，大家看到同一份账号和草稿。Key、平台连接这些设置被锁住，访客看不到入口；管理员打开 `/admin` 输入 `MEDIAFLOW_ADMIN_TOKEN` 后，这个浏览器就能改（记住 30 天）。每天的写稿 / 对话次数是**全站共用的总额度**，用来兜住 Key 的花费。
+  - `password` 登录版：管理员在「成员管理」里给每人开账号，数据按人隔离，每人有额度。以后正式给人用时再切过去，见第 8 节。
+  - 不设 = 本地版（自己电脑上用，不要直接暴露到公网：谁都能改设置）。
+- **管理员提供一切：** DeepSeek Key、生图 Key、小红书等平台的登录态都由管理员配一次，所有人共用。
 - **只能跑一个进程。** 后台任务队列在进程里：不要开多个 worker、多个容器副本，也不要用 gunicorn 多进程。
 - **数据全在一个目录**（Docker 是 `./data`，裸机是 `/var/lib/mediaflow`）：SQLite 数据库、图片、平台登录态、页面里填的 Key。备份它就是备份全部。
 - **国内服务器 + 域名走 80/443 必须先完成 ICP 备案**，否则会被云厂商拦截。备案下来前可以先用 `http://服务器IP:8765` 内测（见 3.4），但这是明文 HTTP，只适合短期测试。
@@ -28,9 +31,9 @@
    ```bash
    cd /opt/mediaflow
    cp deploy/online.env.example deploy/online.env && chmod 600 deploy/online.env
-   openssl rand -hex 32     # 填到 MEDIAFLOW_SECRET
+   openssl rand -hex 16     # 填到 MEDIAFLOW_ADMIN_TOKEN
    ```
-   必填：`MEDIAFLOW_AUTH=password`、`MEDIAFLOW_SECRET`、`MEDIAFLOW_ADMIN_PASSWORD`（≥8 位）；Docker 方式还要填 `DOMAIN`。Key 可以留空，上线后在页面里填。
+   演示版必填：`MEDIAFLOW_AUTH=demo`、`MEDIAFLOW_ADMIN_TOKEN`（用 `openssl rand -hex 16` 生成，交给管理员保管）；Docker 方式还要填 `DOMAIN`。按预算调 `MEDIAFLOW_DAILY_WRITES` / `MEDIAFLOW_DAILY_CHATS`（全站每天总量）。Key 可以留空，上线后在页面里填。
 
 ## 2. 方式 A：Docker（推荐，最省事）
 
@@ -75,7 +78,7 @@ Caddy 会自动给 `DOMAIN` 申请 HTTPS 证书（需要 80/443 能从公网访�
 | 更新版本 | `git pull && sudo docker compose up -d --build` |
 | 看日志 | `sudo docker compose logs -f --tail 200 app` |
 | 重启 | `sudo docker compose restart app` |
-| 忘了管理员密码 | `sudo docker compose exec app mediaflow reset-password admin` |
+| 改管理员口令 | 改 `deploy/online.env` 里的 `MEDIAFLOW_ADMIN_TOKEN`，然后 `sudo docker compose up -d`（旧口令解锁过的浏览器全部失效） |
 | 备份 | 见第 5 节，数据在 `/opt/mediaflow/data` |
 
 ## 3. 方式 B：不用 Docker（systemd + nginx）
@@ -132,25 +135,21 @@ curl -s http://127.0.0.1:8765/health
 | 更新版本 | `cd /opt/mediaflow && git pull && (cd web && npm ci && npm run build) && server/.venv/bin/pip install -i https://mirrors.aliyun.com/pypi/simple/ -e server && sudo systemctl restart mediaflow` |
 | 看日志 | `sudo journalctl -u mediaflow -f` |
 
-忘了管理员密码（会提示输入新密码）：
-
-```bash
-sudo -u mediaflow bash -c 'set -a; . /etc/mediaflow/mediaflow.env; export MEDIAFLOW_DATA_DIR=/var/lib/mediaflow; /opt/mediaflow/server/.venv/bin/mediaflow reset-password admin'
-```
+改管理员口令：改 `/etc/mediaflow/mediaflow.env` 里的 `MEDIAFLOW_ADMIN_TOKEN` 后 `sudo systemctl restart mediaflow`。
 
 数据库结构升级是自动的（启动时迁移），更新前先备份即可。
 
 ## 4. 上线后，管理员要做的事
 
-1. 用 `MEDIAFLOW_ADMIN_USER` / `MEDIAFLOW_ADMIN_PASSWORD` 登录，**先在右上角改一个新密码**。
-2. 首页「开始之前」：
+1. 打开 `https://你的域名/admin`，输入 `MEDIAFLOW_ADMIN_TOKEN`。页面上没有这个入口的链接，口令别发给访客。
+2. 回首页，「开始之前」里：
    - 填 **DeepSeek Key**（必需，没有它写稿和对话都用不了；保存前会实测一次）。
    - **AI 配图**：填生图 Key（可选，不填就没有配图）。
-   - **连接平台**：用小红书**小号**扫码登录（找对标博主、读作品都靠它）。这个登录态是**所有成员共用**的：人多时请求会集中在这一个号上，有被平台限流的风险，测试期人少问题不大；被要求重新登录时管理员再扫一次即可。
-3. 右上角「成员管理」→「开一个新账号」→ 把弹出来的那段（网址、用户名、密码）发给对方。这里也能重置密码、停用账号、看每人今天用了多少。
-4. 成员每天默认最多写 20 篇、聊 200 句（管理员不限），在配置里改 `MEDIAFLOW_DAILY_WRITES` / `MEDIAFLOW_DAILY_CHATS` 后重启生效。
+   - **连接平台**：用小红书**小号**扫码登录（找对标博主、读作品都靠它）。所有访客共用这个登录态，用的人多时请求都压在这一个号上，有被平台限流的风险；被要求重新登录时再扫一次即可。
+3. 把网址发给要看演示的人就行。右上角「演示版」能看到今天全站还剩多少额度；用完了当天就写不了，第二天 0 点（北京时间）恢复。
+4. 演示版大家能互相看到、修改、删除账号和草稿：提醒大家别放隐私信息，重要的演示数据记得备份（第 5 节）。
 
-> 从本地版迁过来：把本地的数据目录（默认 `server/data/`）整个拷到服务器的数据目录再启动，原来的账号和草稿会自动归到管理员名下。
+> 从本地版迁过来：把本地的数据目录（默认 `server/data/`）整个拷到服务器的数据目录再启动，原来的账号和草稿都在。
 
 ## 5. 备份
 
@@ -169,14 +168,26 @@ sudo rsync -a --exclude 'mediaflow.db*' "$DATA/" "$DEST/"
 
 - `deploy/online.env` / `/etc/mediaflow/mediaflow.env` 权限 600/640，**不要提交到 git**（已在 `.gitignore`）。
 - 只对公网开放 80/443；8765 只在内测阶段临时开放。
-- 不开放注册，账号只能由管理员开；同一用户名连续输错 5 次密码会锁 10 分钟。
-- 停用成员或重置密码后，对方已有的登录会立即失效。
+- 演示版：管理员口令连续输错 5 次会锁 10 分钟；口令只给自己，泄露了就换一个并重启。
+- 演示版靠全站每日额度控制花费，按 Key 的预算设 `MEDIAFLOW_DAILY_WRITES` / `MEDIAFLOW_DAILY_CHATS`，不要设成 0（不限）。
 - 怀疑 Key 泄露：去 DeepSeek / 生图平台后台作废旧 Key，用管理员账号在页面里换新 Key。
 
 ## 7. 常见问题
 
-- **打开是 502**：后端没起来，看日志；最常见的是在线版缺 `MEDIAFLOW_SECRET` 或首次启动缺 `MEDIAFLOW_ADMIN_PASSWORD`。
+- **打开是 502**：后端没起来，看日志。登录版最常见的是缺 `MEDIAFLOW_SECRET` 或首次启动缺 `MEDIAFLOW_ADMIN_PASSWORD`。
 - **HTTPS 证书申请失败**：DNS 没生效、80 端口没放行、或域名未备案被拦截。
-- **登录后马上又回到登录页**：用 HTTP 访问却经过了把 `X-Forwarded-Proto` 设成 https 的代理，或者改过 `MEDIAFLOW_SECRET`。检查反代配置后清浏览器 Cookie 重试。
+- **/admin 输对了口令，回首页还是看不到设置**：用 HTTP 访问却经过了把 `X-Forwarded-Proto` 设成 https 的代理（Cookie 带了 Secure 存不下）。检查反代配置。
+- **登录版：登录后马上又回到登录页**：用 HTTP 访问却经过了把 `X-Forwarded-Proto` 设成 https 的代理，或者改过 `MEDIAFLOW_SECRET`。检查反代配置后清浏览器 Cookie 重试。
 - **构建时被 kill / 卡住**：内存不够，按 1.3 加 swap。
-- **成员提示“管理员还没配好模型”**：管理员登录后在首页填 DeepSeek Key。
+- **访客提示“管理员还没配好模型”**：管理员去 `/admin` 解锁后在首页填 DeepSeek Key。
+
+## 8. 以后切到登录版（每人一个账号）
+
+在配置里改成 `MEDIAFLOW_AUTH=password`，并填 `MEDIAFLOW_SECRET`（`openssl rand -hex 32`）、`MEDIAFLOW_ADMIN_USER`、`MEDIAFLOW_ADMIN_PASSWORD`（≥8 位），重启。
+
+- 打开网址先登录；不开放注册，管理员在右上角「成员管理」里开账号，把弹出来的网址、用户名、密码发给对方，也能重置密码、停用、看用量。
+- 每人的账号和草稿互相隔离；演示版期间产生的数据会归到管理员名下。
+- `MEDIAFLOW_DAILY_WRITES` / `MEDIAFLOW_DAILY_CHATS` 变成**每个成员**每天的量（管理员不限）。
+- 同一用户名连续输错 5 次密码锁 10 分钟；停用或重置密码后，对方已有的登录立即失效。
+- 忘了管理员密码：Docker 用 `sudo docker compose exec app mediaflow reset-password admin`；裸机用
+  `sudo -u mediaflow bash -c 'set -a; . /etc/mediaflow/mediaflow.env; export MEDIAFLOW_DATA_DIR=/var/lib/mediaflow; /opt/mediaflow/server/.venv/bin/mediaflow reset-password admin'`。

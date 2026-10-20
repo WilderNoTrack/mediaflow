@@ -167,3 +167,58 @@ def test_migration_0006_keeps_existing_data(tmp_path):
     con = sqlite3.connect(tmp_path / "old.db")
     assert con.execute("SELECT name FROM account WHERE user_id='local'").fetchone() == ("老账号",)
     assert con.execute("SELECT is_admin, disabled, token_version FROM user").fetchone() == (0, 0, 0)
+
+
+@pytest.fixture
+def demo(monkeypatch):
+    monkeypatch.setenv("MEDIAFLOW_AUTH", "demo")
+    monkeypatch.setenv("MEDIAFLOW_ADMIN_TOKEN", "open-sesame-42")
+    monkeypatch.setenv("MEDIAFLOW_DAILY_WRITES", "2")
+    get_settings.cache_clear()
+    from mediaflow.app import create_app
+
+    app = create_app(background=False)
+    with TestClient(app) as boss, TestClient(app) as visitor:
+        yield boss, visitor
+    get_settings.cache_clear()
+
+
+def test_demo_mode(demo):
+    """演示版：不用登录、大家看到同一份数据；设置要管理员口令；额度是全站共用的"""
+    boss, visitor = demo
+    me = visitor.get("/api/auth/me").json()
+    assert me["auth"] == "demo" and not me["is_admin"] and me["limits"]["writes"] == 2
+    assert visitor.put("/api/settings/llm", json={"api_key": "sk-x"}).status_code == 403
+    assert visitor.post("/api/settings/xiaohongshu/qrcode").status_code == 403
+    assert visitor.get("/api/settings/credentials").status_code == 200
+    assert visitor.post("/api/auth/login", json={"username": "a", "password": "b"}).status_code == 400
+
+    # 口令错了不行，对了这个浏览器就是管理员；退出后又是访客
+    assert boss.post("/api/auth/unlock", json={"token": "nope"}).status_code == 403
+    r = boss.post("/api/auth/unlock", json={"token": "open-sesame-42"})
+    assert r.status_code == 200 and r.json()["is_admin"] and "httponly" in r.headers["set-cookie"].lower()
+    assert boss.get("/api/auth/me").json()["is_admin"]
+    assert boss.put("/api/settings/llm", json={"api_key": ""}).status_code != 403
+    assert not visitor.get("/api/auth/me").json()["is_admin"]  # 别的浏览器不受影响
+    visitor.cookies.set("mf_admin", "forged")
+    assert visitor.put("/api/settings/llm", json={"api_key": "sk-x"}).status_code == 403
+
+    # 共用一份数据
+    a = visitor.post("/api/accounts", json={"name": "演示号", "theme": "职场"}).json()
+    assert [x["id"] for x in boss.get("/api/accounts").json()] == [a["id"]]
+
+    # 全站额度
+    from mediaflow.db import session_scope
+    from mediaflow.domain.models import Job, JobStatus
+    from sqlmodel import select
+
+    for c in (visitor, boss):
+        assert c.post(f"/api/accounts/{a['id']}/write", json={}).status_code == 202
+        with session_scope() as s:
+            for j in s.exec(select(Job)).all():
+                j.status = JobStatus.succeeded
+                s.add(j)
+            s.commit()
+    r = visitor.post(f"/api/accounts/{a['id']}/write", json={})
+    assert r.status_code == 400 and "演示版" in r.json()["detail"]
+    assert boss.post("/api/auth/lock").json()["is_admin"] is False

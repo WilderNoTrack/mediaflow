@@ -4,6 +4,7 @@ import { LlmKeyDialog } from "./components/LlmKeyDialog";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { useIsAdmin, useMe, useSystem } from "./api/hooks";
 import { LoginPage } from "./pages/LoginPage";
+import { AdminPage } from "./pages/AdminPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { DraftPage } from "./pages/DraftPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
@@ -68,6 +69,7 @@ export function App() {
           <div className="min-h-0 flex-1 overflow-y-auto">
             <Routes>
               <Route path="/" element={<AccountsPage />} />
+            <Route path="/admin" element={<AdminPage />} />
               <Route path="/accounts/:id" element={<WorkspacePage />} />
               <Route path="/drafts/:id" element={<DraftPage />} />
             </Routes>

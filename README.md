@@ -42,18 +42,15 @@ uv run mediaflow            # 自动打开 http://127.0.0.1:8765
 
 完整列表见 `server/.env.example`。
 
-### 在线版（多人使用）
+### 在线版（部署到服务器）
 
-设置 `MEDIAFLOW_AUTH=password` 即开启登录：管理员配好模型 Key 和平台登录态，在「成员管理」里给别人开账号；每个人的账号、草稿互相隔离，成员有每日写稿 / 对话额度。部署到服务器（Docker 或 systemd + nginx、国内镜像源、HTTPS、备案、备份）见 **[DEPLOY.md](DEPLOY.md)**。
+`MEDIAFLOW_AUTH` 决定模式，部署步骤（Docker 或 systemd + nginx、国内镜像源、HTTPS、备案、备份）见 **[DEPLOY.md](DEPLOY.md)**：
 
-| 变量 | 说明 |
-| --- | --- |
-| `MEDIAFLOW_AUTH` | `password` 开启在线版；不设为本地版 |
-| `MEDIAFLOW_SECRET` | 登录签名密钥（在线版必填，`openssl rand -hex 32`） |
-| `MEDIAFLOW_ADMIN_USER` / `MEDIAFLOW_ADMIN_PASSWORD` | 首次启动时创建的管理员 |
-| `MEDIAFLOW_DAILY_WRITES` / `MEDIAFLOW_DAILY_CHATS` | 成员每日额度，默认 20 / 200，0 不限 |
-
-忘了密码：`mediaflow reset-password <用户名>`。
+| 模式 | 适合 | 说明 |
+| --- | --- | --- |
+| `demo` 演示版 | 演示、小范围试用 | 打开就能用，大家共用一份数据；设置锁住，管理员在 `/admin` 输 `MEDIAFLOW_ADMIN_TOKEN` 后才能改；`MEDIAFLOW_DAILY_WRITES` / `MEDIAFLOW_DAILY_CHATS` 是全站每天总额度 |
+| `password` 登录版 | 正式多人使用 | 管理员开账号，数据按人隔离，每人每日额度；需要 `MEDIAFLOW_SECRET`、`MEDIAFLOW_ADMIN_USER` / `MEDIAFLOW_ADMIN_PASSWORD`；忘了密码 `mediaflow reset-password <用户名>` |
+| 不设 | 自己电脑上用 | 本地版，别直接暴露到公网 |
 
 ### 数据来源（选题搜索）
 
@@ -117,5 +114,5 @@ cd web && npm run gen:api
 - [ ] 发布前预览更接近小红书真实效果
 - [ ] 数据回流：导入笔记数据，反哺选题和写法
 - [ ] 稳定的自动发布（视平台情况）
-- [x] 多用户在线版（登录、成员管理、数据隔离、每日额度）
+- [x] 在线版：演示版（免登录、设置锁定、全站额度）/ 登录版（成员管理、数据隔离、每人额度）
 - [ ] 成员自己连平台账号、按人计费

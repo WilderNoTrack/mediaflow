@@ -55,6 +55,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unlock
+         * @description 演示版：输入管理员口令，这个浏览器就能改 Key、连平台（记住 30 天）
+         */
+        post: operations["unlock_api_auth_unlock_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lock
+         * @description 演示版：退出管理员（这个浏览器回到普通访客）
+         */
+        post: operations["lock_api_auth_lock_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/password": {
         parameters: {
             query?: never;
@@ -1456,7 +1496,7 @@ export interface components {
             is_admin: boolean;
             /**
              * Auth
-             * @description none=本地版不用登录；password=在线版
+             * @description none=本地版；demo=演示版（不用登录，大家共用）；password=登录版
              */
             auth: string;
             /**
@@ -1688,6 +1728,11 @@ export interface components {
          * @enum {string}
          */
         Trigger: "manual" | "chat" | "auto";
+        /** UnlockIn */
+        UnlockIn: {
+            /** Token */
+            token: string;
+        };
         /** UserIn */
         UserIn: {
             /** Username */
@@ -1843,6 +1888,59 @@ export interface operations {
         };
     };
     me_api_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeOut"];
+                };
+            };
+        };
+    };
+    unlock_api_auth_unlock_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnlockIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lock_api_auth_lock_post: {
         parameters: {
             query?: never;
             header?: never;

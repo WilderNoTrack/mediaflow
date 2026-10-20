@@ -29,8 +29,51 @@ class QuotaExceeded(ValueError):
     pass
 
 
+def mode() -> str:
+    """none=本地单人版；demo=演示版（谁打开都能用、共用一份数据，设置锁住、全站共用额度）；password=登录版"""
+    m = get_settings().mediaflow_auth.strip().lower()
+    return m if m in ("password", "demo") else "none"
+
+
 def enabled() -> bool:
-    return get_settings().mediaflow_auth.strip().lower() == "password"
+    """要不要登录（只有 password 模式要）"""
+    return mode() == "password"
+
+
+def demo() -> bool:
+    return mode() == "demo"
+
+
+# ── 演示版管理员口令 ──────────────────────────────────────────────────────
+
+ADMIN_COOKIE = "mf_admin"
+
+
+def _admin_cookie_value() -> str:
+    tok = get_settings().mediaflow_admin_token
+    return hmac.new(tok.encode(), b"mediaflow-demo-admin", hashlib.sha256).hexdigest()
+
+
+def unlock_admin(token: str) -> str:
+    """校验管理员口令，对了返回要写进 Cookie 的值。错太多次一样会锁 10 分钟。"""
+    tok = get_settings().mediaflow_admin_token
+    if not tok:
+        raise PermissionError("没有设置管理员口令（MEDIAFLOW_ADMIN_TOKEN），设置只能在服务器上改")
+    now = time.time()
+    with _lock:
+        recent = [t for t in _fails.get("__admin__", []) if now - t < LOCK_SECONDS]
+        _fails["__admin__"] = recent
+        if len(recent) >= MAX_FAILS:
+            raise PermissionError("口令错太多次了，10 分钟后再试")
+        if not hmac.compare_digest(token.encode(), tok.encode()):
+            _fails["__admin__"].append(now)
+            raise PermissionError("口令不对")
+        _fails.pop("__admin__", None)
+    return _admin_cookie_value()
+
+
+def is_demo_admin(cookie: str | None) -> bool:
+    return bool(get_settings().mediaflow_admin_token) and hmac.compare_digest((cookie or "").encode(), _admin_cookie_value().encode())
 
 
 # ── 密码 ────────────────────────────────────────────────────────────────
@@ -181,12 +224,19 @@ def usage_today(s: Session, user_id: str) -> dict:
 
 def check_quota(s: Session, user_id: str, what: str) -> None:
     """普通成员每天写稿 / 对话次数上限（在线版才限，管理员不限）。超了抛 QuotaExceeded（400）。"""
-    if not enabled():
+    m = mode()
+    if m == "none":
+        return
+    cfg = get_settings()
+    if m == "demo":
+        # 演示版大家共用一个用户，所以这就是全站总额度（管理员自己用也算在里面）
+        limit = cfg.mediaflow_daily_writes if what == "writes" else cfg.mediaflow_daily_chats
+        if limit and usage_today(s, user_id)[what] >= limit:
+            raise QuotaExceeded(f"演示版今天{'写稿' if what == 'writes' else '聊天'}的次数用完了（全站每天 {limit} 次），明天再来吧")
         return
     u = s.get(User, user_id)
     if u is None or u.is_admin:
         return
-    cfg = get_settings()
     limit = cfg.mediaflow_daily_writes if what == "writes" else cfg.mediaflow_daily_chats
     if limit and usage_today(s, user_id)[what] >= limit:
         raise QuotaExceeded(f"今天{'写稿' if what == 'writes' else '和小媒聊天'}的次数用完了（每天 {limit} 次），明天再来，或者找管理员调高")

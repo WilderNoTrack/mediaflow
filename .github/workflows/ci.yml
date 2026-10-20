@@ -47,5 +47,12 @@ jobs:
           curl -sf -c cj -X POST localhost:8765/api/auth/login -H 'content-type: application/json' -d '{"username":"admin","password":"ci-admin-123"}'
           curl -sf -b cj localhost:8765/api/accounts
           curl -sf localhost:8765/ | grep -q 'id="root"'
+      - name: smoke test（演示版：不用登录、设置锁住、口令解锁）
+        run: |
+          docker run -d --name demo -p 8766:8765 -e MEDIAFLOW_AUTH=demo -e MEDIAFLOW_ADMIN_TOKEN=ci-token-123 mediaflow:ci
+          for i in $(seq 30); do curl -sf localhost:8766/health && break; sleep 2; done
+          curl -sf localhost:8766/api/accounts
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X PUT localhost:8766/api/settings/llm -H 'content-type: application/json' -d '{"api_key":"sk-x"}')" = 403
+          curl -sf -c cj2 -X POST localhost:8766/api/auth/unlock -H 'content-type: application/json' -d '{"token":"ci-token-123"}' | grep -q '"is_admin":true'
       - if: always()
-        run: docker logs mf || true
+        run: docker logs mf; docker logs demo || true

@@ -54,6 +54,12 @@ def main() -> None:
 
     if not llm_configured():
         print("  ⚠ 还没填 DeepSeek API Key：打开页面后在首页「开始之前」里填")
+    from mediaflow.services import auth as _auth
+
+    if _auth.demo():
+        print("  演示版：打开就能用、大家共用一份数据；设置要在 /admin 输管理员口令")
+        if not s.mediaflow_admin_token:
+            print("  ⚠ 没设 MEDIAFLOW_ADMIN_TOKEN：页面里改不了 Key 和平台连接，只能用环境变量配")
     if not WEB_DIST.exists():
         print("  ⚠ 没找到前端构建产物：先在 web/ 下运行 npm install && npm run build")
     print(f"  数据目录：{s.data_dir}\n")

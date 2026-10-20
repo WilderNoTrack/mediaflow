@@ -1,6 +1,6 @@
-import { LogOut, UserRound, Users } from "lucide-react";
+import { LogOut, ShieldCheck, Sparkles, UserRound, Users } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useChangePassword, useLogout, useMe } from "../api/hooks";
+import { useAdminUnlock, useChangePassword, useLogout, useMe } from "../api/hooks";
 import { cn } from "../lib/utils";
 import { Button, ErrorText, Input, Label, Modal } from "./ui";
 import { UsersDialog } from "./UsersDialog";
@@ -19,6 +19,7 @@ export function UserMenu() {
     document.addEventListener("mousedown", off);
     return () => document.removeEventListener("mousedown", off);
   }, [open]);
+  if (me?.auth === "demo") return <DemoBadge />;
   if (!me || me.auth !== "password") return null;
   const lim = me.limits as { writes?: number };
   const used = me.usage as { writes?: number };
@@ -42,6 +43,42 @@ export function UserMenu() {
       )}
       {users && <UsersDialog onClose={() => setUsers(false)} />}
       {pw && <PasswordDialog onClose={() => setPw(false)} />}
+    </div>
+  );
+}
+
+/** 演示版：不用登录、大家共用一份数据。右上角只显示全站今天还剩多少；管理员多一个退出管理。 */
+function DemoBadge() {
+  const { data: me } = useMe();
+  const { lock } = useAdminUnlock();
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", off);
+    return () => document.removeEventListener("mousedown", off);
+  }, [open]);
+  if (!me) return null;
+  const lim = me.limits as { writes?: number; chats?: number };
+  const used = me.usage as { writes?: number; chats?: number };
+  const left = (k: "writes" | "chats") => (lim[k] ? Math.max(0, lim[k]! - (used[k] ?? 0)) : null);
+  return (
+    <div className="relative" ref={box}>
+      <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>
+        {me.is_admin ? <ShieldCheck className="text-emerald-600" /> : <Sparkles className="text-indigo-500" />}
+        <span className="hidden sm:inline">{me.is_admin ? "管理员" : "演示版"}</span>
+      </Button>
+      {open && (
+        <div className="absolute right-0 z-50 mt-2 w-64 rounded-xl border bg-card p-1.5 text-sm shadow-xl">
+          <div className="space-y-1 px-3 py-2 text-xs text-muted-foreground">
+            <div className="text-sm font-medium text-foreground">演示版</div>
+            <p>不用注册，大家看到的是同一份账号和草稿，请不要放隐私信息。</p>
+            {left("writes") != null && <p>今天全站还能写 <b className="text-foreground">{left("writes")}</b> 篇{left("chats") != null && <>、聊 <b className="text-foreground">{left("chats")}</b> 句</>}</p>}
+          </div>
+          {me.is_admin && <Item onClick={() => { lock.mutate(); setOpen(false); }} className="text-red-600"><LogOut />退出管理员</Item>}
+        </div>
+      )}
     </div>
   );
 }
