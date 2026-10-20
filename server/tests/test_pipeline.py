@@ -337,3 +337,22 @@ async def test_events_carry_the_whole_writing_process(session, llm, account):
     assert reviews[0]["title"] and reviews[0]["body_len"] > 0 and reviews[0]["evaluation"]["dimensions"]
     assert reviews[-1]["title"] == "通勤穿搭3个心机" and reviews[-1]["score"] == 8.5
     assert any(st == "write" and d.get("feedback") for st, m, d in events)
+
+
+def test_strip_meta_moves_editor_notes_out_of_body():
+    from mediaflow.agents.checks import strip_meta
+    body = "第一段正文。\n\n第二段正文，有干货。\n\n以上5条来源为当事人微博及媒体报道，均对应当天原帖截图。"
+    new, moved = strip_meta(body)
+    assert new == "第一段正文。\n\n第二段正文，有干货。" and moved == ["以上5条来源为当事人微博及媒体报道，均对应当天原帖截图。"]
+    assert strip_meta("以上就是我的通勤穿搭，姐妹们冲！")[1] == []  # 正常结尾不误伤
+
+
+async def test_meta_sentence_in_body_goes_to_editor_note(session, llm, account):
+    """写给审核人看的话（来源说明、截图对应）不能发出去：代码挪到备注，正文干净。"""
+    from tests.fakes import GOOD_BODY
+    meta = "以上3条信息来源为品牌官方微博，均对应原帖截图。"
+    llm.push("writer", {**post(body=GOOD_BODY + "\n\n" + meta), "note": "价格要再核实"}).push("eval", evaluation(8))
+    d, events = await run(session, llm, account)
+    assert meta not in d.body and d.body.strip() == GOOD_BODY.strip()
+    assert meta in d.evaluation["editor_note"] and "价格要再核实" in d.evaluation["editor_note"]
+    assert any("审核人" in m for _, m in events)

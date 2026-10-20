@@ -171,3 +171,34 @@ def is_duplicate(title: str, existing: Iterable[str], threshold: float = DUPLICA
         if similarity(title, e) >= threshold:
             return True
     return False
+
+
+# 写给审核/编辑看的话混进了正文（模型常在结尾补一句「以上来源为…均对应原帖截图」）：读者看了出戏，代码直接挪走
+_META = [re.compile(x) for x in (
+    r"以上.{0,12}(来源|信息|内容|数据|消息|爆料).{0,40}(截图|原帖|核实|核对|出处|求证|可查)",
+    r"(均|都|皆)(对应|来自|出自|附有?).{0,12}(原帖|截图|原文|出处)",
+    r"(来源|出处|信源).{0,30}(均|都)(为|是|来自).{0,40}(截图|原帖|官方|本人)",
+    r"(配图|图片|截图|图)\s*[1-9一二三四五六七八九]?\s*(说明|对应|为当天|为原帖|来自)",
+    r"(仅供|方便|供).{0,4}(审核|核对|编辑|校对)",
+    r"^[（(【\[]?\s*(备注|注|说明|编者按|审核)\s*[:：]",
+)]
+
+
+def meta_lines(body: str) -> list[str]:
+    """正文里写给审核人看的句子（整行）。"""
+    out = []
+    for line in (body or "").splitlines():
+        t = line.strip()
+        if t and len(t) <= 160 and any(p.search(t) for p in _META):
+            out.append(line)
+    return out
+
+
+def strip_meta(body: str) -> tuple[str, list[str]]:
+    """把写给审核人看的整行从正文里拿掉，返回 (新正文, 拿掉的行)。"""
+    bad = meta_lines(body)
+    if not bad:
+        return body, []
+    keep = [ln for ln in body.splitlines() if ln not in bad]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(keep)).strip(), [b.strip() for b in bad]
+

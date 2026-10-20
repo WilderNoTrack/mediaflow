@@ -19,7 +19,8 @@ from sqlmodel import Session, col, select
 
 from mediaflow.agents import prompts
 from mediaflow.agents.checks import (
-    RISKY_WORDS, TAGS_MAX, TITLE_MAX, body_len, body_range, clean_tags, hard_check, shorten_title, tags_min, text_len,
+    RISKY_WORDS, TAGS_MAX, TITLE_MAX, body_len, body_range, clean_tags, hard_check, shorten_title, strip_meta, tags_min,
+    text_len,
 )
 from mediaflow.agents.context import AccountContext, load_context
 from mediaflow.domain.models import (
@@ -51,6 +52,7 @@ class Candidate:
     evaluation: dict[str, Any] = field(default_factory=dict)
     score: float | None = None
     changes: list[dict] = field(default_factory=list)  # AI 自己按意见改过的地方（这一版是怎么一步步改出来的）
+    note: str = ""  # 写给审核人看的备注（来源、要核实的地方），不进正文、不发出去
     attempted: bool = False  # 这一版的意见有没有交给编辑改过（改过还剩下的，才是「AI 改不好、要人看」的）
 
     @property
@@ -179,6 +181,7 @@ async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feed
         body=str(data.get("body", "")).strip(),
         tags=clean_tags(data.get("tags") or []),
         image_prompts=_apply_plan([str(p).strip() for p in (data.get("image_prompts") or []) if str(p).strip()][:9], plan or []),
+        note=str(data.get("note") or "").strip()[:500],
     )
 
 
@@ -303,6 +306,13 @@ def _fit_tags(ctx: AccountContext, c: Candidate) -> None:
 
 async def _enforce(llm: LLM, ctx: AccountContext, c: Candidate, emit: Emit) -> None:
     """平台硬限制（标题 20 字、标签个数）交给代码落实，模型写出来的每一版都过一遍，保证听话。"""
+    body, moved = strip_meta(c.body)
+    if moved:
+        c.body = body
+        c.note = "\n".join(x for x in (c.note, *moved) if x)[:800]
+        c.changes = [*c.changes, *({"where": "正文", "before": m[:200], "after": "",
+                                    "why": "这句是写给审核人看的说明，不该发出去，挪到了备注"} for m in moved)]
+        emit("write", f"正文里有 {len(moved)} 句写给审核人看的说明，挪到备注里了", {"moved": moved})
     why = await _fit_title(llm, ctx, c)
     if why:
         ch = c.changes[-1] if c.changes else {}
@@ -368,6 +378,7 @@ async def _revise(llm: LLM, ctx: AccountContext, c: Candidate, feedback: str, *,
         tags=clean_tags(data.get("tags") or []) or c.tags,
         image_prompts=[str(p).strip() for p in (data.get("image_prompts") or []) if str(p).strip()][:9] or c.image_prompts,
     )
+    out.note = c.note
     out.evaluation = {"edits": {"applied": applied, "skipped": skipped,
                                 "unfixed": [str(x) for x in data.get("unfixed") or []][:3]}}
     new: list[dict] = []
@@ -519,7 +530,7 @@ def _actionable(c: Candidate) -> bool:
 
 def _stored_eval(c: Candidate, history: list[dict]) -> dict:
     return {**c.evaluation, "history": history, "checked": _sig(c.title, c.body),
-            "changes": c.changes[-40:], "attempted": c.attempted}
+            "changes": c.changes[-40:], "attempted": c.attempted, **({"editor_note": c.note} if c.note else {})}
 
 
 async def write_draft(
@@ -629,7 +640,8 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
     images = sorted(session.exec(select(DraftImage).where(DraftImage.draft_id == draft.id)).all(), key=lambda i: i.idx)
     cur = Candidate(title=draft.title, body=draft.body, tags=list(draft.tags), image_prompts=[i.prompt for i in images],
                     issues=list(draft.check_issues), evaluation=dict(draft.evaluation or {}), score=draft.score,
-                    changes=list((draft.evaluation or {}).get("changes") or []))
+                    changes=list((draft.evaluation or {}).get("changes") or []),
+                    note=str((draft.evaluation or {}).get("editor_note") or ""))
     locked = user_sentences(draft.original_body, draft.body)
     title_locked = draft.title != draft.original_title
     if note.strip() or cur.score is None or cur.evaluation.get("checked") != _sig(cur.title, cur.body):

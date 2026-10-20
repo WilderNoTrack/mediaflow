@@ -458,7 +458,7 @@ type Ev = {
   dimensions?: Record<string, number>; violated_rules?: string[]; issues?: string[]; suggestions?: string[];
   items?: Item[]; resolved?: number; edits?: { applied: number; skipped: number; unfixed?: string[] };
   history?: { attempt: number; score: number | null; problems: number }[];
-  changes?: Change[]; attempted?: boolean;
+  changes?: Change[]; attempted?: boolean; editor_note?: string;
 };
 type Change = { where: string; before: string; after: string; why?: string };
 const PASS = 7;
@@ -519,6 +519,13 @@ function Evaluation({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
             </div>
           )}
         </div>
+
+        {ev.editor_note && (
+          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+            <div className="mb-0.5 font-medium text-slate-700">📝 AI 给你的备注（只给你看，不会发出去）</div>
+            <div className="whitespace-pre-wrap">{ev.editor_note}</div>
+          </div>
+        )}
 
         {dims.length > 0 && (
           <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-5">
