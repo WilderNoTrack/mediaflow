@@ -24,6 +24,9 @@ const TOOL_META: Record<string, { icon: string; label: string }> = {
   remove_note: { icon: "🗑", label: "删了运营笔记" },
   find_benchmarks: { icon: "🔭", label: "找同领域对标账号" },
   clone_creator: { icon: "🪄", label: "开始学习对标账号" },
+  get_draft: { icon: "👀", label: "看了草稿" },
+  edit_images: { icon: "🖼", label: "改配图" },
+  revise_post: { icon: "✍️", label: "改文案" },
 };
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -50,7 +53,13 @@ function toolSummary(m: ChatMessage) {
     return Object.keys(args).map((k) => keys[k] ?? k).join("、");
   }
   if (m.tool_name === "find_topics" && Array.isArray(result.topics)) return `${result.topics.length} 个，点「写这篇」就开始写`;
-  if (m.tool_name === "write_post") return "进度见下方";
+  if (m.tool_name === "write_post" || m.tool_name === "revise_post") return "进度见下方";
+  if (m.tool_name === "get_draft" && typeof result.title === "string") return `《${result.title}》`;
+  if (m.tool_name === "edit_images") {
+    const ch = Array.isArray(result.changed) ? (result.changed as number[]) : [];
+    const rm = Number(result.removed ?? 0);
+    return [ch.length ? `第 ${ch.join("、")} 张重新出` : "", rm ? `删了 ${rm} 张` : "", `现在共 ${result.total ?? "?"} 张`].filter(Boolean).join("，");
+  }
   if (m.tool_name === "find_benchmarks" && Array.isArray(result.candidates)) return `${result.candidates.length} 个，在下面勾选`;
   if (m.tool_name === "clone_creator") return `${Array.isArray(result.added) ? result.added.length : 1} 个，进度见下方`;
   return "";
@@ -63,10 +72,15 @@ function suggestions(a: Account): string[] {
   return ["今天写一篇", "找几个这周能写的选题", "最近写得怎么样？", "再找几个对标账号"];
 }
 
-/** 和小媒的对话：工作台右侧常驻，手机上是全屏抽屉 */
-export function ChatPanel({ account, onClose, wide }: { account: Account; onClose?: () => void; wide?: boolean }) {
+/** 在草稿页里和小媒说怎么改这篇 */
+const DRAFT_SUGGESTIONS = ["封面字再大一点", "第 2 张换成对比图", "再加一张清单总结图", "开头改得更抓人", "标题再短一点"];
+
+/** 和小媒的对话：工作台右侧常驻，手机上是全屏抽屉；草稿页里打开时带着正在看的这篇（draft），可以直接让它改文案、改配图 */
+export function ChatPanel({ account, onClose, wide, draft }: {
+  account: Account; onClose?: () => void; wide?: boolean; draft?: { id: string; title: string };
+}) {
   const { data: msgs = [], isLoading } = useChat(account.id);
-  const send = useSendChat(account.id);
+  const send = useSendChat(account.id, draft?.id);
   const [text, setText] = useState("");
   const pending = usePendingChat(account.id).at(-1) ?? null;
   const { data: live } = useLiveChat(account.id);
@@ -97,7 +111,9 @@ export function ChatPanel({ account, onClose, wide }: { account: Account; onClos
         <MessageCircle className="size-4 text-indigo-500" />
         <div className="min-w-0 flex-1">
           <div className="font-semibold">小媒</div>
-          <div className="truncate text-xs text-muted-foreground">{pending ? "正在处理…" : "想做什么直接说：找对标、找选题、写稿、改设定"}</div>
+          <div className="truncate text-xs text-muted-foreground">
+            {pending ? "正在处理…" : draft ? `正在看《${draft.title || "这篇草稿"}》，想怎么改直接说` : "想做什么直接说：找对标、找选题、写稿、改设定"}
+          </div>
         </div>
         {onClose && <button onClick={onClose} className="cursor-pointer rounded-lg p-1.5 text-muted-foreground hover:bg-muted" aria-label="收起"><X className="size-4" /></button>}
       </div>
@@ -134,7 +150,7 @@ export function ChatPanel({ account, onClose, wide }: { account: Account; onClos
       <div className="border-t p-3">
         {!pending && (
           <div className="-mx-3 mb-2 flex gap-1.5 overflow-x-auto px-3 pb-0.5">
-            {suggestions(account).map((s) => (
+            {(draft ? DRAFT_SUGGESTIONS : suggestions(account)).map((s) => (
               <button key={s} onClick={() => submit(s)} className="shrink-0 cursor-pointer rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs text-indigo-600 transition-colors hover:bg-indigo-100">{s}</button>
             ))}
           </div>
@@ -143,7 +159,7 @@ export function ChatPanel({ account, onClose, wide }: { account: Account; onClos
           <Textarea
             rows={1}
             value={text}
-            placeholder="聊定位、改配置、或说「写一篇试试」…" title="Enter 发送，Shift+Enter 换行"
+            placeholder={draft ? "比如「第 3 张换成前后对比」「开头再口语一点」…" : "聊定位、改配置、或说「写一篇试试」…"} title="Enter 发送，Shift+Enter 换行"
             className="max-h-32 min-h-9 resize-none py-2"
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); } }}
@@ -203,10 +219,11 @@ function ToolGroup({ items }: { items: ChatMessage[] }) {
 
 /** 工具结果对应的卡片：对标候选、任务进度、选题 */
 function ToolCard({ account, m }: { account: Account; m: ChatMessage }) {
-  const r = (m.payload?.result ?? {}) as { ok?: boolean; candidates?: Candidate[]; job_id?: string; topics?: { id: string; title: string; angle?: string }[] };
+  const r = (m.payload?.result ?? {}) as { ok?: boolean; candidates?: Candidate[]; job_id?: string; draft_id?: string; topics?: { id: string; title: string; angle?: string }[] };
   if (!r.ok) return null;
   if (m.tool_name === "find_benchmarks" && r.candidates) return <CandidatePicker account={account} candidates={r.candidates} compact />;
-  if ((m.tool_name === "write_post" || m.tool_name === "clone_creator") && r.job_id) return <ChatJobCard account={account} jobId={r.job_id} />;
+  if (["write_post", "clone_creator", "revise_post", "edit_images"].includes(m.tool_name) && r.job_id)
+    return <ChatJobCard account={account} jobId={r.job_id} draftId={r.draft_id} />;
   if (m.tool_name === "find_topics" && r.topics?.length) return <TopicCards account={account} topics={r.topics} />;
   return null;
 }
@@ -308,6 +325,7 @@ const ARG_LABEL: Record<string, string> = {
   keyword: "关键词", platform: "平台", name: "名字", query: "搜", text: "内容", title: "标题", topic_id: "选题",
   hint: "要求", direction: "方向", reference_url: "参考帖", targets: "对标", theme: "主题", enabled: "开启", frequency: "频率",
   creator_ref: "博主", post_ref: "作品", limit: "数量", sort: "排序", prefer: "偏好",
+  draft_id: "草稿", ops: "改动", instruction: "要求", image_plan: "配图想法",
 };
 
 /** 逐字显示：新到的字以「追上去」的速度一点点露出来，像打字一样 */

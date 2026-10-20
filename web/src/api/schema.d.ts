@@ -522,6 +522,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/drafts/{draft_id}/images/edit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Edit Images
+         * @description 改配图：改描述 / 加一张 / 删一张 / 调顺序 / 照原描述重出（编号按改之前的顺序）。改过的马上重出，其余不动。
+         */
+        post: operations["edit_images_api_drafts__draft_id__images_edit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/drafts/{draft_id}/text": {
         parameters: {
             query?: never;
@@ -1131,6 +1151,11 @@ export interface components {
         ChatIn: {
             /** Text */
             text: string;
+            /**
+             * Draft Id
+             * @description 用户正在看的草稿（在草稿页跟小媒聊时带上，「第二张」就指这篇的第二张图）
+             */
+            draft_id?: string | null;
         };
         /** ChatMessageOut */
         ChatMessageOut: {
@@ -1388,6 +1413,17 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** ImageEditIn */
+        ImageEditIn: {
+            /** Ops */
+            ops: components["schemas"]["ImageOp"][];
+            /**
+             * Regenerate
+             * @description 改完马上把改过的、新加的出图
+             * @default true
+             */
+            regenerate: boolean;
+        };
         /** ImageModelOut */
         ImageModelOut: {
             /** Id */
@@ -1396,6 +1432,35 @@ export interface components {
             label: string;
             /** Desc */
             desc: string;
+        };
+        /** ImageOp */
+        ImageOp: {
+            /**
+             * Op
+             * @enum {string}
+             */
+            op: "update" | "add" | "remove" | "move" | "redo";
+            /**
+             * No
+             * @description 第几张（按改之前的顺序，从 1 开始）
+             */
+            no?: number | null;
+            /**
+             * After
+             * @description add：加在第几张后面，0 = 放最前，不填放最后
+             */
+            after?: number | null;
+            /**
+             * To
+             * @description move：挪到第几张
+             */
+            to?: number | null;
+            /**
+             * Description
+             * @description update/add：这张图的中文画面描述
+             * @default
+             */
+            description: string;
         };
         /** ImageOut */
         ImageOut: {
@@ -1907,6 +1972,12 @@ export interface components {
              * @default false
              */
             from_chat: boolean;
+            /**
+             * Image Plan
+             * @description 用户对每张图的要求（第 1 张、第 2 张…），写稿时照这个出配图描述
+             * @default []
+             */
+            image_plan: string[];
             /**
              * Reference Url
              * @description 照着这些小红书笔记写（可以多个链接/分享文字，第一篇图文笔记当配图模板；不填就自动挑）
@@ -3004,6 +3075,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_images_api_drafts__draft_id__images_edit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageEditIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftDetail"];
                 };
             };
             /** @description Validation Error */

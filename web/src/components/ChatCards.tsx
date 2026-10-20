@@ -9,7 +9,7 @@ import { ReportDialog } from "./BenchmarkPanel";
 import { Badge, Button, ErrorText } from "./ui";
 
 /** 对话里派出去的后台任务：边做边显示进度，做完直接给结果卡片（草稿 / 对标方案）。 */
-export function ChatJobCard({ account, jobId }: { account: Account; jobId: string }) {
+export function ChatJobCard({ account, jobId, draftId: forDraft }: { account: Account; jobId: string; draftId?: string }) {
   const qc = useQueryClient();
   const { data: job } = useQuery({
     queryKey: ["job", jobId],
@@ -21,18 +21,19 @@ export function ChatJobCard({ account, jobId }: { account: Account; jobId: strin
     if (done) {
       qc.invalidateQueries({ queryKey: ["drafts", account.id] });
       qc.invalidateQueries({ queryKey: ["account", account.id] });
+      qc.invalidateQueries({ queryKey: ["draft"] });
     }
   }, [done, qc, account.id]);
   if (!job) return null;
   if (job.status === "failed") {
     return (
       <Shell className="border-red-200 bg-red-50 text-red-700">
-        <XCircle className="size-4 shrink-0" /><span className="min-w-0 flex-1">{job.kind === "clone_creator" ? "没学成" : "没写成"}：{job.error || "未知错误"}</span>
+        <XCircle className="size-4 shrink-0" /><span className="min-w-0 flex-1">{FAIL[job.kind] ?? "没写成"}：{job.error || "未知错误"}</span>
       </Shell>
     );
   }
   if (isActive(job)) return <Running job={job} />;
-  const draftId = (job.result as { draft_id?: string }).draft_id;
+  const draftId = (job.result as { draft_id?: string }).draft_id ?? forDraft;
   if (draftId) return <DraftCard account={account} draftId={draftId} />;
   if (job.kind === "clone_creator") return <PlanCard account={account} />;
   return null;
@@ -42,7 +43,8 @@ function Shell({ className, children }: { className?: string; children: React.Re
   return <div className={cn("ml-10 flex items-center gap-2 rounded-xl border bg-card px-3 py-2.5 text-sm shadow-sm", className)}>{children}</div>;
 }
 
-const LABEL: Record<string, string> = { write_draft: "正在写稿", clone_creator: "正在学习对标账号", revise_draft: "正在改稿" };
+const LABEL: Record<string, string> = { write_draft: "正在写稿", clone_creator: "正在学习对标账号", revise_draft: "正在改稿", generate_images: "正在出图" };
+const FAIL: Record<string, string> = { clone_creator: "没学成", revise_draft: "没改成", generate_images: "没出成" };
 
 function Running({ job }: { job: Job }) {
   const events = job.events as JobEvent[];

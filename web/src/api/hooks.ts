@@ -166,6 +166,8 @@ export const useDraft = (id: string) =>
       q.state.data?.images.some((i) => i.status === "pending" || i.status === "running") ? 3000 : false,
   });
 
+export type ImageOp = Omit<S["ImageOp"], "description"> & { description?: string };
+
 export function useDraftActions(id: string) {
   const qc = useQueryClient();
   const inv = () => {
@@ -189,6 +191,11 @@ export function useDraftActions(id: string) {
       mutationFn: (url: string) => unwrap(api.PUT("/api/drafts/{draft_id}/reference", { ...p, body: { url } })),
       onSuccess: (d) => { qc.setQueryData(["draft", id], d); inv(); },
     }),
+    editImages: useMutation({
+      mutationFn: ({ ops, regenerate = true }: { ops: ImageOp[]; regenerate?: boolean }) =>
+        unwrap(api.POST("/api/drafts/{draft_id}/images/edit", { ...p, body: { regenerate, ops: ops.map((o) => ({ description: "", ...o })) } })),
+      onSuccess: (d) => { qc.setQueryData(["draft", id], d); inv(); },
+    }),
     remove: useMutation({ mutationFn: () => unwrap(api.DELETE("/api/drafts/{draft_id}", p)), onSuccess: inv }),
   };
 }
@@ -197,7 +204,7 @@ export function useWrite(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: Partial<S["WriteIn"]>) =>
-      unwrap(api.POST("/api/accounts/{account_id}/write", { params: { path: { account_id: id } }, body: { hint: "", from_chat: false, reference_url: "", ...body } })),
+      unwrap(api.POST("/api/accounts/{account_id}/write", { params: { path: { account_id: id } }, body: { hint: "", from_chat: false, reference_url: "", image_plan: [], ...body } })),
     onSettled: () => qc.invalidateQueries({ queryKey: ["jobs", id] }),
   });
 }
@@ -275,7 +282,7 @@ async function* sse(res: Response): AsyncGenerator<ChatEvent> {
   }
 }
 
-export function useSendChat(id: string) {
+export function useSendChat(id: string, draftId?: string) {
   const qc = useQueryClient();
   const inv = useInvalidateAccount(id);
   const live = (fn: (l: LiveChat) => LiveChat) => qc.setQueryData<LiveChat | null>(["chat-live", id], (l) => (l ? fn(l) : l));
@@ -289,7 +296,7 @@ export function useSendChat(id: string) {
       qc.setQueryData(["chat-live", id], init);
       try {
         const res = await fetch(`/api/accounts/${id}/chat/stream`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }), credentials: "same-origin",
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draftId ? { text, draft_id: draftId } : { text }), credentials: "same-origin",
         });
         if (!res.ok || !res.body) {
           const body = await res.json().catch(() => ({}));
@@ -325,6 +332,8 @@ export function useSendChat(id: string) {
       qc.invalidateQueries({ queryKey: ["chat", id] });
       qc.invalidateQueries({ queryKey: ["jobs", id] });
       qc.invalidateQueries({ queryKey: ["topics", id] });
+      qc.invalidateQueries({ queryKey: ["draft"] });
+      qc.invalidateQueries({ queryKey: ["drafts"] });
       inv();
     },
   });

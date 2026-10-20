@@ -1,13 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowLeft, Check, CheckCircle2, ChevronLeft, Copy, Download, Heart, Image as ImageIcon,
-  ExternalLink, Link2, MessageCircle, RefreshCw, Save, Sparkles, Star, Tag, ThumbsDown, ThumbsUp, Trash2, Wand2,
+  ChevronRight, ExternalLink, Link2, MessageCircle, Pencil, Plus, RefreshCw, Save, Sparkles, Star, Tag, ThumbsDown, ThumbsUp,
+  Trash2, Wand2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { DraftDetail, JobEvent, S } from "../api/client";
 import { api, unwrap } from "../api/client";
-import { isActive, useAccount, useActiveJobs, useDraft, useDraftActions, useIsAdmin, useRevise, useRules, useSystem } from "../api/hooks";
+import { type ImageOp, isActive, useAccount, useActiveJobs, useDraft, useDraftActions, useIsAdmin, useRevise, useRules, useSystem } from "../api/hooks";
+import { ChatPanel } from "../components/ChatPanel";
 import { ImageSettingsDialog } from "../components/ImageSettingsDialog";
 import { Badge, Button, Card, CardBody, CardHead, Empty, ErrorText, Segmented, Spinner, Textarea } from "../components/ui";
 import { cn, timeAgo } from "../lib/utils";
@@ -23,6 +25,7 @@ export function DraftPage() {
   const [tags, setTags] = useState("");
   const [copied, setCopied] = useState(false);
   const [imgIdx, setImgIdx] = useState(0);
+  const [ask, setAsk] = useState(false);
 
   useEffect(() => {
     if (!d) return;
@@ -81,6 +84,9 @@ export function DraftPage() {
               ]}
             />
             <span className="mx-1 hidden h-5 w-px bg-border sm:block" />
+            <Button variant="outline" size="sm" onClick={() => setAsk(true)} title="直接说想怎么改：文案、第几张图、加一张删一张都行">
+              <MessageCircle className="text-indigo-500" />让小媒改
+            </Button>
             <Button variant={dirty ? "default" : "ghost"} size="sm" disabled={!dirty} loading={act.update.isPending} onClick={save} title="Ctrl+S">
               <Save />{dirty ? "保存" : "已保存"}
             </Button>
@@ -139,7 +145,29 @@ export function DraftPage() {
         <div className="space-y-4 lg:sticky lg:top-20 lg:self-start">
           <PhonePreview d={d} title={title} body={body} tags={tagList} idx={imgIdx} onIdx={setImgIdx} />
           <ReferenceCard d={d} />
-          <ImagesCard d={d} i={imgIdx} setI={setImgIdx} />
+          <ImagesCard d={d} i={imgIdx} setI={setImgIdx} onAsk={() => setAsk(true)} />
+        </div>
+      </div>
+      {ask && <AskDrawer d={d} dirty={dirty} onClose={() => setAsk(false)} />}
+    </div>
+  );
+}
+
+/** 草稿页右侧抽屉：和小媒说怎么改这篇（小媒知道你正在看哪篇，能直接改文案、改配图） */
+function AskDrawer({ d, dirty, onClose }: { d: DraftDetail; dirty: boolean; onClose: () => void }) {
+  const { data: acc } = useAccount(d.account_id);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[90] flex bg-black/20" onClick={onClose}>
+      <div className="ml-auto flex h-full w-full max-w-md flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        {dirty && <div className="bg-amber-50 px-4 py-2 text-xs text-amber-800">你改的文案还没保存，小媒看到的是上次保存的版本，先保存再让它改文案更稳。</div>}
+        <div className="min-h-0 flex-1">
+          {acc ? <ChatPanel account={acc} draft={{ id: d.id, title: d.title }} onClose={onClose} />
+            : <div className="flex h-full items-center justify-center bg-card"><Spinner /></div>}
         </div>
       </div>
     </div>
@@ -228,9 +256,14 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
   );
 }
 
-function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: number) => void }) {
+function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i: number) => void; onAsk: () => void }) {
   const act = useDraftActions(d.id);
   const cur = d.images[i];
+  // 改描述 / 在这张后面加一张：本地先写好，提交后改过的、新加的马上重新出图
+  const [edit, setEdit] = useState<null | { mode: "update" | "add"; text: string }>(null);
+  useEffect(() => setEdit(null), [cur?.id]);
+  const run = (ops: ImageOp[], then?: () => void) =>
+    act.editImages.mutate({ ops }, { onSuccess: () => { setEdit(null); then?.(); } });
   const done = d.images.filter((x) => x.status === "done").length;
   const skipped = d.images.length > 0 && d.images.every((x) => x.status === "skipped");
   const busy = d.images.filter((x) => x.status === "pending" || x.status === "running").length;
@@ -296,15 +329,67 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
                   <span className="mt-0.5 block text-[10px] text-muted-foreground">照着原帖第 {((d.reference as Ref).local ?? []).indexOf(cur.ref_url.replace("/files/images/", "")) + 1 || "?"} 张</span>
                 </a>
               )}
-              <p className="flex-1 rounded-md bg-input-background px-3 py-2 text-xs leading-relaxed">{cur.prompt}</p>
-              <Button variant="outline" size="sm" className="px-2" title={cur.status === "running" || cur.status === "pending" ? "这张正在出" : "重新出这张"}
-                disabled={cur.status === "running" || cur.status === "pending"} loading={act.images.isPending && act.images.variables === cur.idx}
-                onClick={() => act.images.mutate(cur.idx)}>
-                {!(act.images.isPending && act.images.variables === cur.idx) && <RefreshCw className="text-indigo-500" />}
-              </Button>
+              {edit?.mode === "update" ? (
+                <Textarea autoFocus rows={5} value={edit.text} onChange={(e) => setEdit({ ...edit, text: e.target.value })}
+                  className="flex-1 text-xs leading-relaxed" placeholder="这张画什么、怎么构图、图上写哪几个字" />
+              ) : (
+                <p className="flex-1 rounded-md bg-input-background px-3 py-2 text-xs leading-relaxed">{cur.prompt}</p>
+              )}
+              {!edit && (
+                <div className="flex flex-col gap-1.5">
+                  <Button variant="outline" size="sm" className="px-2" title={cur.status === "running" || cur.status === "pending" ? "这张正在出" : "重新出这张"}
+                    disabled={cur.status === "running" || cur.status === "pending"} loading={act.images.isPending && act.images.variables === cur.idx}
+                    onClick={() => act.images.mutate(cur.idx)}>
+                    {!(act.images.isPending && act.images.variables === cur.idx) && <RefreshCw className="text-indigo-500" />}
+                  </Button>
+                  <Button variant="outline" size="sm" className="px-2" title={busy > 0 ? "等这轮出完再改" : "改这张的描述，改完重出"} disabled={busy > 0}
+                    onClick={() => setEdit({ mode: "update", text: cur.prompt })}>
+                    <Pencil className="text-indigo-500" />
+                  </Button>
+                </div>
+              )}
             </div>
+            {edit?.mode === "update" && (
+              <div className="mt-2 flex justify-end gap-2">
+                <Button variant="ghost" size="xs" onClick={() => setEdit(null)}>取消</Button>
+                <Button size="xs" disabled={!edit.text.trim() || edit.text.trim() === cur.prompt} loading={act.editImages.isPending}
+                  onClick={() => run([{ op: "update", no: cur.idx + 1, description: edit.text.trim() }])}>改好了，重出这张</Button>
+              </div>
+            )}
           </div>
         ) : <p className="text-xs text-muted-foreground">这篇没有配图描述</p>}
+        {edit?.mode === "add" ? (
+          <div className="space-y-2 rounded-lg border border-dashed border-indigo-200 p-2.5">
+            <div className="text-xs font-medium">{cur ? `在第 ${cur.idx + 1} 张后面加一张` : "加一张"}</div>
+            <Textarea autoFocus rows={4} value={edit.text} onChange={(e) => setEdit({ ...edit, text: e.target.value })} className="text-xs leading-relaxed"
+              placeholder="这张画什么？比如：清单图，大标题「3 个避坑点」，下面三行要点，和前面几张同一个风格" />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" size="xs" onClick={() => setEdit(null)}>取消</Button>
+              <Button size="xs" disabled={!edit.text.trim()} loading={act.editImages.isPending}
+                onClick={() => run([{ op: "add", after: cur ? cur.idx + 1 : null, description: edit.text.trim() }], () => setI(cur ? cur.idx + 1 : 0))}>加上并出图</Button>
+            </div>
+          </div>
+        ) : !edit && (
+          <div className="flex flex-wrap items-center gap-1 text-xs">
+            <ImgAction disabled={busy > 0 || d.images.length >= 9} title={d.images.length >= 9 ? "最多 9 张" : "在这张后面加一张"} onClick={() => setEdit({ mode: "add", text: "" })}>
+              <Plus className="size-3" />加一张
+            </ImgAction>
+            {cur && d.images.length > 1 && <>
+              <ImgAction disabled={busy > 0 || i === 0} title="往前挪一位" onClick={() => run([{ op: "move", no: i + 1, to: i }], () => setI(i - 1))}>
+                <ChevronLeft className="size-3" />前移
+              </ImgAction>
+              <ImgAction disabled={busy > 0 || i === d.images.length - 1} title="往后挪一位" onClick={() => run([{ op: "move", no: i + 1, to: i + 2 }], () => setI(i + 1))}>
+                后移<ChevronRight className="size-3" />
+              </ImgAction>
+              <ImgAction disabled={busy > 0} title="删掉这张" danger
+                onClick={() => confirm(`删掉第 ${i + 1} 张？`) && run([{ op: "remove", no: i + 1 }], () => setI(Math.max(0, i - 1)))}>
+                <Trash2 className="size-3" />删掉
+              </ImgAction>
+            </>}
+            <button onClick={onAsk} className="ml-auto cursor-pointer text-indigo-600 hover:underline">想大改？跟小媒说 →</button>
+          </div>
+        )}
+        <ErrorText error={act.editImages.error} />
         {d.image_spec && <SpecNote spec={d.image_spec} />}
         {!skipped && d.images.length > 0 && (
           <Button variant="outline" size="sm" className="w-full" disabled={busy > 0} loading={act.images.isPending && act.images.variables === "all"}
@@ -315,6 +400,13 @@ function ImagesCard({ d, i, setI }: { d: DraftDetail; i: number; setI: (i: numbe
         <ErrorText error={act.images.error} />
       </CardBody>
     </Card>
+  );
+}
+
+function ImgAction({ children, danger, ...p }: React.ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }) {
+  return (
+    <button {...p} className={cn("flex cursor-pointer items-center gap-0.5 rounded-md px-1.5 py-1 text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40",
+      danger ? "hover:text-red-600" : "hover:text-foreground")}>{children}</button>
   );
 }
 
