@@ -14,7 +14,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections import defaultdict
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from sqlmodel import Session, col, select
@@ -24,7 +26,7 @@ from mediaflow.domain.models import (
     Account, AutoFrequency, ChatMessage, ChatRole, Draft, JobKind, Note, Rule, RuleSource, Trigger, utcnow,
 )
 from mediaflow.jobs.queue import JobConflict, enqueue
-from mediaflow.llm.client import LLM, LLMError
+from mediaflow.llm.client import LLM, LLMError, stream_complete
 from mediaflow.research import service as research
 from mediaflow.research.types import Unsupported
 from mediaflow.services.topics import Fetcher, propose_topics
@@ -408,11 +410,11 @@ def post_note(session: Session, acc: Account, text: str) -> ChatMessage:
     return _save(session, acc, ChatRole.assistant, text)
 
 
-async def _run_calls(box: Toolbox, calls: list) -> list[dict]:
-    """同一步的多个工具调用：只读的并行跑，会改数据的按顺序跑（共用一个数据库 session）。"""
+async def _run_calls(box: Toolbox, calls: list, on_done: Callable[[int, dict, int], None] | None = None) -> list[dict]:
+    """同一步的多个工具调用：只读的并行跑，会改数据的按顺序跑（共用一个数据库 session）。每个跑完回调 on_done(序号, 结果, 毫秒)。"""
     write_lock = asyncio.Lock()
 
-    async def one(c) -> dict:
+    async def run(c) -> dict:
         if c.error:
             return {"ok": False, "error": c.error + "。请修正参数后重新调用。"}
         if c.name in READ_ONLY:
@@ -420,7 +422,14 @@ async def _run_calls(box: Toolbox, calls: list) -> list[dict]:
         async with write_lock:
             return await box.call(c.name, c.arguments)
 
-    return list(await asyncio.gather(*(one(c) for c in calls)))
+    async def one(k: int, c) -> dict:
+        t0 = time.monotonic()
+        r = await run(c)
+        if on_done:
+            on_done(k, r, _ms(t0))
+        return r
+
+    return list(await asyncio.gather(*(one(k, c) for k, c in enumerate(calls))))
 
 
 def _for_model(name: str, result: dict) -> dict:
@@ -438,15 +447,31 @@ def _clip(result: dict, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…（结果太长已截断）"
 
 
-async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = None) -> list[ChatMessage]:
-    """处理一条用户消息，返回本轮新增的消息（用户消息、工具记录、回复）。"""
+def _msg_out(m: ChatMessage) -> dict:
+    return {"id": m.id, "role": m.role.value, "content": m.content, "tool_name": m.tool_name,
+            "payload": m.payload, "created_at": m.created_at.isoformat()}
+
+
+def _ms(t0: float) -> int:
+    return int((time.monotonic() - t0) * 1000)
+
+
+async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
+                      fetch: Fetcher | None = None) -> AsyncIterator[dict]:
+    """处理一条用户消息，边做边吐事件（界面实时显示「思考了几秒、调了什么工具、回复逐字出来」）：
+
+    user{message} → 每一轮：step_start{kind=thinking} → [thinking{text}] → [delta{text}]… → step_end{ms}
+    → 要调工具时：[note{text}]（模型调工具前说的话）→ 每个工具 step_start{kind=tool,name,args} → step_end{ok,ms}
+    → 全部跑完 tool_message{id,message} → … → message{回复，payload 里存着 steps 和总用时} → done{ms}
+    """
     async with _locks[account_id]:
         acc = session.get(Account, account_id)
         if acc is None:
             raise LookupError("账号不存在")
+        t_all = time.monotonic()
         box = Toolbox(session, llm, acc, fetch)
         history = _history(session, account_id)
-        new: list[ChatMessage] = [_save(session, acc, ChatRole.user, text)]
+        yield {"type": "user", "message": _msg_out(_save(session, acc, ChatRole.user, text))}
 
         messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT + "\n\n【当前账号状态】\n"
@@ -454,36 +479,130 @@ async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch:
             *history,
             {"role": "user", "content": text},
         ]
+        steps: list[dict] = []
         reply = ""
+        n = 0
         for _ in range(MAX_STEPS):
+            n += 1
+            think = {"id": f"t{n}", "kind": "thinking"}
+            t0 = time.monotonic()
+            yield {"type": "step_start", **think}
+            open_, reasoning, resp = True, [], None
+
+            def close() -> dict:
+                think["ms"] = _ms(t0)
+                if reasoning:
+                    think["text"] = "".join(reasoning)[:4000]
+                steps.append(think)
+                return {"type": "step_end", "id": think["id"], "ok": True, "ms": think["ms"]}
+
             try:
-                resp = await llm.complete(messages, tools=TOOLS, temperature=0.6)
+                async for kind, val in stream_complete(llm, messages, tools=TOOLS, temperature=0.6):
+                    if kind == "reasoning":
+                        reasoning.append(val)
+                        yield {"type": "thinking", "id": think["id"], "text": val}
+                    elif kind in ("delta", "calling") and open_:
+                        open_ = False
+                        yield close()
+                    if kind == "delta":
+                        yield {"type": "delta", "text": val}
+                    elif kind == "done":
+                        resp = val
             except LLMError as e:
+                if open_:
+                    open_ = False
+                    yield close()
                 reply = f"我这边连不上 AI 服务（{e}），这句话已经记下了，稍后再试一次？"
+                yield {"type": "reset"}
                 break
-            if not resp.tool_calls:
-                reply = resp.content.strip() or "嗯？我没太明白，可以再说一次吗"
+            if open_:
+                yield close()
+            if resp is None or not resp.tool_calls:
+                reply = (resp.content.strip() if resp else "") or "嗯？我没太明白，可以再说一次吗"
                 break
+            if resp.content.strip():
+                # 调工具前说的话（"我先去搜一下"）：放进过程里，不当回复
+                steps.append({"id": f"n{n}", "kind": "note", "text": resp.content.strip()})
+                yield {"type": "note", "id": f"n{n}", "text": resp.content.strip()}
             messages.append({"role": "assistant", "content": resp.content or None, "tool_calls": [
                 {"id": c.id, "type": "function",
                  "function": {"name": c.name, "arguments": json.dumps(c.arguments, ensure_ascii=False)}}
                 for c in resp.tool_calls
             ]})
-            results = await _run_calls(box, resp.tool_calls)
-            for c, result in zip(resp.tool_calls, results):
+            tool_steps = [{"id": f"c{n}_{k}", "kind": "tool", "name": c.name, "args": c.arguments}
+                          for k, c in enumerate(resp.tool_calls)]
+            for st in tool_steps:
+                yield {"type": "step_start", **st}
+            done_q: asyncio.Queue = asyncio.Queue()
+            runner = asyncio.create_task(_run_calls(box, resp.tool_calls, on_done=lambda k, r, ms: done_q.put_nowait((k, r, ms))))
+            for _k in range(len(tool_steps)):
+                k, result, ms = await done_q.get()
+                st = tool_steps[k]
+                st.update(ok=result.get("ok") is not False, ms=ms)
+                if result.get("ok") is False:
+                    st["error"] = str(result.get("error", ""))[:300]
+                yield {"type": "step_end", "id": st["id"], "ok": st["ok"], "ms": ms, "error": st.get("error", "")}
+            results = await runner
+            for c, st, result in zip(resp.tool_calls, tool_steps, results):
                 wide = c.name.startswith("research_") or c.name == "find_benchmarks"
                 summary = _clip(_for_model(c.name, result), RESEARCH_RESULT_CHARS if wide else RESULT_CHARS)
-                new.append(_save(session, acc, ChatRole.tool, summary, tool_name=c.name,
-                                 payload={"args": c.arguments, "result": result}))
+                m = _save(session, acc, ChatRole.tool, summary, tool_name=c.name,
+                          payload={"args": c.arguments, "result": result})
+                st["message_id"] = m.id
+                steps.append(st)
                 messages.append({"role": "tool", "tool_call_id": c.id, "content": summary})
+                yield {"type": "tool_message", "id": st["id"], "message": _msg_out(m)}
         else:
             # 步数用完：不再给工具，让模型基于已做的操作给用户一个交代（类似 Agents SDK 的 max_turns 收尾）
             messages.append({"role": "user", "content": "（系统：本轮工具调用次数已达上限，请不要再调用工具，"
                              "直接用一两句话告诉用户刚才做了什么、还有什么没做完。）"})
             try:
-                reply = (await llm.complete(messages, temperature=0.3)).content.strip()
+                async for kind, val in stream_complete(llm, messages, temperature=0.3):
+                    if kind == "delta":
+                        yield {"type": "delta", "text": val}
+                    elif kind == "done":
+                        reply = val.content.strip()
             except LLMError:
                 reply = ""
-            reply = reply or "这一轮操作有点多，我先停一下，刚才做的都已保存。"
-        new.append(_save(session, acc, ChatRole.assistant, reply))
-        return new
+            if not reply:
+                reply = "这一轮操作有点多，我先停一下，刚才做的都已保存。"
+                yield {"type": "reset"}
+        total = _ms(t_all)
+        m = _save(session, acc, ChatRole.assistant, reply, payload={"steps": steps, "ms": total})
+        yield {"type": "message", "message": _msg_out(m)}
+        yield {"type": "done", "ms": total}
+
+
+async def chat(session: Session, llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = None) -> list[ChatMessage]:
+    """处理一条用户消息（不流式），返回本轮新增的消息（用户消息、工具记录、回复）。"""
+    ids = []
+    async for ev in chat_events(session, llm, account_id, text, fetch=fetch):
+        if ev["type"] in ("user", "tool_message", "message"):
+            ids.append(ev["message"]["id"])
+    return [session.get(ChatMessage, i) for i in ids]
+
+
+_running: set[asyncio.Task] = set()
+
+
+def start_chat(llm: LLM, account_id: str, text: str, *, fetch: Fetcher | None = None) -> asyncio.Queue:
+    """在后台跑一轮对话，事件放进队列（None 表示结束）。浏览器断开连接也会跑完、结果照样存进对话。"""
+    from mediaflow.db import get_engine
+
+    q: asyncio.Queue = asyncio.Queue()
+
+    async def run() -> None:
+        try:
+            with Session(get_engine(), expire_on_commit=False) as s:
+                async for ev in chat_events(s, llm, account_id, text, fetch=fetch):
+                    q.put_nowait(ev)
+        except Exception as e:  # noqa: BLE001 - 出错也要告诉界面，别让它一直转圈
+            logger.exception("对话处理失败")
+            q.put_nowait({"type": "error", "detail": str(e) or e.__class__.__name__})
+        finally:
+            q.put_nowait(None)
+
+    t = asyncio.create_task(run())
+    _running.add(t)
+    t.add_done_callback(_running.discard)
+    return q

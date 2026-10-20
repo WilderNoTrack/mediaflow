@@ -1,4 +1,8 @@
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlmodel import Session, col, select
 
 from mediaflow import __version__
@@ -36,6 +40,27 @@ async def send_chat(body: ChatIn, acc: Account = Depends(owned_account), s: Sess
     auth.check_quota(s, acc.user_id, "chats")
     msgs = await manager.chat(s, get_llm(), acc.id, body.text.strip())
     return [ChatMessageOut(**m.model_dump()) for m in msgs]
+
+
+@router.post("/api/accounts/{account_id}/chat/stream")
+async def stream_chat(body: ChatIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """和 POST /chat 一样，但用 SSE 边做边推事件（见 manager.chat_events）。断开连接不影响这一轮跑完、存好。"""
+    auth.check_quota(s, acc.user_id, "chats")
+    q = manager.start_chat(get_llm(), acc.id, body.text.strip())
+
+    async def events():
+        while True:
+            try:
+                ev = await asyncio.wait_for(q.get(), timeout=15)
+            except TimeoutError:
+                yield ": ping\n\n"  # 工具跑得久时保活，免得代理断开
+                continue
+            if ev is None:
+                return
+            yield f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.get("/api/jobs", response_model=list[JobOut])

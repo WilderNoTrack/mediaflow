@@ -223,3 +223,51 @@ async def test_set_reference_and_user_link(client, session, llm, monkeypatch):
         raise AssertionError("用户给的链接用不了要报错")
     except ValueError as e:
         assert "视频笔记" in str(e)
+
+
+def _sse(r) -> list[dict]:
+    import json
+
+    return [json.loads(line[6:]) for line in r.text.splitlines() if line.startswith("data: ")]
+
+
+def test_chat_stream_events_and_persisted_steps(client, llm):
+    """流式对话：先吐用户消息，再是思考/工具步骤（带用时），回复逐字出，最后存进对话（payload 里有步骤和总用时）。"""
+    from mediaflow.llm.client import LLMResponse, ToolCall
+
+    a = make_account(client)
+    two = LLMResponse(content="我先记一下", tool_calls=[
+        ToolCall(id="c1", name="add_rule", arguments={"text": "不用感叹号"}),
+        ToolCall(id="c2", name="list_drafts", arguments={})])
+    llm.push("manager", two, say("记好了，以后不用感叹号"))
+    r = client.post(f"/api/accounts/{a['id']}/chat/stream", json={"text": "以后别用感叹号"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    evs = _sse(r)
+    types = [e["type"] for e in evs]
+    assert types[0] == "user" and types[-2:] == ["message", "done"]
+    starts = [e for e in evs if e["type"] == "step_start"]
+    assert [s["kind"] for s in starts] == ["thinking", "tool", "tool", "thinking"]
+    assert starts[1]["name"] == "add_rule" and starts[1]["args"] == {"text": "不用感叹号"}
+    assert any(e["type"] == "note" and e["text"] == "我先记一下" for e in evs)
+    assert len([e for e in evs if e["type"] == "tool_message"]) == 2
+    assert "".join(e["text"] for e in evs if e["type"] == "delta").endswith("记好了，以后不用感叹号")
+    final = evs[-2]["message"]
+    assert final["content"] == "记好了，以后不用感叹号" and final["payload"]["ms"] >= 0
+    kinds = [s["kind"] for s in final["payload"]["steps"]]
+    assert kinds == ["thinking", "note", "tool", "tool", "thinking"]
+    tool = final["payload"]["steps"][2]
+    assert tool["ok"] and tool["message_id"] and "ms" in tool
+
+    hist = client.get(f"/api/accounts/{a['id']}/chat").json()
+    assert [m["role"] for m in hist] == ["user", "tool", "tool", "assistant"]
+    assert hist[-1]["payload"]["steps"] == final["payload"]["steps"]
+    assert client.get(f"/api/accounts/{a['id']}").json()["rules"][0]["text"] == "不用感叹号"
+
+
+def test_chat_stream_llm_error_still_answers(client, llm):
+    from tests.fakes import fail
+
+    a = make_account(client)
+    llm.push("manager", fail("超时"))
+    evs = _sse(client.post(f"/api/accounts/{a['id']}/chat/stream", json={"text": "在吗"}))
+    assert evs[-1]["type"] == "done" and "连不上 AI 服务" in evs[-2]["message"]["content"]

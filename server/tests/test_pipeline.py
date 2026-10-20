@@ -239,3 +239,39 @@ async def test_pick_reference_from_benchmark(session, llm, account):
     llm.push("ref_pick", {"no": 9})
     ref, _ = await refpost.pick(session, llm, account.id, t)
     assert ref["title"] == "高赞"
+
+
+async def test_deepseek_stream_accumulates_tool_calls():
+    """流式接口里工具调用的名字、参数是一段段来的，要拼完整；思考内容单独吐。"""
+    from types import SimpleNamespace as N
+
+    from mediaflow.llm.client import DeepSeekLLM
+
+    def ch(content=None, reasoning=None, tcs=None, usage=None, empty=False):
+        d = N(content=content, reasoning_content=reasoning, tool_calls=tcs)
+        return N(choices=[] if empty else [N(delta=d)], usage=usage)
+
+    def tc(i, id=None, name=None, args=None):
+        return N(index=i, id=id, function=N(name=name, arguments=args))
+
+    chunks = [ch(reasoning="想一想"), ch(content="我去"), ch(content="查查"),
+              ch(tcs=[tc(0, "a", "research_search", '{"keyword":')]), ch(tcs=[tc(0, args='"通勤"}')]),
+              ch(tcs=[tc(1, "b", "list_drafts", "{}")]), ch(empty=True, usage=N(model_dump=lambda: {"total_tokens": 9}))]
+
+    async def gen():
+        for c in chunks:
+            yield c
+
+    async def create(**kw):
+        assert kw["stream"] is True
+        return gen()
+
+    llm = DeepSeekLLM(api_key="k")
+    llm.client = N(chat=N(completions=N(create=create)))
+    evs = [e async for e in llm.stream([{"role": "user", "content": "x"}], tools=[{}])]
+    kinds = [k for k, _ in evs]
+    assert kinds == ["reasoning", "delta", "delta", "calling", "calling", "done"]
+    r = evs[-1][1]
+    assert r.content == "我去查查" and r.usage == {"total_tokens": 9}
+    assert [(c.id, c.name, c.arguments) for c in r.tool_calls] == [
+        ("a", "research_search", {"keyword": "通勤"}), ("b", "list_drafts", {})]

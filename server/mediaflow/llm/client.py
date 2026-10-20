@@ -11,6 +11,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 from mediaflow.config import Settings, get_settings
@@ -134,18 +135,82 @@ class DeepSeekLLM:
         except APIError as e:
             raise LLMError(f"DeepSeek 调用失败：{e}") from e
         msg = r.choices[0].message
-        calls = []
-        for tc in msg.tool_calls or []:
-            err = ""
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-                if not isinstance(args, dict):
-                    args, err = {}, "参数必须是 JSON 对象"
-            except json.JSONDecodeError as e:
-                args, err = {}, f"参数不是合法 JSON（{e.msg}），原文：{(tc.function.arguments or '')[:200]}"
-            calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args, error=err))
+        calls = [_tool_call(tc.id, tc.function.name, tc.function.arguments) for tc in msg.tool_calls or []]
         usage = r.usage.model_dump() if r.usage else {}
         return LLMResponse(content=msg.content or "", tool_calls=calls, usage=usage)
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float = 0.7,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """边生成边吐：("reasoning", 思考片段) / ("delta", 回复片段) / ("calling", 工具名) / 最后 ("done", LLMResponse)。"""
+        from openai import APIError
+
+        kwargs: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": temperature,
+                                  "stream": True, "stream_options": {"include_usage": True}}
+        if tools:
+            kwargs["tools"] = tools
+        content: list[str] = []
+        slots: dict[int, dict[str, str]] = {}
+        usage: dict[str, int] = {}
+        try:
+            r = await self.client.chat.completions.create(**kwargs)
+            async for chunk in r:
+                if chunk.usage:
+                    usage = chunk.usage.model_dump()
+                if not chunk.choices:
+                    continue
+                d = chunk.choices[0].delta
+                if rc := getattr(d, "reasoning_content", None):
+                    yield ("reasoning", rc)
+                if d.content:
+                    content.append(d.content)
+                    yield ("delta", d.content)
+                for tc in d.tool_calls or []:
+                    slot = slots.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                    if tc.id:
+                        slot["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        if not slot["name"]:
+                            yield ("calling", tc.function.name)
+                        slot["name"] += tc.function.name
+                    if tc.function and tc.function.arguments:
+                        slot["args"] += tc.function.arguments
+        except APIError as e:
+            raise LLMError(f"DeepSeek 调用失败：{e}") from e
+        calls = [_tool_call(v["id"] or f"call_{i}", v["name"], v["args"]) for i, v in sorted(slots.items())]
+        yield ("done", LLMResponse(content="".join(content), tool_calls=calls, usage=usage))
+
+
+def _tool_call(call_id: str, name: str, raw: str | None) -> ToolCall:
+    err = ""
+    try:
+        args = json.loads(raw or "{}")
+        if not isinstance(args, dict):
+            args, err = {}, "参数必须是 JSON 对象"
+    except json.JSONDecodeError as e:
+        args, err = {}, f"参数不是合法 JSON（{e.msg}），原文：{(raw or '')[:200]}"
+    return ToolCall(id=call_id, name=name, arguments=args, error=err)
+
+
+async def stream_complete(
+    llm: LLM, messages: list[dict[str, Any]], *, temperature: float = 0.7, tools: list[dict[str, Any]] | None = None,
+) -> AsyncIterator[tuple[str, Any]]:
+    """有 stream() 的 LLM 就流式；没有的（测试里的假 LLM）一次拿完，再按同样的事件吐出来。"""
+    fn = getattr(llm, "stream", None)
+    if fn is not None:
+        async for ev in fn(messages, temperature=temperature, tools=tools):
+            yield ev
+        return
+    r = await llm.complete(messages, temperature=temperature, tools=tools)
+    if r.content:
+        yield ("delta", r.content)
+    for c in r.tool_calls:
+        yield ("calling", c.name)
+    yield ("done", r)
 
 
 _llm_override: LLM | None = None
