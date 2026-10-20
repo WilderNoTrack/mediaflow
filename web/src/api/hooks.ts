@@ -1,5 +1,5 @@
 import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, unwrap, type Job, type S } from "./client";
+import { api, ApiError, unwrap, type ChatMessage, type Job, type S } from "./client";
 
 const ACTIVE = ["queued", "running"];
 
@@ -237,14 +237,91 @@ export const useChat = (id: string) =>
 export const usePendingChat = (id: string) =>
   useMutationState({ filters: { mutationKey: ["chat-send", id], status: "pending" }, select: (m) => m.state.variables as string });
 
+/** 一轮对话里的一步：思考 / 调工具 / 调工具前说的话。回复的 payload.steps 里存的也是这个形状。 */
+export type ChatStep = {
+  id: string; kind: "thinking" | "tool" | "note"; name?: string; args?: Record<string, unknown>;
+  ok?: boolean; ms?: number; error?: string; text?: string; message_id?: string; started?: number;
+};
+/** 正在进行的这一轮（流式）：步骤实时更新，回复逐字长出来 */
+export type LiveChat = { text: string; echoed: boolean; steps: ChatStep[]; reply: string; started: number; tools: ChatMessage[] };
+
+export const useLiveChat = (id: string) =>
+  useQuery<LiveChat | null>({ queryKey: ["chat-live", id], queryFn: () => null, enabled: false, initialData: null, staleTime: Infinity, gcTime: Infinity });
+
+type ChatEvent =
+  | { type: "user" | "message"; message: ChatMessage }
+  | { type: "tool_message"; id: string; message: ChatMessage }
+  | ({ type: "step_start" } & ChatStep)
+  | { type: "step_end"; id: string; ok: boolean; ms: number; error?: string }
+  | { type: "thinking" | "note"; id: string; text: string }
+  | { type: "delta"; text: string }
+  | { type: "reset" } | { type: "done"; ms: number } | { type: "error"; detail: string };
+
+/** 读 SSE：一行行 data: {...}，空行分隔 */
+async function* sse(res: Response): AsyncGenerator<ChatEvent> {
+  const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      const data = block.split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6)).join("\n");
+      if (data) yield JSON.parse(data) as ChatEvent;
+    }
+  }
+}
+
 export function useSendChat(id: string) {
   const qc = useQueryClient();
   const inv = useInvalidateAccount(id);
+  const live = (fn: (l: LiveChat) => LiveChat) => qc.setQueryData<LiveChat | null>(["chat-live", id], (l) => (l ? fn(l) : l));
+  const step = (sid: string, patch: Partial<ChatStep>) =>
+    live((l) => ({ ...l, steps: l.steps.map((s) => (s.id === sid ? { ...s, ...patch } : s)) }));
+  const addMsgs = (ms: ChatMessage[]) => qc.setQueryData<ChatMessage[]>(["chat", id], (old = []) => [...old, ...ms.filter((m) => !old.some((o) => o.id === m.id))]);
   return useMutation({
     mutationKey: ["chat-send", id],
-    mutationFn: (text: string) =>
-      unwrap(api.POST("/api/accounts/{account_id}/chat", { params: { path: { account_id: id } }, body: { text } })),
-    onSuccess: () => {
+    mutationFn: async (text: string) => {
+      const init: LiveChat = { text, echoed: false, steps: [], reply: "", started: Date.now(), tools: [] };
+      qc.setQueryData(["chat-live", id], init);
+      try {
+        const res = await fetch(`/api/accounts/${id}/chat/stream`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }), credentials: "same-origin",
+        });
+        if (!res.ok || !res.body) {
+          const body = await res.json().catch(() => ({}));
+          throw new ApiError(typeof body?.detail === "string" ? body.detail : `请求失败（${res.status}）`, res.status, body);
+        }
+        for await (const ev of sse(res)) {
+          switch (ev.type) {
+            case "user": addMsgs([ev.message]); live((l) => ({ ...l, echoed: true })); break;
+            case "step_start": { const { type: _t, ...st } = ev; live((l) => ({ ...l, steps: [...l.steps, { ...st, started: Date.now() }] })); break; }
+            case "step_end": step(ev.id, { ok: ev.ok, ms: ev.ms, error: ev.error || undefined }); break;
+            case "thinking": live((l) => ({ ...l, steps: l.steps.map((s) => (s.id === ev.id ? { ...s, text: (s.text ?? "") + ev.text } : s)) })); break;
+            case "note": live((l) => ({ ...l, reply: "", steps: [...l.steps, { id: ev.id, kind: "note", text: ev.text }] })); break;
+            case "delta": live((l) => ({ ...l, reply: l.reply + ev.text })); break;
+            case "reset": live((l) => ({ ...l, reply: "" })); break;
+            case "tool_message":
+              step(ev.id, { message_id: ev.message.id });
+              live((l) => ({ ...l, tools: [...l.tools, ev.message] }));
+              break;
+            case "message": {
+              const tools = qc.getQueryData<LiveChat | null>(["chat-live", id])?.tools ?? [];
+              addMsgs([...tools, ev.message]);
+              qc.setQueryData(["chat-live", id], null);
+              break;
+            }
+            case "error": throw new ApiError(ev.detail, 500, ev);
+          }
+        }
+      } finally {
+        qc.setQueryData(["chat-live", id], null);
+      }
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["chat", id] });
       qc.invalidateQueries({ queryKey: ["jobs", id] });
       qc.invalidateQueries({ queryKey: ["topics", id] });

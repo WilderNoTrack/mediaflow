@@ -124,8 +124,8 @@ curl -s http://127.0.0.1:8765/health
 
 ### 3.4 反向代理和 HTTPS
 
-- nginx：参考 `deploy/nginx.conf`，换成你的域名和证书路径（云厂商可免费申请 DV 证书，或用 certbot / acme.sh），然后 `sudo nginx -t && sudo systemctl reload nginx`。**`X-Forwarded-Proto` 那行必须保留**，登录 Cookie 靠它判断 HTTPS。
-- 也可以用 Caddy 代替 nginx：`reverse_proxy 127.0.0.1:8765`，证书全自动。
+- nginx：参考 `deploy/nginx.conf`，换成你的域名和证书路径（云厂商可免费申请 DV 证书，或用 certbot / acme.sh），然后 `sudo nginx -t && sudo systemctl reload nginx`。**`X-Forwarded-Proto` 那行必须保留**，登录 Cookie 靠它判断 HTTPS；`chat/stream` 那段（关掉缓冲）也要保留，不然和小媒对话的回复会憋到最后才一下子出来。
+- 也可以用 Caddy 代替 nginx：照 `deploy/Caddyfile` 写，把 `app:8765` 换成 `127.0.0.1:8765`，证书全自动。
 - 备案下来前想先内测：把 `mediaflow.service` 里的 `--host 127.0.0.1` 改成 `--host 0.0.0.0`，安全组放行 8765，用 `http://服务器IP:8765` 访问。备案后改回去。
 
 ### 3.5 日常
