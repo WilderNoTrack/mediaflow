@@ -149,13 +149,24 @@ class ImageSettingsOut(BaseModel):
     use_refs: bool = Field(description="出图时照着参考帖的原图做版式")
     check: bool = Field(True, description="出图后看图自检（有错字等问题自动重出一次）")
     vision: bool = Field(False, description="现在能不能看图（自检、学配图模板要用）")
+    next_configured: bool = Field(False, description="openai-next 的 Key 配了没（配了优先用）")
+    next_origin: str = ""
+    next_exhausted_at: str = Field("", description="openai-next 额度用完的时间；空=没用完。用完后几个小时内直接走 grsai")
+    channel: str = Field("", description="现在先用哪条：next / grsai / 空")
 
 
 class ImageSettingsIn(BaseModel):
-    api_key: str | None = Field(default=None, description="null 不改；空字符串清除")
+    api_key: str | None = Field(default=None, description="grsai 的 Key。null 不改；空字符串清除")
+    next_api_key: str | None = Field(default=None, description="openai-next 的 Key。null 不改；空字符串清除")
     model: str | None = None
     use_refs: bool | None = None
     check: bool | None = None
+
+
+class ImageTestIn(BaseModel):
+    channel: str | None = Field(default=None, description="next / grsai；不填就用现在先用的那条")
+    api_key: str | None = Field(default=None, description="试一个还没保存的 Key（对应 channel）")
+    model: str | None = None
 
 
 class LlmSettingsOut(BaseModel):
@@ -220,6 +231,7 @@ async def _try_llm(key: str | None) -> LlmTestOut:
 class ImageTestOut(BaseModel):
     ok: bool
     model: str
+    channel: str = ""
     seconds: float
     url: str = ""
     error: str = ""
@@ -228,11 +240,14 @@ class ImageTestOut(BaseModel):
 def _image_out() -> ImageSettingsOut:
     stored = credentials._load()
     origin = "ui" if stored.get("image_api_key") else ("env" if get_settings().image_api_key else "")
+    next_origin = "ui" if stored.get("image_next_api_key") else ("env" if get_settings().image_next_api_key else "")
     from mediaflow.llm.client import vision_available
     from mediaflow.services.visual import check_enabled
 
     return ImageSettingsOut(configured=bool(origin), origin=origin, model=images.image_model(), use_refs=images.use_refs(),
                             check=check_enabled(), vision=vision_available(),
+                            next_configured=bool(next_origin), next_origin=next_origin,
+                            next_exhausted_at=images.next_exhausted_at(), channel=images.active_channel(),
                             models=[ImageModelOut(id=m.id, label=m.label, desc=m.desc) for m in images.MODELS])
 
 
@@ -245,29 +260,37 @@ def get_image_settings():
 def update_image_settings(body: ImageSettingsIn):
     if body.model is not None and body.model and body.model not in {m.id for m in images.MODELS}:
         raise HTTPException(400, "不支持这个配图模型")
-    credentials.update({"image_api_key": body.api_key, "image_model": body.model,
+    if body.next_api_key is not None:
+        credentials.update({"image_next_exhausted": ""})  # 换了 Key 就重新试
+    credentials.update({"image_api_key": body.api_key, "image_next_api_key": body.next_api_key, "image_model": body.model,
                         "image_refs": None if body.use_refs is None else ("" if body.use_refs else "off"),
                         "image_check": None if body.check is None else ("" if body.check else "off")})
     return _image_out()
 
 
 @router.post("/image/test", response_model=ImageTestOut, dependencies=[ADMIN])
-async def test_image(body: ImageSettingsIn):
+async def test_image(body: ImageTestIn):
     """用一句固定的封面描述实际出一张图（会消耗一次生图额度），确认 Key 和模型能用、看看效果。"""
     model = body.model or images.image_model()
+    channel = body.channel if body.channel in ("next", "grsai") else (images.active_channel() or "grsai")
     t = time.monotonic()
     try:
-        provider = images.GrsaiProvider(model=model, key=(body.api_key or "").strip() or None, fallback=False)
+        provider = images.channel_provider(channel, model=model, key=(body.api_key or "").strip() or None, fallback=False)
         data = await provider.generate(TEST_PROMPT)
     except images.ImageError as e:
-        return ImageTestOut(ok=False, model=model, seconds=round(time.monotonic() - t, 1), error=str(e))
+        if channel == "next" and e.exhausted:
+            images.mark_next_exhausted()
+        return ImageTestOut(ok=False, model=model, channel=channel, seconds=round(time.monotonic() - t, 1), error=str(e))
+    if channel == "next" and images.next_exhausted_at():
+        images.mark_next_exhausted(False)
     d = get_settings().images_dir / "_test"
     d.mkdir(parents=True, exist_ok=True)
     for old in sorted(d.glob("*.png"))[:-5]:  # 只留最近几张
         old.unlink(missing_ok=True)
     name = f"{int(time.time())}-{model}.png"
     (d / name).write_bytes(data)
-    return ImageTestOut(ok=True, model=model, seconds=round(time.monotonic() - t, 1), url=f"/files/images/_test/{name}")
+    return ImageTestOut(ok=True, model=model, channel=channel, seconds=round(time.monotonic() - t, 1),
+                        url=f"/files/images/_test/{name}")
 
 
 TEST_PROMPT = ("小红书图文笔记封面，竖版 3:4。明亮的窗边书桌，一位二十多岁的中国女生半身近景，笑着举起一本手账，"

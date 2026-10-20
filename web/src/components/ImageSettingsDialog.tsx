@@ -1,15 +1,51 @@
 import { Check, ExternalLink, ImageIcon, Sparkles, X } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useImageSettings, useSaveImageSettings, useTestImage } from "../api/hooks";
 import { cn } from "../lib/utils";
 import { Badge, Button, ErrorText, Input, Modal, Spinner } from "./ui";
 
-/** AI 配图：填 grsai 的 Key、选模型，可以先试出一张看看效果。Key 只存在本机。 */
+const CH: Record<string, string> = { next: "openai-next", grsai: "grsai" };
+const PAUSE_HOURS = 6;
+
+function fmtTime(iso: string) {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** 一条生图通道的 Key：状态、粘贴保存、去获取、清除 */
+function KeyRow({ name, tag, link, configured, origin, active, pending, onSave, note }: {
+  name: string; tag: string; link: string; configured: boolean; origin: string; active: boolean; pending: boolean;
+  onSave: (key: string, done: () => void) => void; note: ReactNode;
+}) {
+  const [key, setKey] = useState("");
+  return (
+    <div className={cn("rounded-xl border p-3", active && "border-indigo-300 bg-indigo-50/40")}>
+      <div className="mb-1.5 flex flex-wrap items-center gap-2 font-medium">
+        {name}<span className="text-xs font-normal text-muted-foreground">{tag}</span>
+        {configured
+          ? <Badge className="bg-emerald-50 text-emerald-700"><Check className="size-3" />已配置{origin === "env" && "（来自 .env）"}</Badge>
+          : <Badge className="bg-slate-100 text-slate-600">未配置</Badge>}
+        {active && <Badge className="bg-indigo-100 text-indigo-700">现在用这个</Badge>}
+      </div>
+      <div className="flex gap-2">
+        <Input type="password" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off"
+          placeholder={configured ? "已保存，要换就粘贴新的" : "粘贴 sk- 开头的 Key"} />
+        <Button disabled={!key.trim()} loading={pending} onClick={() => onSave(key.trim(), () => setKey(""))}>保存</Button>
+      </div>
+      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+        {note}
+        <a href={link} target="_blank" rel="noreferrer" className="ml-1 inline-flex items-center gap-0.5 text-indigo-600 hover:underline">去获取<ExternalLink className="size-3" /></a>
+        {origin === "ui" && <button className="ml-3 cursor-pointer text-muted-foreground underline-offset-2 hover:underline" onClick={() => onSave("", () => {})}>清除</button>}
+      </p>
+    </div>
+  );
+}
+
+/** AI 配图：填生图 Key（openai-next 优先、grsai 备用）、选模型，可以先试出一张看看效果。Key 只存在本机。 */
 export function ImageSettingsDialog({ onClose }: { onClose: () => void }) {
   const { data: st, isLoading } = useImageSettings();
   const save = useSaveImageSettings();
   const test = useTestImage();
-  const [key, setKey] = useState("");
   const model = save.variables?.model && save.isPending ? save.variables.model : st?.model;
 
   return (
@@ -25,23 +61,22 @@ export function ImageSettingsDialog({ onClose }: { onClose: () => void }) {
       <div className="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-4 text-sm">
         {isLoading || !st ? <Spinner /> : <>
           <section>
-            <div className="mb-1.5 flex items-center gap-2 font-medium">
-              API Key
-              {st.configured
-                ? <Badge className="bg-emerald-50 text-emerald-700"><Check className="size-3" />已配置{st.origin === "env" && "（来自 .env）"}</Badge>
-                : <Badge className="bg-amber-50 text-amber-700">未配置</Badge>}
+            <div className="font-medium">生图服务</div>
+            <p className="mb-2 mt-0.5 text-xs text-muted-foreground">两个都填时先用 openai-next；它额度用完或出不了图，自动换 grsai 接着出，不用管。</p>
+            <div className="space-y-2">
+              <KeyRow name="openai-next" tag="优先用" link="https://credits.openai-next.com"
+                configured={st.next_configured} origin={st.next_origin} active={st.channel === "next"}
+                pending={save.isPending && save.variables?.next_api_key != null}
+                onSave={(k, done) => save.mutate({ next_api_key: k }, { onSuccess: done })}
+                note={st.next_exhausted_at
+                  ? <span className="text-amber-700">{fmtTime(st.next_exhausted_at)} 额度用完了，{st.configured ? `接下来 ${PAUSE_HOURS} 小时先用 grsai，之后自动再试` : "填上 grsai 的 Key 就能接着出"}；充值后重新保存一下 Key 立刻恢复。</span>
+                  : "支持 GPT Image 2.5、Gemini 3.1 Flash Image，一张大约 15–50 秒。"} />
+              <KeyRow name="grsai" tag="备用" link="https://grsai.ai/zh/dashboard/api-keys"
+                configured={st.configured} origin={st.origin} active={st.channel === "grsai"}
+                pending={save.isPending && save.variables?.api_key != null}
+                onSave={(k, done) => save.mutate({ api_key: k }, { onSuccess: done })}
+                note={st.next_configured ? "openai-next 用完或出不了图时用它。" : "两个模型共用一个 Key。"} />
             </div>
-            <div className="flex gap-2">
-              <Input type="password" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off"
-                placeholder={st.configured ? "已保存，要换就粘贴新的" : "粘贴 sk- 开头的 Key"} />
-              <Button disabled={!key.trim()} loading={save.isPending && save.variables?.api_key != null}
-                onClick={() => save.mutate({ api_key: key.trim() }, { onSuccess: () => setKey("") })}>保存</Button>
-            </div>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              用的是 grsai 生图服务，两个模型共用一个 Key。
-              <a href="https://grsai.ai/zh/dashboard/api-keys" target="_blank" rel="noreferrer" className="ml-1 inline-flex items-center gap-0.5 text-indigo-600 hover:underline">去获取<ExternalLink className="size-3" /></a>
-              {st.origin === "ui" && <button className="ml-3 cursor-pointer text-muted-foreground underline-offset-2 hover:underline" onClick={() => save.mutate({ api_key: "" })}>清除</button>}
-            </p>
           </section>
 
           <section>
@@ -89,15 +124,15 @@ export function ImageSettingsDialog({ onClose }: { onClose: () => void }) {
           <section className="rounded-xl bg-slate-50 p-3">
             <div className="flex items-center gap-2">
               <div className="flex-1 text-xs text-muted-foreground">试出一张封面看看效果（会用掉一次生图额度）</div>
-              <Button size="sm" variant="outline" disabled={!st.configured && !key.trim()} loading={test.isPending}
-                onClick={() => test.mutate({ api_key: key.trim() || null, model: st.model })}><Sparkles />试出一张</Button>
+              <Button size="sm" variant="outline" disabled={!st.channel} loading={test.isPending}
+                onClick={() => test.mutate({ channel: st.channel, model: st.model })}><Sparkles />试出一张{st.channel && `（走 ${CH[st.channel]}）`}</Button>
             </div>
-            {test.isPending && <p className="mt-2 text-xs text-muted-foreground">生成中，GPT Image 大约 1 分钟，Nano Banana 大约 20 秒…</p>}
+            {test.isPending && <p className="mt-2 text-xs text-muted-foreground">生成中，一般 15 秒到 1 分钟…</p>}
             <ErrorText error={test.error} />
             {test.data && (test.data.ok
               ? <div className="mt-3 flex items-start gap-3">
                   <img src={test.data.url} alt="试生成" className="w-40 rounded-lg border" />
-                  <div className="text-xs text-muted-foreground">{test.data.model} · 用时 {test.data.seconds} 秒<br />能出图，配置没问题。</div>
+                  <div className="text-xs text-muted-foreground">{CH[test.data.channel] ?? test.data.channel} · {test.data.model} · 用时 {test.data.seconds} 秒<br />能出图，配置没问题。</div>
                 </div>
               : <p className="mt-2 text-xs text-red-600">没出来：{test.data.error}</p>)}
           </section>

@@ -47,6 +47,9 @@ SPECS: list[CredSpec] = [
              hidden=True),  # 在首页「开始之前」里单独填
     CredSpec("image_api_key", "image", "AI 配图 API Key", "key", "grsai 的 API Key", "https://grsai.ai/zh/dashboard/api-keys",
              hidden=True),  # 配图在单独的「AI 配图」设置里填，不出现在数据来源列表
+    CredSpec("image_next_api_key", "image", "openai-next 生图 API Key", "key", "优先用；额度用完自动换 grsai",
+             "https://credits.openai-next.com", hidden=True),
+    CredSpec("image_next_exhausted", "image", "openai-next 额度用完的时间", "key", "", "", hidden=True),
     CredSpec("image_model", "image", "配图模型", "key", "", "", hidden=True),
     CredSpec("image_refs", "image", "参考对标原图", "key", "", "", hidden=True),  # "off" 表示不参考
     CredSpec("image_check", "image", "出图后自检", "key", "", "", hidden=True),  # "off" 表示不自检

@@ -1563,9 +1563,14 @@ export interface components {
         ImageSettingsIn: {
             /**
              * Api Key
-             * @description null 不改；空字符串清除
+             * @description grsai 的 Key。null 不改；空字符串清除
              */
             api_key?: string | null;
+            /**
+             * Next Api Key
+             * @description openai-next 的 Key。null 不改；空字符串清除
+             */
+            next_api_key?: string | null;
             /** Model */
             model?: string | null;
             /** Use Refs */
@@ -1603,18 +1608,61 @@ export interface components {
              * @default false
              */
             vision: boolean;
+            /**
+             * Next Configured
+             * @description openai-next 的 Key 配了没（配了优先用）
+             * @default false
+             */
+            next_configured: boolean;
+            /**
+             * Next Origin
+             * @default
+             */
+            next_origin: string;
+            /**
+             * Next Exhausted At
+             * @description openai-next 额度用完的时间；空=没用完。用完后几个小时内直接走 grsai
+             * @default
+             */
+            next_exhausted_at: string;
+            /**
+             * Channel
+             * @description 现在先用哪条：next / grsai / 空
+             * @default
+             */
+            channel: string;
         };
         /**
          * ImageStatus
          * @enum {string}
          */
         ImageStatus: "pending" | "running" | "done" | "failed" | "skipped";
+        /** ImageTestIn */
+        ImageTestIn: {
+            /**
+             * Channel
+             * @description next / grsai；不填就用现在先用的那条
+             */
+            channel?: string | null;
+            /**
+             * Api Key
+             * @description 试一个还没保存的 Key（对应 channel）
+             */
+            api_key?: string | null;
+            /** Model */
+            model?: string | null;
+        };
         /** ImageTestOut */
         ImageTestOut: {
             /** Ok */
             ok: boolean;
             /** Model */
             model: string;
+            /**
+             * Channel
+             * @default
+             */
+            channel: string;
             /** Seconds */
             seconds: number;
             /**
@@ -3999,7 +4047,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ImageSettingsIn"];
+                "application/json": components["schemas"]["ImageTestIn"];
             };
         };
         responses: {

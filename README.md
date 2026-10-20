@@ -39,7 +39,8 @@ uv run mediaflow            # 自动打开 http://127.0.0.1:8765
 | 变量 | 必填 | 说明 |
 | --- | --- | --- |
 | `DEEPSEEK_API_KEY` | 是 | 写稿、评审、对话都用 DeepSeek；也可以在页面里填（填的时候会先验证能不能用） |
-| `IMAGE_API_KEY` | 否 | AI 配图；不填则只生成文案 |
+| `IMAGE_NEXT_API_KEY` | 否 | AI 配图（openai-next，优先用）；额度用完或出不了图自动换 grsai，额度用完后 6 小时内直接走 grsai |
+| `IMAGE_API_KEY` | 否 | AI 配图（grsai，备用）；两个都不填就只生成文案。两个 Key 也都能在「AI 配图」设置里填 |
 | `DEEPSEEK_VISION_MODEL` | 否 | 看图用的模型（学配图模板、出图自检），默认 `deepseek-flash`，同一个 DeepSeek Key；留空就不看图 |
 | `MEDIAFLOW_DATA_DIR` | 否 | 数据目录，默认 `server/data` |
 | `MEDIAFLOW_PORT` | 否 | 端口，默认 8765 |

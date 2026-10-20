@@ -6,16 +6,20 @@
 - 已经有出好的图时（重出某张、补出失败的），把同套里出好的一张也带上当风格参照；
   没有参考帖、要从头出一整套时，先出封面，其余几张带上封面一起出
 
-生图服务抽象成 ImageProvider，默认实现是 grsai 节点（gpt-image-2.5 / nano-banana-2.1，界面里可选）。
-要换别家，实现一个 generate(prompt) -> bytes 即可。
+生图服务抽象成 ImageProvider，有两条通道，模型都是界面里选的那个（GPT Image 2.5 / Nano Banana）：
+- openai-next（填了 Key 就优先用）：OpenAI 兼容的 /images/generations，同步返回
+- grsai（备用）：openai-next 额度用完或出不了图时自动换它；额度用完会记下来，之后几个小时直接走 grsai
+要换别家，实现一个 generate(prompt, refs) -> bytes 即可。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
@@ -34,9 +38,10 @@ logger = logging.getLogger(__name__)
 
 
 class ImageError(RuntimeError):
-    def __init__(self, msg: str, *, retryable: bool = True) -> None:
+    def __init__(self, msg: str, *, retryable: bool = True, exhausted: bool = False) -> None:
         super().__init__(msg)
         self.retryable = retryable  # 违规/密钥错误换模型也没用
+        self.exhausted = exhausted  # 额度用完了（换通道）
 
 
 @dataclass(frozen=True)
@@ -50,9 +55,9 @@ class ImageModel:
 # 都是 grsai 节点上的模型，同一个 Key；都出 3:4 竖图（小红书标准比例）
 MODELS: list[ImageModel] = [
     ImageModel("gpt-image-2.5", "GPT Image 2.5",
-               "推荐。更像小红书封面：大字标题排版好看、画面有设计感；便宜一点，一张约 1 分钟", {"aspectRatio": "3:4"}),
+               "推荐。更像小红书封面：大字标题排版好看、画面有设计感", {"aspectRatio": "3:4"}),
     ImageModel("nano-banana-2.1", "Nano Banana 2.1",
-               "出图快（一张约 20 秒），画面更写实像实拍；贵一点点", {"aspectRatio": "3:4", "imageSize": "1K"}),
+               "出图快，画面更写实像实拍（openai-next 上用的是 Gemini 3.1 Flash Image）", {"aspectRatio": "3:4", "imageSize": "1K"}),
 ]
 _MODELS = {m.id: m for m in MODELS}
 
@@ -61,12 +66,50 @@ def image_key() -> str:
     return credentials.get("image_api_key")
 
 
+def next_key() -> str:
+    return credentials.get("image_next_api_key")
+
+
+NEXT_PAUSE_HOURS = 6  # openai-next 额度用完后这么久内直接走 grsai，过了再试（可能充值了）
+
+
+def next_exhausted_at() -> str:
+    """openai-next 额度用完的时间（ISO），没用完 / 已经过了暂停期返回空。"""
+    at = credentials.get("image_next_exhausted")
+    if not at:
+        return ""
+    try:
+        t = datetime.fromisoformat(at)
+    except ValueError:
+        return ""
+    return at if datetime.now(UTC) - t < timedelta(hours=NEXT_PAUSE_HOURS) else ""
+
+
+def mark_next_exhausted(on: bool = True) -> None:
+    credentials.update({"image_next_exhausted": datetime.now(UTC).isoformat() if on else ""})
+
+
+def active_channel() -> str:
+    """现在实际先用哪条：next / grsai / 空（都没配）。"""
+    if next_key() and (not next_exhausted_at() or not image_key()):
+        return "next"
+    return "grsai" if image_key() else ""
+
+
+def channels() -> list[str]:
+    """出图按顺序走哪几条通道（openai-next 额度用完的暂停期内，ChainProvider 会跳过它）。"""
+    out = ["next"] if next_key() else []
+    if image_key():
+        out.append("grsai")
+    return out
+
+
 def image_model() -> str:
     return credentials.get("image_model") or get_settings().image_model
 
 
 def image_configured() -> bool:
-    return bool(image_key())
+    return bool(image_key() or next_key())
 
 
 def use_refs() -> bool:
@@ -155,6 +198,120 @@ class GrsaiProvider:
             return img.content
 
 
+# 界面里的模型 → openai-next 上对应的模型和出 3:4 竖图的参数
+NEXT_MODELS: dict[str, tuple[str, dict]] = {
+    "gpt-image-2.5": ("gpt-image-2.5", {"size": "1152x1536"}),
+    "nano-banana-2.1": ("gemini-3.1-flash-image", {"aspect_ratio": "3:4"}),
+}
+_QUOTA_WORDS = ("quota", "额度", "余额", "insufficient", "balance", "credit", "用尽", "欠费", "充值", "recharge")
+
+
+class OpenAINextProvider:
+    """openai-next 生图：POST /images/generations（同步出图，参考图放 image 数组里传 data URL）。
+    主模型失败自动换另一个模型重试一次；额度用完直接报 exhausted，让外面换 grsai。"""
+
+    def __init__(self, settings: Settings | None = None, *, model: str | None = None, key: str | None = None,
+                 fallback: bool = True) -> None:
+        self.s = settings or get_settings()
+        self.key = key if key is not None else next_key()
+        if not self.key:
+            raise ImageError("没有配置 openai-next 的 API Key", retryable=False)
+        self.model = model or image_model()
+        others = [m for m in NEXT_MODELS if m != self.model]
+        self.fallback = others[0] if fallback and others else None
+
+    async def generate(self, prompt: str, refs: list[str] | None = None) -> bytes:
+        try:
+            return await self._one(self.model, prompt, refs)
+        except ImageError as e:
+            if not self.fallback or not e.retryable or e.exhausted:
+                raise
+            logger.warning("openai-next %s 生图失败（%s），换 %s 再试", self.model, e, self.fallback)
+            return await self._one(self.fallback, prompt, refs)
+
+    async def _one(self, model: str, prompt: str, refs: list[str] | None = None) -> bytes:
+        real, extra = NEXT_MODELS.get(model, (model, {"size": "1152x1536"}))
+        # 平台会拦默认 UA，按它的文档用 curl 的
+        headers = {"Authorization": f"Bearer {self.key}", "User-Agent": "curl/8.5.0"}
+        body = {"model": real, "prompt": prompt, "n": 1, **extra, **({"image": refs} if refs else {})}
+        url = self.s.image_next_base_url.rstrip("/") + "/images/generations"
+        async with httpx.AsyncClient(timeout=httpx.Timeout(self.s.image_timeout, connect=15)) as c:
+            try:
+                r = await c.post(url, headers=headers, json=body)
+            except httpx.HTTPError as e:
+                raise ImageError(f"连不上 openai-next：{type(e).__name__}") from e
+            try:
+                data = r.json()
+            except ValueError:
+                raise ImageError(f"openai-next HTTP {r.status_code}：{r.text[:200]}") from None
+            items = data.get("data") if isinstance(data, dict) else None
+            if r.status_code >= 400 or not items:
+                err = data.get("error") if isinstance(data, dict) else None
+                msg = str((err or {}).get("message") if isinstance(err, dict) else err or data.get("message") or "")[:200]
+                low = msg.lower()
+                if r.status_code == 402 or any(w in low for w in _QUOTA_WORDS):
+                    raise ImageError(f"openai-next 额度用完了：{msg or r.status_code}", retryable=False, exhausted=True)
+                if r.status_code == 401 or "invalid token" in low:
+                    raise ImageError("openai-next 的 API Key 不对或已失效", retryable=False)
+                if any(w in low for w in ("safety", "moderation", "content policy", "违规", "敏感")):
+                    raise ImageError("画面描述被判违规，换个说法再试", retryable=False)
+                raise ImageError(f"openai-next 生图失败：{msg or f'HTTP {r.status_code}'}")
+            first = items[0] if isinstance(items[0], dict) else {}
+            if first.get("b64_json"):
+                try:
+                    return base64.b64decode(first["b64_json"])
+                except ValueError as e:
+                    raise ImageError("openai-next 返回的图片解不开") from e
+            if not first.get("url"):
+                raise ImageError("openai-next 没有返回图片")
+            try:
+                img = await c.get(first["url"], timeout=60)
+                img.raise_for_status()
+            except httpx.HTTPError as e:
+                raise ImageError(f"图片下载失败：{type(e).__name__}") from e
+            return img.content
+
+
+class ChainProvider:
+    """按顺序试几条通道：openai-next → grsai。openai-next 额度用完记下来，暂停期内直接走 grsai。"""
+
+    def __init__(self, providers: list[tuple[str, ImageProvider]]) -> None:
+        if not providers:
+            raise ImageError("没有配置配图 API Key", retryable=False)
+        self.providers = providers
+
+    async def generate(self, prompt: str, refs: list[str] | None = None) -> bytes:
+        last: ImageError | None = None
+        for i, (name, p) in enumerate(self.providers):
+            if name == "next" and len(self.providers) > 1 and next_exhausted_at():
+                continue  # 额度用完的暂停期内直接走 grsai
+            try:
+                data = await p.generate(prompt, refs)
+            except ImageError as e:
+                last = e
+                if name == "next" and e.exhausted:
+                    if not next_exhausted_at():
+                        logger.warning("openai-next 额度用完了，接下来先用 grsai（%s 小时后再试 openai-next）", NEXT_PAUSE_HOURS)
+                    mark_next_exhausted()
+                if i + 1 < len(self.providers):
+                    logger.warning("%s 没出来（%s），换 %s", _CHANNEL_LABEL[name], e, _CHANNEL_LABEL[self.providers[i + 1][0]])
+                continue
+            if name == "next" and next_exhausted_at():
+                mark_next_exhausted(False)  # 又能出了（充值了）
+            return data
+        assert last is not None
+        raise last
+
+
+_CHANNEL_LABEL = {"next": "openai-next", "grsai": "grsai"}
+
+
+def channel_provider(name: str, *, key: str | None = None, model: str | None = None, fallback: bool = True) -> ImageProvider:
+    if name == "next":
+        return OpenAINextProvider(key=key, model=model, fallback=fallback)
+    return GrsaiProvider(key=key, model=model, fallback=fallback)
+
+
 _provider_factory: Callable[[], ImageProvider] | None = None
 
 
@@ -168,7 +325,7 @@ def mold_slot(local: list[str], idx: int) -> int:
 def get_provider() -> ImageProvider:
     if _provider_factory is not None:
         return _provider_factory()
-    return GrsaiProvider()
+    return ChainProvider([(c, channel_provider(c)) for c in channels()])
 
 
 def set_provider_factory(f: Callable[[], ImageProvider] | None) -> None:

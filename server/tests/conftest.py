@@ -8,6 +8,7 @@ os.environ["MEDIAFLOW_DATA_DIR"] = _tmp
 os.environ["DEEPSEEK_API_KEY"] = "test"
 os.environ["DEEPSEEK_VISION_MODEL"] = ""  # 默认不看图；要测看图的注入 set_vision_llm
 os.environ.pop("IMAGE_API_KEY", None)
+os.environ.pop("IMAGE_NEXT_API_KEY", None)
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402

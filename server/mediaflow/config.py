@@ -24,6 +24,8 @@ class Settings(BaseSettings):
 
     # 配图
     image_api_key: str = ""
+    image_next_api_key: str = ""      # openai-next 生图（优先用，额度用完自动换 grsai）
+    image_next_base_url: str = "https://api.openai-next.com/v1"
     image_endpoint: str = "https://grsai.dakka.com.cn/v1/api/generate"
     image_model: str = "gpt-image-2.5"
     image_size: str = "3:4"           # 只对不认识的模型生效；内置模型按各自参数出 3:4 竖图
@@ -78,7 +80,7 @@ class Settings(BaseSettings):
 
     @property
     def image_configured(self) -> bool:
-        return bool(self.image_api_key)
+        return bool(self.image_api_key or self.image_next_api_key)
 
 
 @lru_cache

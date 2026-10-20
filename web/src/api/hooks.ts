@@ -380,7 +380,7 @@ export const useImageSettings = () =>
 export function useSaveImageSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { api_key?: string | null; model?: string | null; use_refs?: boolean; check?: boolean }) =>
+    mutationFn: (body: { api_key?: string | null; next_api_key?: string | null; model?: string | null; use_refs?: boolean; check?: boolean }) =>
       unwrap(api.PUT("/api/settings/image", { body })),
     onSuccess: (d) => {
       qc.setQueryData(["image-settings"], d);
@@ -391,7 +391,8 @@ export function useSaveImageSettings() {
 
 export const useTestImage = () =>
   useMutation({
-    mutationFn: (body: { api_key?: string | null; model?: string | null }) => unwrap(api.POST("/api/settings/image/test", { body })),
+    mutationFn: (body: { channel?: string | null; api_key?: string | null; model?: string | null }) =>
+      unwrap(api.POST("/api/settings/image/test", { body })),
   });
 
 export const useLlmSettings = () =>
