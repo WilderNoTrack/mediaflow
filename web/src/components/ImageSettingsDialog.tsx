@@ -66,9 +66,21 @@ export function ImageSettingsDialog({ onClose }: { onClose: () => void }) {
               <input type="checkbox" className="mt-0.5 size-4 accent-indigo-500" checked={st.use_refs}
                 onChange={(e) => save.mutate({ use_refs: e.target.checked })} />
               <span>
-                <span className="font-medium">照着参考帖的原图出图</span>
+                <span className="font-medium">照着样例图出图</span>
                 <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
-                  每篇的配图一张对一张照着它的参考帖（同一篇）的原图做版式，内容和文字换成本篇的（不照搬人物和文字）。关掉就只按账号的配图风格出。不管开不开，一套图都用同一份视觉规范，保证统一。
+                  账号有配图模板时，每张照模板里那种页的样例图排版；没有模板时，一张对一张照着这篇参考帖的原图做版式。内容和文字都换成本篇的（不照搬人物和文字）。
+                  关掉就只按文字描述的风格出。不管开不开，一套图都用同一份视觉规范，保证统一。
+                </span>
+              </span>
+            </label>
+            <label className={cn("mt-2 flex items-start gap-2.5 rounded-xl border p-3", st.vision ? "cursor-pointer hover:border-indigo-200" : "opacity-60")}>
+              <input type="checkbox" className="mt-0.5 size-4 accent-indigo-500" checked={st.check && st.vision} disabled={!st.vision}
+                onChange={(e) => save.mutate({ check: e.target.checked })} />
+              <span>
+                <span className="font-medium">出完自己检查一遍</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+                  每张出完让 AI 看一眼：图上的字有没有错字乱码、画面和描述对不对得上、和同套的图是不是一个风格。有问题就带着修改意见自动重出一次（会多用一次生图额度），结果在草稿页每张图下面能看到。
+                  {!st.vision && " 需要配好 DeepSeek Key 才能看图。"}
                 </span>
               </span>
             </label>

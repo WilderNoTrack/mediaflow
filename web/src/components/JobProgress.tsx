@@ -6,7 +6,7 @@ import { isActive } from "../api/hooks";
 import { cn } from "../lib/utils";
 
 const WRITE_STEPS = [["topic", "定选题"], ["write", "写稿"], ["review", "AI 打分"], ["done", "完成"]] as const;
-const CLONE_STEPS = [["find", "读作品"], ["detail", "看爆款"], ["analyze", "拆打法"], ["adapt", "合成方案"]] as const;
+const CLONE_STEPS = [["find", "读作品"], ["detail", "看爆款"], ["analyze", "拆打法"], ["adapt", "合成方案"], ["visual", "学配图"]] as const;
 const HIDDEN_KEY = "mf.hiddenJobs";
 
 const finishedAt = (j: Job) => (j.finished_at ? new Date(/Z|[+-]\d\d:\d\d$/.test(j.finished_at) ? j.finished_at : j.finished_at + "Z").getTime() : 0);
@@ -22,7 +22,7 @@ export function JobStrip({ jobs, hide: hideKinds = [] }: { jobs: Job[]; hide?: s
   const shown = jobs.filter((j) => {
     if (hideKinds.includes(j.kind)) return false;
     if (isActive(j)) return true;
-    if (!["write_draft", "clone_creator", "find_benchmarks"].includes(j.kind) || hidden.includes(j.id)) return false; // 配图任务结束后在草稿页看结果即可
+    if (!["write_draft", "clone_creator", "find_benchmarks", "learn_visual"].includes(j.kind) || hidden.includes(j.id)) return false; // 配图任务结束后在草稿页看结果即可
     return Date.now() - finishedAt(j) < 10 * 60_000;
   }).slice(0, 2);
   if (!shown.length) return null;
@@ -50,6 +50,21 @@ function JobRow({ job, onClose }: { job: Job; onClose: () => void }) {
           <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-700"
             style={{ width: `${prog ? Math.max(6, (prog.done / prog.total) * 100) : 6}%` }} />
         </div>
+      </div>
+    );
+  }
+  if (job.kind === "learn_visual") {
+    const pages = (job.result as { pages?: string[] }).pages ?? [];
+    const tone = job.status === "failed" ? "border-red-200 bg-red-50 text-red-700" : active ? "border-indigo-200 bg-card" : "border-emerald-200 bg-emerald-50 text-emerald-800";
+    return (
+      <div className={cn("flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm", tone)}>
+        {active ? <Loader2 className="size-4 animate-spin text-indigo-500" /> : job.status === "failed" ? <XCircle className="size-4 shrink-0" /> : <CheckCircle2 className="size-4 shrink-0" />}
+        <span className="min-w-0 flex-1 truncate">
+          {active ? <>正在看图学配图模板<span className="ml-2 text-xs text-muted-foreground">{last?.message}</span></>
+            : job.status === "failed" ? `配图模板没学成：${job.error || "未知错误"}` : `配图模板学好了：${pages.join("、")}，以后每篇照它出图`}
+        </span>
+        <Link to={`/accounts/${job.account_id}?tab=config`} className="shrink-0 font-medium hover:underline">去看看 →</Link>
+        {!active && <button onClick={onClose} className="cursor-pointer opacity-60 hover:opacity-100" aria-label="关闭"><X className="size-4" /></button>}
       </div>
     );
   }
@@ -83,7 +98,7 @@ function JobRow({ job, onClose }: { job: Job; onClose: () => void }) {
       <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">
         <CheckCircle2 className="size-4 shrink-0" />
         {clone ? <>
-        <span className="min-w-0 flex-1 truncate">复刻方案做好了：定位、规则和复刻选题已同步</span>
+        <span className="min-w-0 flex-1 truncate">复刻方案做好了：定位、规则和复刻选题已同步{((job.result as { visual_pages?: string[] }).visual_pages?.length ?? 0) > 0 && "，配图模板也学好了"}</span>
         <Link to={`/accounts/${job.account_id}?tab=bench`} className="shrink-0 font-medium hover:underline">查看复刻方案 →</Link>
         </> : <>
         <span className="min-w-0 flex-1 truncate">写好了{title ? `：${title}` : last?.message ? `：${last.message.replace(/^草稿已保存：/, "")}` : ""}</span>

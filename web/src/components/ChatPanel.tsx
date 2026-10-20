@@ -27,6 +27,8 @@ const TOOL_META: Record<string, { icon: string; label: string }> = {
   get_draft: { icon: "👀", label: "看了草稿" },
   edit_images: { icon: "🖼", label: "改配图" },
   revise_post: { icon: "✍️", label: "改文案" },
+  learn_visual: { icon: "🎨", label: "学配图模板" },
+  update_visual: { icon: "🎨", label: "改配图模板" },
 };
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -53,7 +55,8 @@ function toolSummary(m: ChatMessage) {
     return Object.keys(args).map((k) => keys[k] ?? k).join("、");
   }
   if (m.tool_name === "find_topics" && Array.isArray(result.topics)) return `${result.topics.length} 个，点「写这篇」就开始写`;
-  if (m.tool_name === "write_post" || m.tool_name === "revise_post") return "进度见下方";
+  if (m.tool_name === "write_post" || m.tool_name === "revise_post" || m.tool_name === "learn_visual") return "进度见下方";
+  if (m.tool_name === "update_visual") return String(result.changed ?? "") || (Array.isArray(result.pages) ? `${result.pages.length} 种页` : "");
   if (m.tool_name === "get_draft" && typeof result.title === "string") return `《${result.title}》`;
   if (m.tool_name === "edit_images") {
     const ch = Array.isArray(result.changed) ? (result.changed as number[]) : [];
@@ -222,7 +225,7 @@ function ToolCard({ account, m }: { account: Account; m: ChatMessage }) {
   const r = (m.payload?.result ?? {}) as { ok?: boolean; candidates?: Candidate[]; job_id?: string; draft_id?: string; topics?: { id: string; title: string; angle?: string }[] };
   if (!r.ok) return null;
   if (m.tool_name === "find_benchmarks" && r.candidates) return <CandidatePicker account={account} candidates={r.candidates} compact />;
-  if (["write_post", "clone_creator", "revise_post", "edit_images"].includes(m.tool_name) && r.job_id)
+  if (["write_post", "clone_creator", "revise_post", "edit_images", "learn_visual"].includes(m.tool_name) && r.job_id)
     return <ChatJobCard account={account} jobId={r.job_id} draftId={r.draft_id} />;
   if (m.tool_name === "find_topics" && r.topics?.length) return <TopicCards account={account} topics={r.topics} />;
   return null;
@@ -325,7 +328,7 @@ const ARG_LABEL: Record<string, string> = {
   keyword: "关键词", platform: "平台", name: "名字", query: "搜", text: "内容", title: "标题", topic_id: "选题",
   hint: "要求", direction: "方向", reference_url: "参考帖", targets: "对标", theme: "主题", enabled: "开启", frequency: "频率",
   creator_ref: "博主", post_ref: "作品", limit: "数量", sort: "排序", prefer: "偏好",
-  draft_id: "草稿", ops: "改动", instruction: "要求", image_plan: "配图想法",
+  draft_id: "草稿", ops: "改动", instruction: "要求", image_plan: "配图想法", links: "链接",
 };
 
 /** 逐字显示：新到的字以「追上去」的速度一点点露出来，像打字一样 */

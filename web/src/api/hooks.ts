@@ -200,6 +200,24 @@ export function useDraftActions(id: string) {
   };
 }
 
+/** 账号配图模板：学（后台任务）、手动改、清掉 */
+export function useVisual(id: string) {
+  const qc = useQueryClient();
+  const p = { params: { path: { account_id: id } } };
+  const done = (a: S["AccountDetail"]) => { qc.setQueryData(["account", id], a); qc.invalidateQueries({ queryKey: ["accounts"] }); };
+  return {
+    learn: useMutation({
+      mutationFn: (links: string = "") => unwrap(api.POST("/api/accounts/{account_id}/visual/learn", { ...p, body: { links } })),
+      onSettled: () => qc.invalidateQueries({ queryKey: ["jobs", id] }),
+    }),
+    patch: useMutation({
+      mutationFn: (body: S["VisualPatch"]) => unwrap(api.PATCH("/api/accounts/{account_id}/visual", { ...p, body })),
+      onSuccess: done,
+    }),
+    clear: useMutation({ mutationFn: () => unwrap(api.DELETE("/api/accounts/{account_id}/visual", p)), onSuccess: done }),
+  };
+}
+
 export function useWrite(id: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -362,7 +380,7 @@ export const useImageSettings = () =>
 export function useSaveImageSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { api_key?: string | null; model?: string | null; use_refs?: boolean }) =>
+    mutationFn: (body: { api_key?: string | null; model?: string | null; use_refs?: boolean; check?: boolean }) =>
       unwrap(api.PUT("/api/settings/image", { body })),
     onSuccess: (d) => {
       qc.setQueryData(["image-settings"], d);

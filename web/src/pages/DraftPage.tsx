@@ -189,12 +189,13 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
     onSuccess: () => { setEditing(false); setUrl(""); setJustSet(true); },
   });
   const busy = d.images.some((x) => x.status === "pending" || x.status === "running");
+  const tpl = d.image_mold === "template"; // 配图照账号配图模板，参考帖只给文案
   return (
     <Card>
       <CardHead icon={<Link2 />} title="参考帖"
-        action={!editing && <button className="cursor-pointer text-xs text-indigo-600 hover:underline" onClick={() => setEditing(true)}>{ref.title ? "换配图照的那篇" : "指定一篇"}</button>} />
+        action={!editing && <button className="cursor-pointer text-xs text-indigo-600 hover:underline" onClick={() => setEditing(true)}>{tpl ? "让配图照一篇" : ref.title ? "换配图照的那篇" : "指定一篇"}</button>} />
       <CardBody className="space-y-3">
-        {ref.title && <div className="text-[11px] font-medium text-muted-foreground">配图统一照这篇{(ref.extra?.length ?? 0) > 0 && "，文案也学它"}</div>}
+        {ref.title && <div className="text-[11px] font-medium text-muted-foreground">{tpl ? "文案参考这篇，配图照账号的配图模板" : `配图统一照这篇${(ref.extra?.length ?? 0) > 0 ? "，文案也学它" : ""}`}</div>}
         {ref.title ? (
           <div className="flex gap-3">
             {n > 0
@@ -208,13 +209,16 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
               {ref.why && <div className="mt-1 text-muted-foreground">为什么选它：{ref.why}</div>}
             </div>
           </div>
-        ) : (
+        ) : !tpl && (
           <p className="text-xs leading-relaxed text-muted-foreground">这篇没有照着具体的帖子做（没找到合适的对标爆款）。贴一篇小红书图文笔记，配图就会一张对一张照着它的版式出。</p>
         )}
-        {ref.title && n > 0 && !editing && !justSet && (
+        {tpl && !editing && !justSet && (
+          <p className="text-xs leading-relaxed text-muted-foreground">配图照账号的配图模板做：每张选一种页型、照它的样例排版，整个账号一个风格。想让这篇的配图照某篇帖子做，点右上角贴它的链接。</p>
+        )}
+        {!tpl && ref.title && n > 0 && !editing && !justSet && (
           <p className="text-xs leading-relaxed text-muted-foreground">配图一张对一张照着它的版式、文字位置和配色重做，内容换成这篇的；整套用同一份视觉规范，翻起来是一套。</p>
         )}
-        {ref.title && n === 0 && (
+        {!tpl && ref.title && n === 0 && (
           <p className="text-xs leading-relaxed text-muted-foreground">这篇的原图没拿到，配图按账号的配图风格统一出。</p>
         )}
         {(ref.extra?.length ?? 0) > 0 && (
@@ -312,6 +316,7 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
                 {im.url ? <img src={im.url} alt="" className="size-full object-cover" />
                   : im.status === "pending" || im.status === "running" ? <Spinner className="size-3" />
                   : <span className="text-[10px] text-muted-foreground">{k + 1}</span>}
+                {im.status === "done" && (im.review as Review).ok === false && <span className="absolute right-0.5 top-0.5 size-2 rounded-full bg-amber-500 ring-1 ring-white" title="自检觉得有问题" />}
               </button>
             ))}
           </div>
@@ -319,14 +324,17 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
         {cur ? (
           <div>
             <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-              <span>第 {cur.idx + 1} 张{cur.idx === 0 && "（封面）"}的画面描述</span>
+              <span>第 {cur.idx + 1} 张{cur.idx === 0 && "（封面）"}的画面描述
+                {cur.page_type && <Badge className="ml-1.5 bg-indigo-50 font-normal text-indigo-600" >{cur.page_type}</Badge>}</span>
               {cur.status === "failed" && <span className="text-red-500">生成失败</span>}
             </div>
             <div className="flex items-start gap-2">
               {cur.ref_url && (
-                <a href={cur.ref_url} target="_blank" rel="noreferrer" className="shrink-0 text-center" title="这张照着参考帖的这张图做">
+                <a href={cur.ref_url} target="_blank" rel="noreferrer" className="shrink-0 text-center" title={d.image_mold === "template" ? "这张照着账号配图模板里这种页的样例排版" : "这张照着参考帖的这张图做"}>
                   <img src={cur.ref_url} alt="" className="h-[64px] w-[48px] rounded-md border object-cover" />
-                  <span className="mt-0.5 block text-[10px] text-muted-foreground">照着原帖第 {((d.reference as Ref).local ?? []).indexOf(cur.ref_url.replace("/files/images/", "")) + 1 || "?"} 张</span>
+                  <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                    {d.image_mold === "template" ? "照模板样例" : `照着原帖第 ${((d.reference as Ref).local ?? []).indexOf(cur.ref_url.replace("/files/images/", "")) + 1 || "?"} 张`}
+                  </span>
                 </a>
               )}
               {edit?.mode === "update" ? (
@@ -349,6 +357,7 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
                 </div>
               )}
             </div>
+            {cur.status === "done" && !edit && <ReviewNote r={cur.review as Review} />}
             {edit?.mode === "update" && (
               <div className="mt-2 flex justify-end gap-2">
                 <Button variant="ghost" size="xs" onClick={() => setEdit(null)}>取消</Button>
@@ -400,6 +409,26 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
         <ErrorText error={act.images.error} />
       </CardBody>
     </Card>
+  );
+}
+
+type Review = { ok?: boolean; problems?: string[]; redone?: boolean; before?: string[]; skipped?: boolean };
+
+/** 出图后看图自检的结果：没问题 / 发现问题自动重出过 / 还有问题要人看 */
+function ReviewNote({ r }: { r?: Review }) {
+  if (!r || r.ok == null || r.skipped) return null;
+  const list = (x?: string[]) => (x ?? []).join("；");
+  if (r.ok && !r.redone) return <div className="mt-1.5 flex items-center gap-1 text-[11px] text-emerald-600"><CheckCircle2 className="size-3" />自检过了：字和画面都对得上</div>;
+  if (r.ok) return (
+    <div className="mt-1.5 rounded-md bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-700">
+      <CheckCircle2 className="mr-1 inline size-3" />自检发现「{list(r.before)}」，已经自动改了重出一次，现在没问题了
+    </div>
+  );
+  return (
+    <div className="mt-1.5 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-800">
+      <AlertTriangle className="mr-1 inline size-3" />{r.redone ? "自动重出过一次，自检觉得还有问题：" : "自检觉得有问题："}{list(r.problems)}。
+      可以改描述再出，或者跟小媒说怎么改。
+    </div>
   );
 }
 

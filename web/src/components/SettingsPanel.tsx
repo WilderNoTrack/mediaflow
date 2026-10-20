@@ -4,6 +4,7 @@ import type { Account, S } from "../api/client";
 import { useNotes, useRules, useUpdateAccount, useWrite } from "../api/hooks";
 import { cn, FREQ_LABEL, timeAgo } from "../lib/utils";
 import { Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Label, Switch, Textarea } from "./ui";
+import { VisualCard } from "./VisualCard";
 
 const FIELDS: { key: keyof S["AccountPatch"]; label: string; placeholder: string; rows?: number; wide?: boolean }[] = [
   { key: "name", label: "账号名称", placeholder: "例如：打工人理财笔记" },
@@ -22,6 +23,7 @@ export function SettingsPanel({ account, busy }: { account: Account; busy: boole
         这里的内容都可以直接跟右边的小媒说，它会帮你改好；也可以在这里手动改。
       </p>
       <ProfileCard account={account} />
+      <VisualCard account={account} />
       <RulesCard account={account} />
       <NotesCard account={account} />
       <AutoCard account={account} busy={busy} />

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, CheckCircle2, FileText, ImageIcon, Loader2, PenLine, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, FileText, ImageIcon, Loader2, Palette, PenLine, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, unwrap, type Account, type Job, type JobEvent } from "../api/client";
@@ -36,6 +36,16 @@ export function ChatJobCard({ account, jobId, draftId: forDraft }: { account: Ac
   const draftId = (job.result as { draft_id?: string }).draft_id ?? forDraft;
   if (draftId) return <DraftCard account={account} draftId={draftId} />;
   if (job.kind === "clone_creator") return <PlanCard account={account} />;
+  if (job.kind === "learn_visual") {
+    const pages = (job.result as { pages?: string[] }).pages ?? [];
+    return (
+      <Shell className="border-emerald-200">
+        <Palette className="size-4 shrink-0 text-emerald-600" />
+        <span className="min-w-0 flex-1">配图模板学好了：{pages.length} 种页（{pages.join("、")}），以后每篇照它出图</span>
+        <Link to={`/accounts/${account.id}?tab=config`} className="shrink-0 text-xs font-medium text-indigo-600 hover:underline">去看看 →</Link>
+      </Shell>
+    );
+  }
   return null;
 }
 
@@ -43,8 +53,9 @@ function Shell({ className, children }: { className?: string; children: React.Re
   return <div className={cn("ml-10 flex items-center gap-2 rounded-xl border bg-card px-3 py-2.5 text-sm shadow-sm", className)}>{children}</div>;
 }
 
-const LABEL: Record<string, string> = { write_draft: "正在写稿", clone_creator: "正在学习对标账号", revise_draft: "正在改稿", generate_images: "正在出图" };
-const FAIL: Record<string, string> = { clone_creator: "没学成", revise_draft: "没改成", generate_images: "没出成" };
+const LABEL: Record<string, string> = { write_draft: "正在写稿", clone_creator: "正在学习对标账号", revise_draft: "正在改稿", generate_images: "正在出图",
+  learn_visual: "正在看图学配图模板" };
+const FAIL: Record<string, string> = { clone_creator: "没学成", revise_draft: "没改成", generate_images: "没出成", learn_visual: "配图模板没学成" };
 
 function Running({ job }: { job: Job }) {
   const events = job.events as JobEvent[];
