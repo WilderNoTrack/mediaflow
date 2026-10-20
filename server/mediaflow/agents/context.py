@@ -32,6 +32,7 @@ class AccountContext:
     used_topics: tuple[str, ...] = field(default=())
     notes: tuple[str, ...] = field(default=())  # 运营笔记（调研结论），已截断
     playbook: str = ""  # 对标账号的打法摘要（复刻模式）
+    visual: str = ""  # 账号配图模板（一行：整体视觉 + 有哪几种页）
 
     def profile_text(self) -> str:
         lines = [
@@ -42,6 +43,8 @@ class AccountContext:
             f"配图风格：{self.image_style or '真实感手机摄影'}",
             f"选题方向：{self.topic_type or '围绕主题自由发挥'}",
         ]
+        if self.visual:
+            lines.append(self.visual)
         if self.keywords:
             lines.append("关键词：" + "、".join(self.keywords))
         if self.playbook:
@@ -83,6 +86,7 @@ def load_context(session: Session, account_id: str) -> AccountContext:
         select(Note).where(Note.account_id == account_id).order_by(col(Note.created_at).desc()).limit(NOTES_IN_CONTEXT)
     ).all()
     from mediaflow.services.benchmark import plan_text, ready
+    from mediaflow.services.visual import context_line
 
     benches = ready(session, account_id)
     return AccountContext(
@@ -99,5 +103,6 @@ def load_context(session: Session, account_id: str) -> AccountContext:
         recent_titles=tuple(titles),
         used_topics=tuple(used),
         playbook=plan_text(acc, benches),
+        visual=context_line(acc.visual),
         notes=tuple(f"{n.title}：{' '.join(n.content.split())[:NOTE_CHARS]}" for n in notes),
     )

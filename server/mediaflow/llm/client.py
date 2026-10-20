@@ -96,14 +96,16 @@ async def complete_json(
 
 
 class DeepSeekLLM:
-    def __init__(self, settings: Settings | None = None, *, api_key: str | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, *, api_key: str | None = None, model: str | None = None,
+                 extra: dict[str, Any] | None = None) -> None:
         from openai import AsyncOpenAI
 
         s = settings or get_settings()
         key = api_key or llm_key()
         if not key:
             raise LLMNotConfigured()
-        self.model = s.deepseek_model
+        self.model = model or s.deepseek_model
+        self.extra = extra or {}
         self.client = AsyncOpenAI(
             api_key=key,
             base_url=s.deepseek_base_url,
@@ -130,6 +132,8 @@ class DeepSeekLLM:
             kwargs["response_format"] = {"type": "json_object"}
         if tools:
             kwargs["tools"] = tools
+        if self.extra:
+            kwargs["extra_body"] = self.extra
         try:
             r = await self.client.chat.completions.create(**kwargs)
         except APIError as e:
@@ -237,3 +241,39 @@ def set_llm(llm: LLM | None) -> None:
     """测试用：注入假 LLM。"""
     global _llm_override
     _llm_override = llm
+
+
+# ── 看图模型（多模态）：学配图模板、出图自检 ───────────────────────────────
+
+_vision_override: LLM | None = None
+
+
+def vision_model() -> str:
+    return (get_settings().deepseek_vision_model or "").strip()
+
+
+def vision_available() -> bool:
+    """能不能看图：测试里注入了就能；否则要有 DeepSeek Key、配了看图模型（注入了假文本 LLM 的测试环境不算）。"""
+    if _vision_override is not None:
+        return True
+    return _llm_override is None and bool(llm_key()) and bool(vision_model())
+
+
+def get_vision_llm(effort: str | None = None) -> LLM | None:
+    """看图用的 LLM；用不了返回 None（调用方跳过看图那一步）。effort=low 时少想一会儿，自检这种简单活用。"""
+    if _vision_override is not None:
+        return _vision_override
+    if not vision_available():
+        return None
+    return DeepSeekLLM(model=vision_model(), extra={"reasoning_effort": effort} if effort else None)
+
+
+def set_vision_llm(llm: LLM | None) -> None:
+    """测试用：注入假的看图 LLM。"""
+    global _vision_override
+    _vision_override = llm
+
+
+def image_part(uri: str) -> dict[str, Any]:
+    """OpenAI 格式的图片消息片段（data URI）。"""
+    return {"type": "image_url", "image_url": {"url": uri}}

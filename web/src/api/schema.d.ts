@@ -282,6 +282,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/visual/learn": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Learn Visual
+         * @description 学账号配图模板（后台任务，大约 1 分钟）：给了笔记链接就照这几篇学，不给就看对标账号的爆款图。要能看图的模型。
+         */
+        post: operations["learn_visual_api_accounts__account_id__visual_learn_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/visual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Clear Visual
+         * @description 不用配图模板了：以后配图照每篇的参考帖做。
+         */
+        delete: operations["clear_visual_api_accounts__account_id__visual_delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Visual
+         * @description 手动改配图模板：改整体视觉、改/删页型（样例图按页型名字沿用）。
+         */
+        patch: operations["update_visual_api_accounts__account_id__visual_patch"];
+        trace?: never;
+    };
     "/api/accounts/{account_id}/benchmark/report": {
         parameters: {
             query?: never;
@@ -961,6 +1005,14 @@ export interface components {
             bench_candidates: {
                 [key: string]: unknown;
             };
+            /**
+             * Visual
+             * @description 账号配图模板：spec 整体视觉、pages 页型（type/desc/when/examples 样例图本地路径）、tips、source 从哪学的、at
+             * @default {}
+             */
+            visual: {
+                [key: string]: unknown;
+            };
         };
         /** AccountIn */
         AccountIn: {
@@ -1294,6 +1346,12 @@ export interface components {
              */
             image_spec: string;
             /**
+             * Image Mold
+             * @description 配图版式照什么：post=主参考帖原图一张对一张，template=账号配图模板，空=都没有
+             * @default
+             */
+            image_mold: string;
+            /**
              * Created At
              * Format: date-time
              */
@@ -1372,6 +1430,12 @@ export interface components {
              * @default
              */
             image_spec: string;
+            /**
+             * Image Mold
+             * @description 配图版式照什么：post=主参考帖原图一张对一张，template=账号配图模板，空=都没有
+             * @default
+             */
+            image_mold: string;
             /**
              * Created At
              * Format: date-time
@@ -1480,6 +1544,20 @@ export interface components {
              * @description 这张照着参考帖哪张原图出的（本地缓存地址）
              */
             ref_url?: string | null;
+            /**
+             * Page Type
+             * @description 用的账号配图模板里哪种页
+             * @default
+             */
+            page_type: string;
+            /**
+             * Review
+             * @description 出图后看图自检：ok/problems/redone（重出过一次）/before（重出前的问题）
+             * @default {}
+             */
+            review: {
+                [key: string]: unknown;
+            };
         };
         /** ImageSettingsIn */
         ImageSettingsIn: {
@@ -1492,6 +1570,8 @@ export interface components {
             model?: string | null;
             /** Use Refs */
             use_refs?: boolean | null;
+            /** Check */
+            check?: boolean | null;
         };
         /** ImageSettingsOut */
         ImageSettingsOut: {
@@ -1511,6 +1591,18 @@ export interface components {
              * @description 出图时照着参考帖的原图做版式
              */
             use_refs: boolean;
+            /**
+             * Check
+             * @description 出图后看图自检（有错字等问题自动重出一次）
+             * @default true
+             */
+            check: boolean;
+            /**
+             * Vision
+             * @description 现在能不能看图（自检、学配图模板要用）
+             * @default false
+             */
+            vision: boolean;
         };
         /**
          * ImageStatus
@@ -1540,7 +1632,7 @@ export interface components {
          * JobKind
          * @enum {string}
          */
-        JobKind: "write_draft" | "generate_images" | "clone_creator" | "find_benchmarks" | "revise_draft";
+        JobKind: "write_draft" | "generate_images" | "clone_creator" | "find_benchmarks" | "revise_draft" | "learn_visual";
         /** JobOut */
         JobOut: {
             /** Id */
@@ -1798,6 +1890,12 @@ export interface components {
             llm_configured: boolean;
             /** Image Configured */
             image_configured: boolean;
+            /**
+             * Vision Available
+             * @description 能看图（学配图模板、出图自检）
+             * @default false
+             */
+            vision_available: boolean;
             /** Weibo Cookie Configured */
             weibo_cookie_configured: boolean;
             /** Data Dir */
@@ -1956,6 +2054,49 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VisualLearnIn */
+        VisualLearnIn: {
+            /**
+             * Links
+             * @description 照着这几篇笔记学（链接或整段分享文字，可多个）；不填就看对标账号的爆款图
+             * @default
+             */
+            links: string;
+        };
+        /** VisualPage */
+        VisualPage: {
+            /** Type */
+            type: string;
+            /**
+             * Desc
+             * @default
+             */
+            desc: string;
+            /**
+             * When
+             * @default
+             */
+            when: string;
+            /**
+             * Examples
+             * @description 样例图本地路径（_refs/…），不填按页型名字沿用原来的
+             * @default []
+             */
+            examples: string[];
+            /**
+             * From
+             * @description 改名时原来的页型名字（沿用它的样例图）
+             * @default
+             */
+            from: string;
+        };
+        /** VisualPatch */
+        VisualPatch: {
+            /** Spec */
+            spec?: string | null;
+            /** Pages */
+            pages?: components["schemas"]["VisualPage"][] | null;
         };
         /** WriteIn */
         WriteIn: {
@@ -2537,6 +2678,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    learn_visual_api_accounts__account_id__visual_learn_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VisualLearnIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_visual_api_accounts__account_id__visual_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_visual_api_accounts__account_id__visual_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VisualPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDetail"];
                 };
             };
             /** @description Validation Error */

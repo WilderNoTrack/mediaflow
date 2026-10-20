@@ -59,6 +59,10 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    整套用同一份视觉规范，重出某一张也沿用，保证翻起来是一套。草稿页能看到参考了哪几篇、配图照的是哪篇、每张对的是原帖哪张。
    用户说「照着这篇/这几篇写」并给了链接，就 write_post 并把链接原样放进 reference_url（多个就都放进去，第一篇图文笔记当配图模板）；
    想给已有草稿换配图照的那篇，告诉他在草稿页「参考帖」里贴链接，再点全部重新出。没有对标、也没连小红书时找不到参考帖，就按账号的配图风格统一出。
+   【账号配图模板】学完对标后会看对标账号的图，学出一套配图模板（整体视觉 + 几种页型，各有样例图，见下方账号状态 visual）。
+   有模板时每篇配图都照模板出（每张选一种页型、照样例版式），整个账号像同一个博主做的；参考帖只管文案，用户自己给了参考帖的那篇才照它出图。
+   用户想换配图风格：说的是「照这几篇的图来」就 learn_visual 带上链接；说的是具体要求（「封面别放人」「颜色换成莫兰迪」「加一种对比页」）用 update_visual；
+   想重新学对标的图就 learn_visual 不带链接。出完的图会自动看一遍有没有错字、内容不对、风格跑偏，有问题自动重出一次。
 8. AI 写完会自己挑问题、自己按意见改好，不用让用户去逐条改；草稿页列着改了哪些地方。
 9. 用户要改已有的稿子，你直接动手改，不要让用户自己去页面上改：
    - 「第二张换成…」「封面字大一点」「加一张清单图」「删掉最后一张」「第三张挪到前面」：先 get_draft 看现在每张是什么（用户正在看的那篇已经在下方，可以直接用），
@@ -172,6 +176,13 @@ TOOLS = [
         "draft_id": {"type": "string", "description": "不传就是用户正在看的那篇"},
         "instruction": {"type": "string", "description": "用户的修改要求，尽量保留原话"},
     }, ["instruction"]),
+    _tool("learn_visual", "学账号配图模板（后台看图，约 1 分钟）：给了笔记链接就照这几篇的图学，不给就看对标账号的爆款图。"
+          "学好后每篇配图都照模板出", {
+              "links": {"type": "string", "description": "可选：用户给的小红书图文笔记链接（原样传，多个用换行隔开）"},
+          }),
+    _tool("update_visual", "按用户的话改账号配图模板（整体视觉、页型），比如「封面别放人」「主色换成莫兰迪蓝」「加一种对比页」", {
+        "instruction": {"type": "string", "description": "用户的要求，尽量保留原话"},
+    }, ["instruction"]),
     _tool("set_auto", "开关自动模式（按频率自动写稿进待审核）", {
         "enabled": {"type": "boolean"},
         "frequency": {"type": "string", "enum": ["daily", "every_2_days", "weekly"]},
@@ -193,6 +204,12 @@ TOOLS = [
         "theme": {"type": "string", "description": "用户想换成的主题；用户没说且账号已有主题时可以不传"},
     }, ["targets"]),
 ]
+
+def visual_pages(v: dict | None) -> list[dict]:
+    from mediaflow.services.visual import pages
+
+    return pages(v)
+
 
 PROFILE_FIELDS = ("name", "theme", "audience", "content_style", "image_style", "topic_type", "keywords")
 
@@ -245,6 +262,9 @@ class Toolbox:
             "topic_type": a.topic_type, "keywords": a.keywords,
             "rules": [{"id": r.id, "text": r.text} for r in rules],
             "auto_enabled": a.auto_enabled, "auto_frequency": a.auto_frequency.value,
+            "visual": ({"spec": a.visual.get("spec", ""),
+                        "pages": [f"{p['type']}：{p.get('when', '')}" for p in visual_pages(a.visual)],
+                        "from": (a.visual.get("source") or {}).get("names", [])} if visual_pages(a.visual) else "还没有配图模板"),
             **_bench_state(self.s, a.id),
         }
 
@@ -353,6 +373,31 @@ class Toolbox:
             out["note"] = f"第 {'、'.join(map(str, res['changed']))} 张正在重新出，一般 1 分钟左右，草稿页能看到"
         out["images"] = draft_edit.summary(self.s, d)["images"]
         return out
+
+    async def t_learn_visual(self, links: str = "") -> dict:
+        from mediaflow.llm.client import vision_available
+        from mediaflow.services import refpost
+        from mediaflow.services import visual
+
+        if not vision_available():
+            return {"ok": False, "error": "现在用的模型看不了图，学不了配图模板"}
+        ls = refpost.split_links(links) if links.strip() else []
+        if not ls and not visual._posts_from_benchmarks(self.s, self.acc):
+            return {"ok": False, "error": "还没有学好的对标账号，先对标，或者让用户给几篇图文笔记链接"}
+        try:
+            job = enqueue(self.s, JobKind.learn_visual, user_id=self.acc.user_id, account_id=self.acc.id, payload={"links": ls})
+        except JobConflict as e:
+            return {"ok": False, "error": str(e), "job_id": e.job.id}
+        return {"ok": True, "job_id": job.id, "note": "在后台看图学模板，大约 1 分钟，好了在「账号设定 → 配图模板」能看到"}
+
+    async def t_update_visual(self, instruction: str) -> dict:
+        from mediaflow.services import visual
+
+        try:
+            out = await visual.revise(self.s, self.llm, self.acc, instruction)
+        except visual.VisualError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, **out, "note": "以后出图照新模板；已经出好的图不会自动重出，要重出跟我说"}
 
     async def t_revise_post(self, instruction: str, draft_id: str = "") -> dict:
         d = self._draft(draft_id)

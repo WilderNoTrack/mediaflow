@@ -26,7 +26,8 @@ from mediaflow import credentials
 from mediaflow.agents import prompts
 from mediaflow.config import Settings, get_settings
 from mediaflow.domain.models import Account, Draft, DraftImage, ImageStatus, utcnow
-from mediaflow.llm.client import LLM, LLMError, complete_json
+from mediaflow.llm.client import LLM, LLMError, complete_json, get_vision_llm
+from mediaflow.services import visual as visual_mod
 from mediaflow.services.refs import local_uri, uri_of
 
 logger = logging.getLogger(__name__)
@@ -176,8 +177,9 @@ def set_provider_factory(f: Callable[[], ImageProvider] | None) -> None:
 
 
 async def _expand_set(llm: LLM, image_style: str, draft: Draft, images: list[DraftImage], targets: list[DraftImage],
-                      molds: dict[int, int]) -> tuple[str, dict[int, str]]:
-    """一次给整套图定统一视觉规范、写每张提示词：返回 (规范, {idx: 提示词})。已有规范时原样沿用。"""
+                      molds: dict[int, int], template: dict | None = None) -> tuple[str, dict[int, str], dict[int, str]]:
+    """一次给整套图定统一视觉规范、写每张提示词：返回 (规范, {idx: 提示词}, {idx: 页型})。已有规范时原样沿用。
+    有账号配图模板时，规范照模板的整体视觉，每张再选一种页型。"""
     ref = draft.reference or {}
     fixed = (draft.image_spec or "").strip()
     try:
@@ -193,20 +195,26 @@ async def _expand_set(llm: LLM, image_style: str, draft: Draft, images: list[Dra
                     ref_title=str(ref.get("title", ""))[:30],
                     pairs="；".join(f"第 {i.idx + 1} 张照原帖第 {molds[i.idx] + 1} 张" for i in targets if i.idx in molds),
                 ) if molds else "",
+                template_block=visual_mod.template_block(template) if template else "",
+                type_field=', "type": "页型"' if template else "",
             )},
         ], temperature=0.5)
         spec = fixed or str(data.get("spec") or "").strip()
-        got = {}
+        got, types = {}, {}
         for x in data.get("prompts") or []:
             try:
-                got[int(x.get("idx")) - 1] = str(x.get("prompt") or "").strip()
+                k = int(x.get("idx")) - 1
+                got[k] = str(x.get("prompt") or "").strip()
+                types[k] = str(x.get("type") or "").strip()
             except (TypeError, ValueError, AttributeError):
                 continue
     except (LLMError, TypeError, ValueError) as e:
         logger.warning("配图提示词扩写失败，用原始描述：%s", e)
-        spec, got = fixed, {}
+        spec, got, types = fixed, {}, {}
+    if template and not spec:
+        spec = str(template.get("spec") or "")
     spec = spec or f"整套图统一：{image_style or '手机实拍的生活感，自然光'}，同样的配色、字体和画面质感"
-    return spec[:600], {i.idx: got.get(i.idx) or i.prompt for i in targets}
+    return spec[:600], {i.idx: got.get(i.idx) or i.prompt for i in targets}, {i.idx: types.get(i.idx, "") for i in targets}
 
 
 def _final_prompt(prompt: str, spec: str, *, mold: bool, anchor: int | None) -> str:
@@ -263,18 +271,36 @@ async def generate_images(
     sem = asyncio.Semaphore(max(1, get_settings().image_concurrency))  # 几张一起出，6 张不用排队等
     ref = draft.reference or {}
     local = [p for p in ref.get("local") or [] if (get_settings().images_dir / p).exists()] if use_refs() else []
-    molds = {i.idx: mold_slot(local, i.idx) for i in targets} if local else {}
-    if local:
+    # 版式照什么：用户自己给的参考帖 > 账号配图模板 > 自动挑的参考帖
+    tpl = account.visual if visual_mod.has_template(account) and not (local and ref.get("source") == "user") else None
+    slots = {i.idx: mold_slot(local, i.idx) for i in targets} if local and not tpl else {}
+    if tpl:
+        draft.image_mold = "template"
+        emit("image", "照着账号的配图模板出图：每张选一种页型、照它的样例做版式，整个账号统一一个风格", None)
+    elif slots:
+        draft.image_mold = "post"
         emit("image", f"照着参考帖「{ref.get('title', '')[:20]}」的原图出图，一张对一张学版式，整套用同一份视觉规范", None)
+    else:
+        draft.image_mold = ""
     tset = {i.id for i in targets}
     done_others = [i for i in images if i.id not in tset and i.status == ImageStatus.done and i.path]
     if not done_others:
         draft.image_spec = ""  # 整套从头出：重新定规范
     style = account.image_style if account else ""
-    spec, expanded = await _expand_set(llm, style, draft, images, targets, molds)
+    spec, expanded, types = await _expand_set(llm, style, draft, images, targets, slots, tpl)
     draft.image_spec = spec
     session.add(draft)
+    molds: dict[int, str] = {k: local[v] for k, v in slots.items()}  # idx → 照着做版式的那张图（_refs/ 下）
+    if tpl:
+        for img in targets:
+            page = visual_mod.page_for(tpl, types.get(img.idx) or img.page_type, img.idx)
+            img.page_type = page["type"] if page else ""
+            ex = visual_mod.example_of(page) if use_refs() else ""
+            if ex:
+                molds[img.idx] = ex
+            session.add(img)
     session.commit()
+    vllm = get_vision_llm("low") if visual_mod.check_enabled() else None
     counter = {"done": 0, "failed": 0}
     total = len(targets)
     anchor: dict[str, DraftImage | None] = {"img": None}
@@ -295,21 +321,26 @@ async def generate_images(
         async with sem:
             emit("image", f"第 {img.idx + 1} 张出图中…", {"idx": img.idx, **progress()})
             try:
-                mold_uri = None
-                if img.idx in molds:
-                    img.ref_path = local[molds[img.idx]]
-                    mold_uri = local_uri(img.ref_path)
+                img.ref_path = molds.get(img.idx, "")
+                mold_uri = local_uri(img.ref_path) if img.ref_path else None
                 a_idx, a_uri = anchor_uri() if anchor["img"] is not img else (None, None)
                 r = [u for u in (mold_uri, a_uri) if u]
                 img.expanded_prompt = _final_prompt(expanded[img.idx], spec, mold=bool(mold_uri),
                                                     anchor=a_idx if a_uri else None)
-                try:
-                    data = await provider.generate(img.expanded_prompt, r or None)
-                except ImageError as e:
-                    if not r or not e.retryable:
-                        raise
-                    logger.warning("带参考图出图失败（%s），不带参考图再试", e)
-                    data = await provider.generate(_final_prompt(expanded[img.idx], spec, mold=False, anchor=None))
+
+                async def gen(prompt: str) -> bytes:
+                    try:
+                        return await provider.generate(prompt, r or None)
+                    except ImageError as e:
+                        if not r or not e.retryable:
+                            raise
+                        logger.warning("带参考图出图失败（%s），不带参考图再试", e)
+                        return await provider.generate(_final_prompt(expanded[img.idx], spec, mold=False, anchor=None))
+
+                data = await gen(img.expanded_prompt)
+                img.review = {}
+                if vllm is not None:
+                    data = await _review(img, data, gen, a_uri)
                 name = f"{img.idx:02d}-{uuid4().hex[:8]}.png"
                 (out_dir / name).write_bytes(data)
                 img.path, img.status = f"{draft_id}/{name}", ImageStatus.done
@@ -323,8 +354,28 @@ async def generate_images(
             session.add(img)
             session.commit()
 
+    async def _review(img: DraftImage, data: bytes, gen, a_uri: str | None) -> bytes:
+        """出图后看一眼：有错字、内容不对、风格跑偏就带着修改要求重出一次（只重出一次，省额度）。"""
+        emit("image", f"第 {img.idx + 1} 张出好了，在自检…", {"idx": img.idx, **progress()})
+        res = await visual_mod.check_image(vllm, data, img.expanded_prompt, spec, anchor_uri=a_uri)
+        review = {**res, "redone": False, "at": utcnow().isoformat()}
+        if not res["ok"] and res.get("fix"):
+            emit("image", f"第 {img.idx + 1} 张自检发现：{'；'.join(res['problems'][:2]) or res['fix'][:30]}，改一下重出…",
+                 {"idx": img.idx, **progress()})
+            prompt2 = f"{img.expanded_prompt}\n【上一版的问题，这次一定要改掉】{res['fix']}"
+            try:
+                data2 = await gen(prompt2)
+            except ImageError as e:
+                logger.info("自检后重出失败，留第一版：%s", e)
+            else:
+                res2 = await visual_mod.check_image(vllm, data2, img.expanded_prompt, spec, anchor_uri=a_uri)
+                review = {**res2, "redone": True, "before": res["problems"], "fix": res["fix"], "at": utcnow().isoformat()}
+                img.expanded_prompt, data = prompt2, data2
+        img.review = review
+        return data
+
     first: list[DraftImage] = []
-    if anchor["img"] is None and not molds and len(targets) > 1:
+    if anchor["img"] is None and (not molds or tpl) and len(targets) > 1:
         # 没有参考帖、从头出一整套：先出封面，其余带上它当风格参照，免得每张各是各的样子
         first = [targets[0]]
         emit("image", "先出封面，其余几张照着封面的配色和字体出，保证一套统一", None)

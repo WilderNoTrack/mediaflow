@@ -78,6 +78,7 @@ class JobKind(str, Enum):
     clone_creator = "clone_creator"  # 拆解对标账号并生成复刻方案
     find_benchmarks = "find_benchmarks"  # 按主题找同领域的对标候选
     revise_draft = "revise_draft"  # 按质检意见再改一轮草稿
+    learn_visual = "learn_visual"  # 看对标账号（或给的笔记）的图，学账号配图模板
 
 
 class JobStatus(str, Enum):
@@ -130,6 +131,9 @@ class Account(SQLModel, table=True):
     bench_plan: dict = json_obj_col()
     # 最近一次「帮我找同领域的号」的结果：{theme, prefer, candidates, notes, at}，对标页按小红书的样子展示
     bench_candidates: dict = json_obj_col()
+    # 账号配图模板（看对标账号的图学出来的）：{spec, pages: [{type, desc, when, examples: [_refs/…]}], tips, source, at}
+    # 有模板时每篇配图都照它，整个账号看起来是一套
+    visual: dict = json_obj_col()
     # 自动模式
     auto_enabled: bool = False
     auto_frequency: AutoFrequency = AutoFrequency.daily
@@ -220,6 +224,7 @@ class Draft(SQLModel, table=True):
     needs_attention: bool = False  # 质检失败/有硬伤时提醒用户重点看
     reference: dict = json_obj_col()  # 这篇照着哪些帖子写：主参考帖（配图照它，含原图缓存）+ extra（只给文案参考）
     image_spec: str = ""  # 这套配图统一的视觉规范（重出某张时沿用）
+    image_mold: str = ""  # 配图照什么做的版式：post = 主参考帖原图一张对一张；template = 账号配图模板的页型样例；空 = 没有模板
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -233,6 +238,8 @@ class DraftImage(SQLModel, table=True):
     status: ImageStatus = ImageStatus.pending
     path: str = ""  # 相对 data/images 的路径
     ref_path: str = ""  # 照着原帖哪张图出的（相对 data/images，_refs/ 下的缓存）
+    page_type: str = ""  # 账号配图模板里的哪种页（封面/清单页/对比页…）
+    review: dict = json_obj_col()  # 出图后看图自检：{ok, problems, fix, redone, at}
     error: str = ""
     updated_at: datetime = Field(default_factory=utcnow)
 

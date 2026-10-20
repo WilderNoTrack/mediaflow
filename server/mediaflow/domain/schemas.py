@@ -125,6 +125,8 @@ class AccountDetail(AccountOut):
     benchmarks: list[BenchmarkOut] = []
     bench_plan: dict = {}
     bench_candidates: dict = {}
+    visual: dict = Field(default={}, description="账号配图模板：spec 整体视觉、pages 页型（type/desc/when/examples 样例图本地路径）、"
+                                                 "tips、source 从哪学的、at")
 
 
 class RuleIn(BaseModel):
@@ -181,6 +183,8 @@ class ImageOut(BaseModel):
     url: str | None
     error: str
     ref_url: str | None = Field(None, description="这张照着参考帖哪张原图出的（本地缓存地址）")
+    page_type: str = Field("", description="用的账号配图模板里哪种页")
+    review: dict = Field(default={}, description="出图后看图自检：ok/problems/redone（重出过一次）/before（重出前的问题）")
 
 
 class DraftOut(BaseModel):
@@ -205,6 +209,7 @@ class DraftOut(BaseModel):
     reference: dict = Field(default={}, description="这篇照着哪些帖子写：主参考帖 title/url/creator/likes/why/local(原图本地路径)，"
                                                     "配图只照它；extra 是只给文案参考的其他帖子")
     image_spec: str = Field("", description="这套配图统一的视觉规范")
+    image_mold: str = Field("", description="配图版式照什么：post=主参考帖原图一张对一张，template=账号配图模板，空=都没有")
     created_at: datetime
     updated_at: datetime
 
@@ -253,6 +258,23 @@ class ImageEditIn(BaseModel):
     regenerate: bool = Field(True, description="改完马上把改过的、新加的出图")
 
 
+class VisualLearnIn(BaseModel):
+    links: str = Field("", max_length=3000, description="照着这几篇笔记学（链接或整段分享文字，可多个）；不填就看对标账号的爆款图")
+
+
+class VisualPage(BaseModel):
+    type: str = Field(min_length=1, max_length=12)
+    desc: str = Field("", max_length=200)
+    when: str = Field("", max_length=80)
+    examples: list[str] = Field(default=[], description="样例图本地路径（_refs/…），不填按页型名字沿用原来的")
+    from_: str = Field("", alias="from", description="改名时原来的页型名字（沿用它的样例图）")
+
+
+class VisualPatch(BaseModel):
+    spec: str | None = Field(None, max_length=500)
+    pages: list[VisualPage] | None = Field(None, max_length=8)
+
+
 class ReferenceIn(BaseModel):
     url: str = Field(max_length=1000, description="配图照着的那篇小红书图文笔记链接（也支持 xhslink 短链、整段分享文字）")
 
@@ -289,6 +311,7 @@ class SystemStatus(BaseModel):
     version: str
     llm_configured: bool
     image_configured: bool
+    vision_available: bool = Field(False, description="能看图（学配图模板、出图自检）")
     weibo_cookie_configured: bool
     data_dir: str
 

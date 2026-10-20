@@ -232,7 +232,13 @@ async def run(s: Session, llm: LLM, account_id: str, bench_ids: list[str], theme
                 emit("warning", f"「{b.creator_name or b.target[:20]}」没拆成（{b.error}），先用其他的", None)
     if not ready(s, account_id):
         raise RuntimeError("；".join(errors) or "没有可用的对标账号")
-    return await _synthesize(s, llm, acc, theme or acc.theme, emit)
+    out = await _synthesize(s, llm, acc, theme or acc.theme, emit)
+    from mediaflow.services import visual
+
+    await visual.learn_quietly(s, account_id, emit)  # 能看图的话顺手学配图模板
+    s.refresh(acc)
+    out["visual_pages"] = [p["type"] for p in visual.pages(acc.visual)]
+    return out
 
 
 async def analyze(session: Session, llm: LLM, bench_id: str, *, emit: Emit = _noop) -> Benchmark:

@@ -28,7 +28,8 @@ class JobConflict(RuntimeError):
     def __init__(self, job: Job) -> None:
         msg = {JobKind.clone_creator: "这个账号正在拆解对标账号，等它好了再来",
                JobKind.find_benchmarks: "正在找对标候选，等这一轮找完再来",
-               JobKind.revise_draft: "这篇正在按质检意见修改，稍等一下"}.get(job.kind, "这个账号已经有一篇正在写，等它写完再来")
+               JobKind.revise_draft: "这篇正在按质检意见修改，稍等一下",
+               JobKind.learn_visual: "正在学配图模板，等这一轮学完再来"}.get(job.kind, "这个账号已经有一篇正在写，等它写完再来")
         super().__init__(msg)
         self.job = job
 
@@ -44,7 +45,8 @@ def active_write_job(session: Session, account_id: str, kind: JobKind = JobKind.
 
 
 def enqueue(session: Session, kind: JobKind, *, user_id: str, account_id: str | None, payload: dict) -> Job:
-    if kind in (JobKind.write_draft, JobKind.clone_creator, JobKind.find_benchmarks, JobKind.revise_draft) and account_id:
+    if kind in (JobKind.write_draft, JobKind.clone_creator, JobKind.find_benchmarks, JobKind.revise_draft,
+                JobKind.learn_visual) and account_id:
         existing = active_write_job(session, account_id, kind)
         if existing:
             raise JobConflict(existing)
@@ -140,12 +142,20 @@ async def _handle_revise(job: Job, emit) -> dict:
         return {"draft_id": d.id, "score": d.score}
 
 
+async def _handle_visual(job: Job, emit) -> dict:
+    from mediaflow.services import visual
+
+    with session_scope() as s:
+        return await visual.learn(s, job.account_id or "", links=job.payload.get("links") or [], emit=emit)
+
+
 HANDLERS: dict[JobKind, Handler] = {
     JobKind.write_draft: _handle_write,
     JobKind.generate_images: _handle_images,
     JobKind.clone_creator: _handle_clone,
     JobKind.find_benchmarks: _handle_find,
     JobKind.revise_draft: _handle_revise,
+    JobKind.learn_visual: _handle_visual,
 }
 
 

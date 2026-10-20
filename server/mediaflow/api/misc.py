@@ -13,7 +13,7 @@ from mediaflow.db import get_session
 from mediaflow.domain.models import Account, ChatMessage, Job
 from mediaflow.domain.schemas import ChatIn, ChatMessageOut, CreatorOut, JobOut, SystemStatus
 from mediaflow.llm.client import get_llm
-from mediaflow.llm.client import llm_configured
+from mediaflow.llm.client import llm_configured, vision_available
 from mediaflow.services import auth
 from mediaflow.services.images import image_configured
 
@@ -24,7 +24,7 @@ router = APIRouter(tags=["misc"])
 def system_status():
     s = get_settings()
     return SystemStatus(version=__version__, llm_configured=llm_configured(),
-                        image_configured=image_configured(),
+                        image_configured=image_configured(), vision_available=vision_available(),
                         weibo_cookie_configured=bool(s.weibo_cookie), data_dir=str(s.data_dir))
 
 

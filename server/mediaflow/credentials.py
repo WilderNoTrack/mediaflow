@@ -49,6 +49,7 @@ SPECS: list[CredSpec] = [
              hidden=True),  # 配图在单独的「AI 配图」设置里填，不出现在数据来源列表
     CredSpec("image_model", "image", "配图模型", "key", "", "", hidden=True),
     CredSpec("image_refs", "image", "参考对标原图", "key", "", "", hidden=True),  # "off" 表示不参考
+    CredSpec("image_check", "image", "出图后自检", "key", "", "", hidden=True),  # "off" 表示不自检
     CredSpec("weibo_cookie", "weibo", "微博 Cookie", "cookie",
              "微博按关键词搜索需要登录。登录 weibo.com 后复制 Cookie（需包含 SUB）。",
              "https://weibo.com/"),

@@ -37,7 +37,7 @@ def _out(s: Session, d: Draft, detail: bool = False) -> DraftOut | DraftDetail:
         return DraftOut(**base)
     return DraftDetail(**base, images=[
         ImageOut(id=i.id, idx=i.idx, prompt=i.prompt, status=i.status, url=_img_url(i), error=i.error,
-                 ref_url=_ref_url(d, i)) for i in imgs
+                 ref_url=_ref_url(d, i), page_type=i.page_type, review=i.review or {}) for i in imgs
     ])
 
 
@@ -46,7 +46,10 @@ def _ref_url(d: Draft, img: DraftImage) -> str | None:
     from mediaflow.services.images import mold_slot
 
     local = (d.reference or {}).get("local") or []
-    rel = img.ref_path or (local[mold_slot(local, img.idx)] if local else "")
+    if img.ref_path or d.image_mold == "template":
+        rel = img.ref_path
+    else:
+        rel = local[mold_slot(local, img.idx)] if local else ""
     return f"/files/images/{rel}" if rel else None
 
 

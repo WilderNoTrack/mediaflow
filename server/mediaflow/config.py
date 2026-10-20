@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    # 看图用的模型（同一个 DeepSeek Key）：学对标账号的配图模板、出图后自检。留空就不看图
+    deepseek_vision_model: str = "deepseek-flash"
     llm_timeout: float = 120.0
     llm_max_retries: int = 3
 

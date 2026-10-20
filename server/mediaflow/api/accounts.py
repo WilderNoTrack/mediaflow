@@ -11,7 +11,7 @@ from mediaflow.domain.models import (
 )
 from mediaflow.domain.schemas import (
     AccountDetail, AccountIn, AccountOut, AccountPatch, AccountSummary, BenchmarkIn, BenchmarkOut, CandidatesIn,
-    JobOut, NoteOut, RemoveBenchmarkOut, RuleIn, RuleOut,
+    JobOut, NoteOut, RemoveBenchmarkOut, RuleIn, RuleOut, VisualLearnIn, VisualPatch,
 )
 from mediaflow.llm.client import get_llm
 from mediaflow.services import bench_report
@@ -134,6 +134,46 @@ def find_candidates(body: CandidatesIn, acc: Account = Depends(owned_account), s
     对标页按小红书的样子展示，用户勾选后再调 POST /benchmark。"""
     get_llm()
     return JobOut(**bench.start_find(s, acc, body.query, body.prefer).model_dump())
+
+
+@router.post("/{account_id}/visual/learn", response_model=JobOut, status_code=202)
+def learn_visual(body: VisualLearnIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """学账号配图模板（后台任务，大约 1 分钟）：给了笔记链接就照这几篇学，不给就看对标账号的爆款图。要能看图的模型。"""
+    from mediaflow.jobs.queue import enqueue
+    from mediaflow.llm.client import vision_available
+    from mediaflow.services import refpost, visual
+
+    if not vision_available():
+        raise HTTPException(400, "现在用的模型看不了图，学不了配图模板（需要配好 DeepSeek Key）")
+    links = refpost.split_links(body.links) if body.links.strip() else []
+    if body.links.strip() and not links:
+        raise HTTPException(400, "没看到小红书笔记链接")
+    if not links and not visual._posts_from_benchmarks(s, acc):
+        raise HTTPException(400, "还没有学好的对标账号，先加对标，或者给几篇图文笔记链接")
+    job = enqueue(s, JobKind.learn_visual, user_id=acc.user_id, account_id=acc.id, payload={"links": links})
+    return JobOut(**job.model_dump())
+
+
+@router.patch("/{account_id}/visual", response_model=AccountDetail)
+def update_visual(body: VisualPatch, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """手动改配图模板：改整体视觉、改/删页型（样例图按页型名字沿用）。"""
+    from mediaflow.services import visual
+
+    try:
+        visual.patch(s, acc, spec=body.spec,
+                     pages_in=None if body.pages is None else [p.model_dump(by_alias=True) for p in body.pages])
+    except visual.VisualError as e:
+        raise HTTPException(400, str(e)) from e
+    return _detail(s, acc)
+
+
+@router.delete("/{account_id}/visual", response_model=AccountDetail)
+def clear_visual(acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """不用配图模板了：以后配图照每篇的参考帖做。"""
+    from mediaflow.services import visual
+
+    visual.patch(s, acc, clear=True)
+    return _detail(s, acc)
 
 
 @router.get("/{account_id}/benchmark/report", response_class=PlainTextResponse,

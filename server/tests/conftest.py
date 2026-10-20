@@ -6,6 +6,7 @@ import pytest
 _tmp = tempfile.mkdtemp(prefix="mediaflow-test-")
 os.environ["MEDIAFLOW_DATA_DIR"] = _tmp
 os.environ["DEEPSEEK_API_KEY"] = "test"
+os.environ["DEEPSEEK_VISION_MODEL"] = ""  # 默认不看图；要测看图的注入 set_vision_llm
 os.environ.pop("IMAGE_API_KEY", None)
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -34,6 +35,7 @@ def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(topics_mod, "fetch_all", lambda kw, n: fake_fetch(kw, n))
     yield engine
     llm_client.set_llm(None)
+    llm_client.set_vision_llm(None)
     images_mod.set_provider_factory(None)
     get_settings.cache_clear()
     engine.dispose()

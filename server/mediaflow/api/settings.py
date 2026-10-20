@@ -147,12 +147,15 @@ class ImageSettingsOut(BaseModel):
     model: str
     models: list[ImageModelOut]
     use_refs: bool = Field(description="出图时照着参考帖的原图做版式")
+    check: bool = Field(True, description="出图后看图自检（有错字等问题自动重出一次）")
+    vision: bool = Field(False, description="现在能不能看图（自检、学配图模板要用）")
 
 
 class ImageSettingsIn(BaseModel):
     api_key: str | None = Field(default=None, description="null 不改；空字符串清除")
     model: str | None = None
     use_refs: bool | None = None
+    check: bool | None = None
 
 
 class LlmSettingsOut(BaseModel):
@@ -225,7 +228,11 @@ class ImageTestOut(BaseModel):
 def _image_out() -> ImageSettingsOut:
     stored = credentials._load()
     origin = "ui" if stored.get("image_api_key") else ("env" if get_settings().image_api_key else "")
+    from mediaflow.llm.client import vision_available
+    from mediaflow.services.visual import check_enabled
+
     return ImageSettingsOut(configured=bool(origin), origin=origin, model=images.image_model(), use_refs=images.use_refs(),
+                            check=check_enabled(), vision=vision_available(),
                             models=[ImageModelOut(id=m.id, label=m.label, desc=m.desc) for m in images.MODELS])
 
 
@@ -239,7 +246,8 @@ def update_image_settings(body: ImageSettingsIn):
     if body.model is not None and body.model and body.model not in {m.id for m in images.MODELS}:
         raise HTTPException(400, "不支持这个配图模型")
     credentials.update({"image_api_key": body.api_key, "image_model": body.model,
-                        "image_refs": None if body.use_refs is None else ("" if body.use_refs else "off")})
+                        "image_refs": None if body.use_refs is None else ("" if body.use_refs else "off"),
+                        "image_check": None if body.check is None else ("" if body.check else "off")})
     return _image_out()
 
 

@@ -44,7 +44,9 @@ class FakeLLM:
                              ("topic", prompts.TOPIC_SYSTEM), ("image", prompts.IMAGE_SET_SYSTEM),
                              ("learn", prompts.LEARN_SYSTEM), ("manager", MANAGER_PROMPT),
                              ("bench_analyze", prompts.BENCH_ANALYZE_SYSTEM), ("bench_adapt", prompts.BENCH_ADAPT_SYSTEM),
-                             ("bench_pick", prompts.BENCH_PICK_SYSTEM), ("ref_pick", prompts.REF_PICK_SYSTEM)):
+                             ("bench_pick", prompts.BENCH_PICK_SYSTEM), ("ref_pick", prompts.REF_PICK_SYSTEM),
+                             ("visual_learn", prompts.VISUAL_LEARN_SYSTEM), ("visual_update", prompts.VISUAL_UPDATE_SYSTEM),
+                             ("image_check", prompts.IMAGE_CHECK_SYSTEM)):
             if system.startswith(marker[:30]):
                 return kind
         return "other"
@@ -112,11 +114,13 @@ class FakeImages:
         self.fail_idx = fail_idx or set()
         self.n = 0
         self.refs: list[list[str] | None] = []
+        self.prompts: list[str] = []
 
     async def generate(self, prompt: str, refs: list[str] | None = None) -> bytes:
         i = self.n
         self.n += 1
         self.refs.append(refs)
+        self.prompts.append(prompt)
         if i in self.fail_idx:
             raise RuntimeError("生图服务挂了")
         return _png()
