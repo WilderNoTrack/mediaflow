@@ -264,7 +264,7 @@ async def _exemplar_reference(session: Session, ctx: AccountContext, topic: Topi
     ex["extra"] = [x for x in extra if x.get("title")][:refpost.MAX_EXTRA]
     n = len(ex.get("local") or [])
     emit("reference", f"照着样板帖「{ex['title'][:24]}」写：写法照它，"
-         + (f"配图 {n} 张一张对一张照它的做法和版式" if n else "样板帖还没有出好的图，配图按账号风格出")
+         + (("配图照它那张图的做法和版式" if n == 1 else f"配图 {n} 张一张对一张照它的做法和版式") if n else "样板帖还没有出好的图，配图按账号风格出")
          + (f"；另参考「{ex['extra'][0]['title'][:20]}」的选题和信息点" if ex["extra"] else ""),
          {"reference": {k: ex.get(k) for k in ("title", "creator", "source", "why", "draft_id")}, "images": n,
           "extra": [x.get("title", "") for x in ex["extra"]],
@@ -301,7 +301,7 @@ async def _announce(ref: dict, why_none: str, emit: Emit) -> dict:
         extra = ref.get("extra") or []
         emit("reference", f"照着「{ref['title'][:24]}」（{ref.get('creator') or '同领域博主'}，{ref.get('likes') or '?'}赞）"
              + (f"等 {1 + len(extra)} 篇" if extra else "") + "写；"
-             + (f"配图统一照这篇，{n} 张一张对一张照着原图做" if n else "这篇原图没拿到，配图按账号风格统一出"),
+             + (("配图统一照这篇的那张原图做" if n == 1 else f"配图统一照这篇，{n} 张一张对一张照着原图做") if n else "这篇原图没拿到，配图按账号风格统一出"),
              {"reference": {k: ref.get(k) for k in ("title", "url", "creator", "likes", "source", "why")},
               "images": n,
               "extra": [x.get("title", "") for x in extra],
