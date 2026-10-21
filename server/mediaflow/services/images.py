@@ -537,10 +537,10 @@ def _final_prompt(prompt: str, spec: str, *, mold: bool, anchor: int | None, no_
     elif anchor is not None:
         head.append(f"参考图是同一套里已经出好的第 {anchor + 1} 张：新图的配色、字体、文字样式、背景质感、人物和它保持一致，"
                     "构图和内容按下面的来。")
+    space = ("之后只在角落叠一小块标签，画面照常铺满真实内容，不用留空白区域；原图上贴字的地方也画成正常的画面" if caption
+             else "文字之后会用代码排上去，按描述在那一侧留出干净的背景（桌面、墙面、天空这类）")
     tail = ["【这张画面里不要出现任何文字、数字、字母和 logo，参考图里的字也不要照搬；也不要画空白的标签、便签、文字框、"
-            + ("占位方块。之后只在角落叠一小块标签，画面照常铺满真实内容，不用留空白区域；原图上贴字的地方也画成正常的画面】"
-               if caption else "占位方块。文字之后会用代码排上去，按描述在那一侧留出干净的背景（桌面、墙面、天空这类）】")]
-            if no_text else [])
+            f"占位方块。{space}】"] if no_text else []
     return "\n".join([*head, prompt, f"【这一套图统一的视觉规范，必须遵守】{spec}", *tail])
 
 
