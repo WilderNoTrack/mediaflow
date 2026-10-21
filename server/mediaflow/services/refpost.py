@@ -104,6 +104,9 @@ def _slim(p: dict) -> dict:
     return out
 
 
+slim = _slim  # 只留文案参考要用的字段
+
+
 async def _finish(ref: dict, extra: list[dict] | None = None) -> dict:
     imgs = [u for u in ref.get("images") or [] if u] or ([ref["cover"]] if ref.get("cover") else [])
     ref["local"] = await cache_local(imgs[:MAX_IMAGES]) if imgs else []

@@ -76,6 +76,28 @@ async def cache_local(urls: list[str]) -> list[str]:
     return out
 
 
+def cache_file(rel: str) -> str:
+    """自己出好的图（data/images 下的相对路径）也转成 JPEG 放进 _refs，好当版式模板传给生图模型；读不了返回空串。"""
+    images_dir = get_settings().images_dir
+    src = images_dir / rel
+    if rel.startswith("_refs/"):
+        return rel if src.exists() else ""
+    if not src.is_file():
+        return ""
+    data = src.read_bytes()
+    name = f"_refs/own-{hashlib.sha1(data).hexdigest()[:16]}.jpg"
+    out = images_dir / name
+    if not out.exists():
+        try:
+            jpg = _to_jpeg(data)
+        except Exception as e:  # noqa: BLE001
+            logger.info("自己的图转不了参考图 %s：%s", rel, e)
+            return ""
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(jpg)
+    return name
+
+
 def local_uri(rel: str) -> str | None:
     """_refs/xxx.jpg → data URI（给生图模型当参考图）。"""
     path = get_settings().images_dir / rel

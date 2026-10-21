@@ -428,7 +428,7 @@ def _fallback_layout(img: DraftImage, draft: Draft) -> dict:
 
 async def _expand_set(llm: LLM, image_style: str, draft: Draft, images: list[DraftImage], targets: list[DraftImage],
                       molds: dict[int, int], template: dict | None = None,
-                      opts: dict[int, list[str]] | None = None) -> tuple[str, dict[int, dict], str]:
+                      opts: dict[int, list[str]] | None = None, ex_hint: str = "") -> tuple[str, dict[int, dict], str]:
     """一次给整套图定统一视觉规范、写每张的做法：返回 (规范, {idx: {prompt, type, mode, layout, query}}, 配色)。
     已有规范时原样沿用。有账号配图模板时，规范照模板的整体视觉，每张再选一种页型。
     opts 是每张能用的做法；全是「AI 画」时和原来一样只写提示词。"""
@@ -453,10 +453,11 @@ async def _expand_set(llm: LLM, image_style: str, draft: Draft, images: list[Dra
                 total=len(images),
                 all="\n".join(f"第 {i.idx + 1} 张{'（封面）' if i.idx == 0 else ''}：{i.prompt}" for i in images),
                 targets="、".join(f"第 {i.idx + 1} 张" for i in targets),
-                mold_block=prompts.IMAGE_MOLD_BLOCK.format(
+                mold_block=(prompts.EXEMPLAR_MOLD_BLOCK if ref.get("source") == "exemplar" else prompts.IMAGE_MOLD_BLOCK).format(
                     ref_title=str(ref.get("title", ""))[:30],
-                    pairs="；".join(f"第 {i.idx + 1} 张照原帖第 {molds[i.idx] + 1} 张" for i in targets if i.idx in molds),
-                ) if molds else "",
+                    pairs="；".join(f"第 {i.idx + 1} 张照{'样板' if ref.get('source') == 'exemplar' else '原帖'}第 {molds[i.idx] + 1} 张"
+                                   for i in targets if i.idx in molds),
+                ) + ex_hint if molds else ex_hint,
                 template_block=visual_mod.template_block(template) if template else "",
                 type_field=', "type": "页型"' if template else "",
                 modes_block=modes_block,
@@ -527,6 +528,27 @@ def rerender(img: DraftImage, changes: dict) -> None:
     img.path, img.layout, img.updated_at = f"{img.draft_id}/{name}", lay, utcnow()
 
 
+def _exemplar_slots(ref: dict, targets: list[DraftImage]) -> tuple[list[str], list[dict], dict[int, int]]:
+    """照样板帖出图时：(样板每张的版式模板图, 样板每张的做法/版式/配色, 这篇第几张对样板第几张)。不是样板帖返回空。"""
+    if ref.get("source") != "exemplar":
+        return [], [], {}
+    images_dir = get_settings().images_dir
+    pairs = [(p, pl) for p, pl in zip(ref.get("local") or [], ref.get("plan") or []) if p and (images_dir / p).exists()]
+    local, plan = [p for p, _ in pairs], [pl for _, pl in pairs]
+    return local, plan, ({i.idx: mold_slot(local, i.idx) for i in targets} if local else {})
+
+
+def _exemplar_hint(plan: list[dict], slot: dict[int, int], targets: list[DraftImage]) -> str:
+    rows = []
+    for i in targets:
+        if i.idx not in slot:
+            continue
+        p = plan[slot[i.idx]]
+        kind = f"，layout.kind 用 {p['kind']}" if p.get("kind") else ""
+        rows.append(f"第 {i.idx + 1} 张照样板第 {slot[i.idx] + 1} 张：{MODE_LABEL.get(p.get('made_by') or 'ai', 'AI 画')}{kind}")
+    return ("\n【照样板帖做】每张的做法和版式跟样板对应那张一样，信息量也相当，只换内容和字：" + "；".join(rows)) if rows else ""
+
+
 async def generate_images(
     session: Session,
     llm: LLM,
@@ -545,6 +567,12 @@ async def generate_images(
     has_ai = image_configured()
     acc_mode = account_mode(account)
     opts = {i.idx: mode_options(i.mode, acc_mode, has_ai) for i in targets}
+    ref = draft.reference or {}
+    ex_local, ex_plan, ex_slot = _exemplar_slots(ref, targets)
+    for i in targets:  # 照样板帖：每张的做法跟样板对应那张一样（账号设定允许、用户没单独指定时）
+        want = ex_plan[ex_slot[i.idx]].get("made_by") if i.idx in ex_slot and not i.mode else None
+        if want in opts[i.idx]:
+            opts[i.idx] = [want]
     skip = [i for i in targets if not opts[i.idx]]
     if skip:
         for i in skip:
@@ -576,14 +604,20 @@ async def generate_images(
         session.add(img)
     session.commit()
     sem = asyncio.Semaphore(max(1, get_settings().image_concurrency))  # 几张一起出，6 张不用排队等
-    ref = draft.reference or {}
-    local = [p for p in ref.get("local") or [] if (get_settings().images_dir / p).exists()] if use_refs() and ai_targets else []
-    # 版式照什么：用户自己给的参考帖 > 账号配图模板 > 自动挑的参考帖（只管 AI 画的那几张）
-    tpl = account.visual if ai_targets and visual_mod.has_template(account) and not (local and ref.get("source") == "user") else None
+    if ex_local:
+        local = ex_local if use_refs() and ai_targets else []
+    else:
+        local = [p for p in ref.get("local") or [] if (get_settings().images_dir / p).exists()] if use_refs() and ai_targets else []
+    # 版式照什么：样板帖 > 用户自己给的参考帖 > 账号配图模板 > 自动挑的参考帖（只管 AI 画的那几张）
+    tpl = account.visual if ai_targets and visual_mod.has_template(account) and not ex_local \
+        and not (local and ref.get("source") == "user") else None
     slots = {i.idx: mold_slot(local, i.idx) for i in ai_targets} if local and not tpl else {}
     if tpl:
         draft.image_mold = "template"
         emit("image", "照着账号的配图模板出图：每张选一种页型、照它的样例做版式，整个账号统一一个风格", None)
+    elif ex_local:
+        draft.image_mold = "post"
+        emit("image", f"照着样板帖「{ref.get('title', '')[:20]}」出图：一张对一张照它的做法、版式和配色", None)
     elif slots:
         draft.image_mold = "post"
         emit("image", f"照着参考帖「{ref.get('title', '')[:20]}」的原图出图，一张对一张学版式，整套用同一份视觉规范", None)
@@ -594,14 +628,16 @@ async def generate_images(
     tset = {i.id for i in targets}
     done_others = [i for i in images if i.id not in tset and i.status == ImageStatus.done and i.path]
     if not done_others:
-        draft.image_spec = ""  # 整套从头出：重新定规范
+        draft.image_spec = str(ref.get("image_spec") or "") if ex_plan else ""  # 整套从头出：重新定规范（照样板帖就用它的）
     style = account.image_style if account else ""
-    spec, plans, pal = await _expand_set(llm, style, draft, images, targets, slots, tpl, opts)
+    spec, plans, pal = await _expand_set(llm, style, draft, images, targets, slots, tpl, opts,
+                                         ex_hint=_exemplar_hint(ex_plan, ex_slot, targets))
     draft.image_spec = spec
     session.add(draft)
-    # 配色整套一个：模型这次选的 > 同套已出好的图用的 > 默认
-    pal = pal or next((str(i.layout.get("palette")) for i in done_others if (i.layout or {}).get("palette") in layout_mod.PALETTES),
-                      "") or layout_mod.DEFAULT_PALETTE
+    # 配色整套一个：同套已出好的图用的 > 样板帖用的 > 模型这次选的 > 默认
+    pal = next((str(i.layout.get("palette")) for i in done_others if (i.layout or {}).get("palette") in layout_mod.PALETTES), "") \
+        or next((str(p["palette"]) for p in ex_plan if p.get("palette") in layout_mod.PALETTES), "") \
+        or pal or layout_mod.DEFAULT_PALETTE
     final: dict[int, str] = {}
     for img in targets:
         o, m = opts[img.idx], plans[img.idx].get("mode")
@@ -610,6 +646,9 @@ async def generate_images(
             lay = clean_layout(plans[img.idx].get("layout"))
             if not (lay.get("title") or lay.get("items") or lay.get("left")):
                 lay = clean_layout(_fallback_layout(img, draft))
+            if img.idx in ex_slot:  # 模型没说版式、文字位置的，照样板对应那张
+                same = ex_plan[ex_slot[img.idx]]
+                lay = {**{k: same[k] for k in ("kind", "position") if same.get(k)}, **lay}
             img.layout = {**lay, "palette": pal}
     molds: dict[int, str] = {k: local[v] for k, v in slots.items() if final.get(k) in _NEEDS_AI}  # idx → 照着做版式的那张图
     for img in targets:

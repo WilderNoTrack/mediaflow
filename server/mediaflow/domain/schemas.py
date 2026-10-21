@@ -250,7 +250,9 @@ class WriteIn(BaseModel):
     hint: str = ""
     from_chat: bool = Field(False, description="在小媒对话里点的「写这篇」：把这次写稿记进对话，进度和结果卡片留在对话里")
     image_plan: list[str] = Field(default=[], max_length=9, description="用户对每张图的要求（第 1 张、第 2 张…），写稿时照这个出配图描述")
-    reference_url: str = Field("", max_length=3000, description="照着这些小红书笔记写（可以多个链接/分享文字，第一篇图文笔记当配图模板；不填就自动挑）")
+    reference_url: str = Field("", max_length=3000, description="照着这些小红书笔记写（可以多个链接/分享文字，第一篇图文笔记当配图模板；不填就自动挑）。"
+                               "账号有样板帖时这些只当文案参考，写法和配图仍照样板帖")
+    use_exemplar: bool = Field(True, description="照账号的样板帖写（有样板帖时）；false 时这篇不照样板帖")
 
 
 class CompareSide(BaseModel):

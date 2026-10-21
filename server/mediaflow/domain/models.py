@@ -149,6 +149,9 @@ class Account(SQLModel, table=True):
     visual: dict = json_obj_col()
     # 小媒的长期记忆：早的聊天滚动压成要点 {summary, upto(压到哪条消息的时间), at}，最近的聊天原样给模型
     chat_memory: dict = json_obj_col()
+    # 样板帖：用户亲手打磨定稿的一篇 {draft_id, title, at}。定了以后每篇都以它为主参考（文案写法、配图做法和版式），
+    # 对标账号的爆款只当选题和内容参考
+    exemplar: dict = json_obj_col()
     # 配图默认怎么出：ai 整张 AI 画 / mixed AI 画面 + 代码排字 / card 代码排版卡片 / photo 网上找图 + 代码排字 / auto 每张自己挑
     image_mode: str = "ai"
     # 自动模式

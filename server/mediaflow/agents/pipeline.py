@@ -143,6 +143,8 @@ def _apply_plan(prompts_: list[str], plan: list[str]) -> list[str]:
 def _reference_block(ref: dict, *, planned: bool = False) -> str:
     if not ref.get("title"):
         return ""
+    if ref.get("source") == "exemplar":
+        return _exemplar_block(ref, planned=planned)
     posts = [ref, *[x for x in ref.get("extra") or [] if x.get("title")]]
 
     def one(i: int, p: dict) -> str:
@@ -161,6 +163,43 @@ def _reference_block(ref: dict, *, planned: bool = False) -> str:
     return ("\n\n" + prompts.UNTRUSTED_NOTICE + "\n<external_data>\n"
             f"【参考帖（{len(posts)} 篇）】\n" + "\n".join(one(i, p) for i, p in enumerate(posts))
             + "</external_data>\n" + learn + "，内容必须换成本账号主题，不照抄任何句子。" + imgs)
+
+
+_KIND_LABEL = {"cover": "封面式（大标题）", "list": "清单", "steps": "步骤", "compare": "左右对比", "quote": "金句"}
+
+
+def _plan_desc(p: dict) -> str:
+    from mediaflow.services.images import MODE_LABEL
+
+    parts = [MODE_LABEL.get(str(p.get("made_by") or "ai"), "AI 画")]
+    if p.get("kind") in _KIND_LABEL:
+        parts.append(f"{_KIND_LABEL[p['kind']]}版式")
+    if p.get("page_type"):
+        parts.append(f"页型「{p['page_type']}」")
+    return "，".join(parts) + (f"；样板这张放的是：{p['prompt']}" if p.get("prompt") else "")
+
+
+def _exemplar_block(ref: dict, *, planned: bool = False) -> str:
+    """有样板帖时：写法全照样板帖（用户自己定稿的，不是外部数据），别的参考帖只借鉴选题角度和信息点。"""
+    body = str(ref.get("content", "")).strip()[:1500]
+    out = ("\n\n【样板帖（用户亲手打磨定稿的一篇，账号后面每篇都照它）】\n"
+           f"标题：{ref.get('title', '')}\n正文：\n{body}\n"
+           + (f"标签：{'、'.join(ref.get('tags') or [])}\n" if ref.get("tags") else "")
+           + "这篇照着样板帖写：标题的句式和长度、开头怎么起、正文结构和段落节奏、篇幅、语气口吻、emoji 和标签的用法都和它保持一致，"
+             "读起来像同一个人写的系列；内容换成本篇的选题，不照抄句子，也不要和样板帖讲同一件事。")
+    extra = [x for x in ref.get("extra") or [] if x.get("title")]
+    if extra:
+        out += ("\n\n" + prompts.UNTRUSTED_NOTICE + "\n<external_data>\n【其他参考帖（只借鉴选题角度和信息点，写法仍以样板帖为准）】\n"
+                + "\n".join(f"{i + 1}. {p.get('creator') or '同领域博主'}，{p.get('likes') or '?'}赞\n标题：{p['title']}\n"
+                            + (f"正文：{' '.join(str(p.get('content', '')).split())[:500]}\n" if p.get("content") else "")
+                            for i, p in enumerate(extra))
+                + "</external_data>")
+    plan = ref.get("plan") or []
+    if plan and not planned:
+        out += (f"\n\n【配图和样板帖一个模子】样板帖有 {len(plan)} 张图，image_prompts 也写 {len(plan)} 张，第 i 张对应它的第 i 张，"
+                "做法、版式和信息量照它，只把内容和图上的字换成本篇的：\n"
+                + "\n".join(f"第 {i + 1} 张{'（封面）' if i == 0 else ''}：{_plan_desc(p)}" for i, p in enumerate(plan)))
+    return out
 
 
 async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feedback: str,
@@ -185,10 +224,66 @@ async def _generate(llm: LLM, ctx: AccountContext, topic: Topic, hint: str, feed
     )
 
 
-async def _pick_reference(session: Session, llm: LLM, ctx: AccountContext, topic: Topic, url: str, emit: Emit) -> dict:
-    """这篇照着哪些帖子写（配图只照主参考帖）。用户给的链接用不了直接报错（不能悄悄换成别的帖子）；自动挑的挑不到就不用。"""
+async def _topic_from_reference(session: Session, ctx: AccountContext, url: str, emit: Emit) -> tuple[Topic, dict]:
+    """只给了参考帖（比如在对话里点了某篇对标帖子的「照这篇写」）：选题就从这篇来，换成本账号的定位写，不再另找热点。"""
     from mediaflow.services import refpost
 
+    emit("reference", "读你给的参考帖…", None)
+    try:
+        got = await refpost.from_links(url)
+    except refpost.RefError as e:
+        raise ValueError(f"参考帖用不了：{e}") from e
+    t = Topic(user_id=ctx.user_id, account_id=ctx.account_id, title=str(got.get("title") or "照参考帖写")[:80],
+              angle="照着参考帖的选题和写法，换成本账号的定位和受众来写", source="reference",
+              source_url=str(got.get("url") or "")[:500])
+    session.add(t)
+    session.commit()
+    session.refresh(t)
+    emit("topic", f"选题照参考帖来：{t.title}", {"topic_id": t.id, **_topic_info(t)})
+    return t, got
+
+
+async def _exemplar_reference(session: Session, ctx: AccountContext, topic: Topic, url: str, emit: Emit,
+                              preread: dict | None = None) -> dict | None:
+    """有样板帖：样板帖当主参考（写法和配图都照它）；选题对应的原爆款、用户给的链接只当文案参考。"""
+    from mediaflow.services import exemplar, refpost
+
+    ex = exemplar.as_reference(session, session.get(Account, ctx.account_id))
+    if ex is None:
+        return None
+    extra: list[dict] = []
+    if url.strip():
+        emit("reference", "读你给的参考帖…", None)
+        try:
+            got = preread or await refpost.from_links(url)
+        except refpost.RefError as e:
+            raise ValueError(f"参考帖用不了：{e}") from e
+        extra = [{**refpost.slim(got), "why": "你给的参考帖"}, *(got.get("extra") or [])]
+    elif (topic.reference or {}).get("title"):
+        extra = [{**refpost.slim(topic.reference), "why": "这个选题就是照着它出的"}]
+    ex["extra"] = [x for x in extra if x.get("title")][:refpost.MAX_EXTRA]
+    n = len(ex.get("local") or [])
+    emit("reference", f"照着样板帖「{ex['title'][:24]}」写：写法照它，"
+         + (f"配图 {n} 张一张对一张照它的做法和版式" if n else "样板帖还没有出好的图，配图按账号风格出")
+         + (f"；另参考「{ex['extra'][0]['title'][:20]}」的选题和信息点" if ex["extra"] else ""),
+         {"reference": {k: ex.get(k) for k in ("title", "creator", "source", "why", "draft_id")}, "images": n,
+          "extra": [x.get("title", "") for x in ex["extra"]],
+          "extra_posts": [{k: x.get(k) for k in ("title", "url", "creator", "likes")} for x in ex["extra"]]})
+    return ex
+
+
+async def _pick_reference(session: Session, llm: LLM, ctx: AccountContext, topic: Topic, url: str, emit: Emit,
+                          *, use_exemplar: bool = True, preread: dict | None = None) -> dict:
+    """这篇照着哪些帖子写（配图只照主参考帖）。有样板帖时样板帖为主，其余只当文案参考。
+    用户给的链接用不了直接报错（不能悄悄换成别的帖子）；自动挑的挑不到就不用。"""
+    from mediaflow.services import refpost
+
+    if use_exemplar:
+        ex = await _exemplar_reference(session, ctx, topic, url, emit, preread)
+        if ex is not None:
+            return ex
+    if preread is not None:
+        return await _announce(preread, "", emit)  # 写稿前已经读好的用户链接（from_links 的结果）
     emit("reference", "找照着做的参考帖…" if not url else "读你给的参考帖…", None)
     try:
         ref, why_none = await refpost.pick(session, llm, ctx.account_id, topic, url=url)
@@ -197,6 +292,10 @@ async def _pick_reference(session: Session, llm: LLM, ctx: AccountContext, topic
     except Exception as e:  # noqa: BLE001 - 自动挑参考帖出问题不影响写稿
         logger.warning("挑参考帖失败", exc_info=True)
         ref, why_none = {}, f"参考帖没找到（{e}）"
+    return await _announce(ref, why_none, emit)
+
+
+async def _announce(ref: dict, why_none: str, emit: Emit) -> dict:
     if ref:
         n = len(ref.get("local") or [])
         extra = ref.get("extra") or []
@@ -545,13 +644,18 @@ async def write_draft(
     fetch: Fetcher | None = None,
     reference_url: str = "",
     image_plan: list[str] | None = None,
+    use_exemplar: bool = True,
 ) -> Draft:
     ctx = load_context(session, account_id)
-    if not (ctx.theme or ctx.keywords or hint or topic_id):
+    if not (ctx.theme or ctx.keywords or hint or topic_id or reference_url.strip()):
         raise ValueError("账号还没有设定主题，先和管家聊聊账号定位吧")
 
-    topic = await _pick_topic(session, llm, ctx, topic_id, hint, emit, fetch)
-    ref = await _pick_reference(session, llm, ctx, topic, reference_url, emit)
+    preread = None
+    if reference_url.strip() and not topic_id and not hint:
+        topic, preread = await _topic_from_reference(session, ctx, reference_url, emit)
+    else:
+        topic = await _pick_topic(session, llm, ctx, topic_id, hint, emit, fetch)
+    ref = await _pick_reference(session, llm, ctx, topic, reference_url, emit, use_exemplar=use_exemplar, preread=preread)
 
     candidates: list[Candidate] = []
     eval_failed = False

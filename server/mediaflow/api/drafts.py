@@ -68,14 +68,16 @@ def list_drafts(status: DraftStatus | None = None, acc: Account = Depends(owned_
 def start_writing(body: WriteIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
     job = enqueue(s, JobKind.write_draft, user_id=acc.user_id, account_id=acc.id,
                   payload={"topic_id": body.topic_id, "hint": body.hint, "trigger": "chat" if body.from_chat else "manual",
-                           "reference_url": body.reference_url.strip(),
+                           "reference_url": body.reference_url.strip(), "use_exemplar": body.use_exemplar,
                            "image_plan": [p.strip() for p in body.image_plan if p.strip()]})
     if body.from_chat:
         from mediaflow.agents.manager import log_tool
 
         t = s.get(Topic, body.topic_id) if body.topic_id else None
-        log_tool(s, acc, "write_post", {"topic_id": body.topic_id or ""},
-                 {"ok": True, "job_id": job.id, "topic": t.title if t else "", "note": "用户点了「写这篇」"})
+        args = {"topic_id": body.topic_id or ""} | ({"reference_url": body.reference_url.strip()} if body.reference_url.strip() else {})
+        log_tool(s, acc, "write_post", args,
+                 {"ok": True, "job_id": job.id, "topic": t.title if t else "",
+                  "note": "用户点了「照这篇写」" if body.reference_url.strip() and not t else "用户点了「写这篇」"})
     return JobOut(**job.model_dump())
 
 
@@ -134,6 +136,9 @@ def revise(body: ReviseIn, d: Draft = Depends(owned_draft), s: Session = Depends
 
 @router.delete("/api/drafts/{draft_id}", status_code=204)
 def delete_draft(d: Draft = Depends(owned_draft), s: Session = Depends(get_session)):
+    from mediaflow.services import exemplar
+
+    exemplar.forget_draft(s, d)
     for row in [*_images(s, d.id), *s.exec(select(Feedback).where(Feedback.draft_id == d.id)).all()]:
         s.delete(row)
     s.flush()
