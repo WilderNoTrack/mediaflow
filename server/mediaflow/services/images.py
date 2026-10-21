@@ -525,7 +525,8 @@ def _look_block(ref: dict, molds: dict[int, int], targets: list[DraftImage]) -> 
                                            pages="\n".join(rows))
 
 
-def _final_prompt(prompt: str, spec: str, *, mold: bool, anchor: int | None, no_text: bool = False) -> str:
+def _final_prompt(prompt: str, spec: str, *, mold: bool, anchor: int | None, no_text: bool = False,
+                  caption: bool = False) -> str:
     """每张发给生图模型的提示词：先说附的参考图各是什么，再是这张的内容，最后是整套统一的规范。"""
     head = []
     if mold and anchor is not None:
@@ -537,7 +538,9 @@ def _final_prompt(prompt: str, spec: str, *, mold: bool, anchor: int | None, no_
         head.append(f"参考图是同一套里已经出好的第 {anchor + 1} 张：新图的配色、字体、文字样式、背景质感、人物和它保持一致，"
                     "构图和内容按下面的来。")
     tail = ["【这张画面里不要出现任何文字、数字、字母和 logo，参考图里的字也不要照搬；也不要画空白的标签、便签、文字框、"
-            "占位方块。文字之后会用代码排上去，按描述在那一侧留出干净的背景（桌面、墙面、天空这类）】"] if no_text else []
+            + ("占位方块。之后只在角落叠一小块标签，画面照常铺满真实内容，不用留空白区域；原图上贴字的地方也画成正常的画面】"
+               if caption else "占位方块。文字之后会用代码排上去，按描述在那一侧留出干净的背景（桌面、墙面、天空这类）】")]
+            if no_text else [])
     return "\n".join([*head, prompt, f"【这一套图统一的视觉规范，必须遵守】{spec}", *tail])
 
 
@@ -779,9 +782,10 @@ async def generate_images(
                     a_idx, a_uri = anchor_uri() if anchor["img"] is not img else (None, None)
                     r = [u for u in (mold_uri, a_uri) if u]
                     no_text = mode == "ai_text"
+                    caption = str((img.layout or {}).get("kind") or "") in ("caption", "none")
                     prompt = plans[img.idx]["prompt"]
                     img.expanded_prompt = _final_prompt(prompt, spec, mold=bool(mold_uri), anchor=a_idx if a_uri else None,
-                                                        no_text=no_text)
+                                                        no_text=no_text, caption=caption)
 
                     async def gen(p: str) -> bytes:
                         try:
@@ -790,7 +794,8 @@ async def generate_images(
                             if not r or not e.retryable:
                                 raise
                             logger.warning("带参考图出图失败（%s），不带参考图再试", e)
-                            return await provider.generate(_final_prompt(prompt, spec, mold=False, anchor=None, no_text=no_text))
+                            return await provider.generate(_final_prompt(prompt, spec, mold=False, anchor=None,
+                                                                         no_text=no_text, caption=caption))
 
                     data = await gen(img.expanded_prompt)
                     if no_text:
