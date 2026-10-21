@@ -200,11 +200,13 @@ async def test_reference_images_are_read_and_followed(session, llm, account, mon
     assert "账号的样板爆款" in w and "第 1 张：插画/漫画" in w and "不用照它的句式" in w and "样板爆款有 3 张图" in w
     llm.push("image", {"spec": "淡紫底小和尚", "palette": "cream", "prompts": [
         {"idx": 1, "mode": "card", "prompt": "两格漫画", "layout": {"title": "x"}},
-        {"idx": 2, "mode": "ai_text", "prompt": "窗边实拍", "layout": {"kind": "none"}},
+        {"idx": 2, "mode": "photo", "prompt": "窗边实拍", "layout": {"kind": "cover", "title": "窗边一角"}},
         {"idx": 3, "mode": "card", "layout": {"kind": "list", "title": "三句话", "items": ["一", "二"]}},
     ]})
     await images_mod.generate_images(session, llm, d2.id)
-    assert [i.made_by for i in _imgs(session, d2)] == ["ai", "photo", "card"]  # 照样板爆款的原图挑做法
+    imgs2 = _imgs(session, d2)
+    assert [i.made_by for i in imgs2] == ["ai", "photo", "card"]  # 照样板爆款的原图挑做法
+    assert imgs2[1].layout["kind"] == "caption"  # 原图是没大字的实拍：不压大标题，只打小标签
     assert session.get(Draft, d2.id).image_mold == "post"
     # 删了那篇草稿，样板（那篇爆款）还在
     exemplar.forget_draft(session, d)

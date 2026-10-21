@@ -361,6 +361,15 @@ LOOK_MODES = {"photo": ["photo", "ai"], "photo_text": ["ai_text", "ai", "photo"]
               "illustration": ["ai"], "text_note": ["ai", "card"], "card": ["card", "ai_text"], "screenshot": ["ai", "card"]}
 
 
+def _look_page(look: list[dict], ref: dict, img: DraftImage) -> dict | None:
+    """这张对应的那张原图读出来是什么做法。"""
+    local = ref.get("local") or []
+    if not look or not local:
+        return None
+    k = mold_slot(local, img.idx)
+    return look[k] if k < len(look) else None
+
+
 def look_options(opts: list[str], page: dict | None) -> list[str]:
     want = LOOK_MODES.get(str((page or {}).get("kind") or ""), [])
     picked = [m for m in want if m in opts]
@@ -712,6 +721,10 @@ async def generate_images(
             if img.idx in ex_slot:  # 模型没说版式、文字位置的，照样板对应那张
                 same, said = ex_plan[ex_slot[img.idx]], plans[img.idx].get("layout") or {}
                 lay = clean_layout({**lay, **{k: same[k] for k in ("kind", "position") if same.get(k) and not said.get(k)}})
+            page = _look_page(look, ref, img) if not img.mode else None
+            if page and page.get("kind") in ("photo", "photo_text") and page.get("text") != "many" \
+                    and lay.get("kind") in ("cover", "quote"):
+                lay = {**lay, "kind": "caption"}  # 原图是照片上一两句小字：封面也照它打小标签，不压大标题
             img.layout = {**lay, "palette": pal}
     molds: dict[int, str] = {k: local[v] for k, v in slots.items() if final.get(k) in _NEEDS_AI}  # idx → 照着做版式的那张图
     for img in targets:
