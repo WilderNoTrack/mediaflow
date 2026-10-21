@@ -145,32 +145,41 @@ def _reference_block(ref: dict, *, planned: bool = False) -> str:
         return ""
     if ref.get("source") == "exemplar":
         return _exemplar_block(ref, planned=planned)
+    sample = ref.get("source") == "exemplar_post"  # 账号的样板爆款：配图照它，文案只借鉴
     posts = [ref, *[x for x in ref.get("extra") or [] if x.get("title")]]
+    main = "样板爆款" if sample else "主参考帖"
 
     def one(i: int, p: dict) -> str:
         body = " ".join(str(p.get("content", "")).split())[:600]
-        tag = "（主参考帖，配图也照它）" if i == 0 and len(posts) > 1 else ""
+        tag = ("（账号的样板爆款，每篇配图都照它）" if sample else "（主参考帖，配图也照它）") if i == 0 and (len(posts) > 1 or sample) \
+            else ("（本篇选题的内容参考）" if sample else "")
         return (f"{i + 1}. {tag}{p.get('creator') or '同领域博主'}，{p.get('likes') or '?'}赞\n标题：{p['title']}\n"
                 + (f"正文：{body}\n" if body else "")
                 + (f"标签：{'、'.join(p.get('tags') or [])}\n" if p.get("tags") else ""))
 
     n = len(ref.get("local") or []) or len(ref.get("images") or [])
-    imgs = (f"\n\n【配图要和主参考帖一个模子】主参考帖有 {n} 张图，image_prompts 也写 {n} 张，第 i 张对应它的第 i 张"
+    imgs = (f"\n\n【配图要和{main}一个模子】{main}有 {n} 张图，image_prompts 也写 {n} 张，第 i 张对应它的第 i 张"
             "（封面对封面，内页对内页）：出图时会把那张原图当模板，照着它的版式、文字位置、配色和装饰重做，整套用同一份视觉规范，"
             "所以每张只写清「这一张放本篇的什么内容、图上写哪几个字」，信息量和原图那张相当。") if n > 1 and not planned else ""
     look = ref.get("look") or {}
     if look.get("pages") and not planned:
         from mediaflow.services.visual import look_line
 
-        imgs += ("\n原帖每张图是这样做的（照着写每张的描述：原图是漫画就写同样的分格和角色、是拼图就写怎么分格、"
+        imgs += (f"\n{'样板爆款' if sample else '原帖'}每张图是这样做的（照着写每张的描述：原图是漫画就写同样的分格和角色、是拼图就写怎么分格、"
                  "是随手实拍就写真实场景；原图没字就别安排字，字多就多安排，字少就少安排）：\n"
                  + (f"整套：{look['spec']}\n" if look.get("spec") else "")
                  + "\n".join(f"第 {i + 1} 张：{look_line(p)}" for i, p in enumerate(look["pages"]) if look_line(p)))
-    learn = ("学它们共同的标题公式、开头钩子、结构节奏和信息密度（以主参考帖为主）" if len(posts) > 1
-             else "学它的标题公式、开头钩子、结构节奏和信息密度")
+    # 配图照爆款要像，文字不用那么严：看懂它为什么火，按账号定位和本篇选题自己写
+    if sample:
+        learn = ("样板爆款主要定配图的风格；文案只借鉴它的语气和钩子，不用照它的句式、结构和篇幅"
+                 + ("，本篇的信息点参考后面几篇" if len(posts) > 1 else "") + "，按账号定位和本篇选题自己写")
+    else:
+        learn = (("看懂它们为什么火（以主参考帖为主）" if len(posts) > 1 else "看懂它为什么火")
+                 + "：选题角度、戳中的点、标题和开头的钩子、信息给得多实在。文案不用照它的句式和结构，按账号定位和本篇选题用自己的话写，"
+                   "结构和篇幅自己定")
     return ("\n\n" + prompts.UNTRUSTED_NOTICE + "\n<external_data>\n"
             f"【参考帖（{len(posts)} 篇）】\n" + "\n".join(one(i, p) for i, p in enumerate(posts))
-            + "</external_data>\n" + learn + "，内容必须换成本账号主题，不照抄任何句子。" + imgs)
+            + "</external_data>\n" + learn + "；内容必须换成本账号主题，不照抄任何句子。" + imgs)
 
 
 _KIND_LABEL = {"cover": "封面式（大标题）", "list": "清单", "steps": "步骤", "compare": "左右对比", "quote": "金句",
@@ -195,8 +204,8 @@ def _exemplar_block(ref: dict, *, planned: bool = False) -> str:
     out = ("\n\n【样板帖（用户亲手打磨定稿的一篇，账号后面每篇都照它）】\n"
            f"标题：{ref.get('title', '')}\n正文：\n{body}\n"
            + (f"标签：{'、'.join(ref.get('tags') or [])}\n" if ref.get("tags") else "")
-           + "这篇照着样板帖写：标题的句式和长度、开头怎么起、正文结构和段落节奏、篇幅、语气口吻、emoji 和标签的用法都和它保持一致，"
-             "读起来像同一个人写的系列；内容换成本篇的选题，不照抄句子，也不要和样板帖讲同一件事。")
+           + "语气口吻、emoji 和标签的用法和它像同一个人写的；标题句式、正文结构和篇幅不用照它，按本篇选题自己定；"
+             "内容换成本篇的选题，不照抄句子，也不要和样板帖讲同一件事。")
     extra = [x for x in ref.get("extra") or [] if x.get("title")]
     if extra:
         out += ("\n\n" + prompts.UNTRUSTED_NOTICE + "\n<external_data>\n【其他参考帖（只借鉴选题角度和信息点，写法仍以样板帖为准）】\n"
@@ -253,43 +262,46 @@ async def _topic_from_reference(session: Session, ctx: AccountContext, url: str,
     return t, got
 
 
-async def _exemplar_reference(session: Session, ctx: AccountContext, topic: Topic, url: str, emit: Emit,
-                              preread: dict | None = None) -> dict | None:
-    """有样板帖：样板帖当主参考（写法和配图都照它）；选题对应的原爆款、用户给的链接只当文案参考。"""
+async def _exemplar_reference(session: Session, ctx: AccountContext, topic: Topic, emit: Emit) -> dict | None:
+    """有样板帖：样板帖当主参考（配图照它一个风格）；选题对应的原爆款只当内容参考。
+    用户这篇自己指定了要照的帖子时不走这里（这篇照指定的那篇）。"""
     from mediaflow.services import exemplar, refpost
 
-    ex = exemplar.as_reference(session, session.get(Account, ctx.account_id))
+    acc = session.get(Account, ctx.account_id)
+    ex = exemplar.as_reference(session, acc)
     if ex is None:
         return None
-    extra: list[dict] = []
-    if url.strip():
-        emit("reference", "读你给的参考帖…", None)
-        try:
-            got = preread or await refpost.from_links(url)
-        except refpost.RefError as e:
-            raise ValueError(f"参考帖用不了：{e}") from e
-        extra = [{**refpost.slim(got), "why": "你给的参考帖"}, *(got.get("extra") or [])]
-    elif (topic.reference or {}).get("title"):
-        extra = [{**refpost.slim(topic.reference), "why": "这个选题就是照着它出的"}]
-    ex["extra"] = [x for x in extra if x.get("title")][:refpost.MAX_EXTRA]
+    if (topic.reference or {}).get("title") and topic.reference.get("title") != ex.get("title"):
+        ex["extra"] = [{**refpost.slim(topic.reference), "why": "这个选题就是照着它出的"}]
+    else:
+        ex["extra"] = []
     n = len(ex.get("local") or [])
-    emit("reference", f"照着样板帖「{ex['title'][:24]}」写：写法照它，"
-         + (("配图照它那张图的做法和版式" if n == 1 else f"配图 {n} 张一张对一张照它的做法和版式") if n else "样板帖还没有出好的图，配图按账号风格出")
-         + (f"；另参考「{ex['extra'][0]['title'][:20]}」的选题和信息点" if ex["extra"] else ""),
-         {"reference": {k: ex.get(k) for k in ("title", "creator", "source", "why", "draft_id")}, "images": n,
+    post = ex.get("source") == "exemplar_post"
+    emit("reference", (f"照着样板爆款「{ex['title'][:24]}」出图：{n} 张一张对一张照它的原图，文案按本篇选题写" if post else
+                       f"照着样板帖「{ex['title'][:24]}」写："
+                       + (("配图照它那张图的做法和版式" if n == 1 else f"配图 {n} 张一张对一张照它的做法和版式") if n
+                          else "样板帖还没有出好的图，配图按账号风格出"))
+         + (f"；内容参考「{ex['extra'][0]['title'][:20]}」" if ex["extra"] else ""),
+         {"reference": {k: ex.get(k) for k in ("title", "url", "creator", "likes", "source", "why", "draft_id")}, "images": n,
           "extra": [x.get("title", "") for x in ex["extra"]],
           "extra_posts": [{k: x.get(k) for k in ("title", "url", "creator", "likes")} for x in ex["extra"]]})
+    if post and n and not ex.get("look"):  # 定样板时没读成图：现在读，存回账号下次不用再读
+        ex = await _look(ex, emit)
+        if ex.get("look") and acc is not None:
+            acc.exemplar = {**acc.exemplar, "post": {**acc.exemplar["post"], "look": ex["look"]}}
+            session.add(acc)
+            session.commit()
     return ex
 
 
 async def _pick_reference(session: Session, llm: LLM, ctx: AccountContext, topic: Topic, url: str, emit: Emit,
                           *, use_exemplar: bool = True, preread: dict | None = None) -> dict:
-    """这篇照着哪些帖子写（配图只照主参考帖）。有样板帖时样板帖为主，其余只当文案参考。
+    """这篇照着哪些帖子写（配图只照主参考帖）。用户这篇指定的帖子 > 样板帖 > 自动挑的爆款。
     用户给的链接用不了直接报错（不能悄悄换成别的帖子）；自动挑的挑不到就不用。"""
     from mediaflow.services import refpost
 
-    if use_exemplar:
-        ex = await _exemplar_reference(session, ctx, topic, url, emit, preread)
+    if use_exemplar and not url.strip() and preread is None:  # 用户这篇指定了要照的帖子：这篇就照那篇（配图也照它）
+        ex = await _exemplar_reference(session, ctx, topic, emit)
         if ex is not None:
             return ex
     if preread is not None:

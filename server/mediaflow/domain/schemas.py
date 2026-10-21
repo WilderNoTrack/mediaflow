@@ -56,7 +56,8 @@ class AccountOut(BaseModel):
     image_mode: str = "ai"
     topic_type: str
     keywords: list[str]
-    exemplar: dict = Field(default={}, description="样板帖：{draft_id, title, at, images, cover}；空 = 还没定")
+    exemplar: dict = Field(default={}, description="样板帖：{kind: post（一篇爆款）/ draft（自己的一篇，老数据）, title, url, creator, "
+                                                    "likes, draft_id, at, images, cover}；空 = 还没定")
     auto_enabled: bool
     auto_frequency: AutoFrequency
     last_auto_run_at: datetime | None
@@ -134,7 +135,8 @@ class AccountDetail(AccountOut):
 
 
 class ExemplarIn(BaseModel):
-    draft_id: str = Field(min_length=1, max_length=64)
+    draft_id: str = Field("", max_length=64, description="把这篇草稿定为样板：它照着某篇爆款做的，样板就是那篇爆款")
+    url: str = Field("", max_length=2000, description="直接贴一篇爆款的链接定为样板")
 
 
 class RuleIn(BaseModel):

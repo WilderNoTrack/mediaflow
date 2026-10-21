@@ -102,9 +102,9 @@ def _template_on(session, account):
     session.commit()
 
 
-def _draft(session, account, source="benchmark", n=3):
+def _draft(session, account, source="benchmark", n=3, local=True):
     d = Draft(user_id="local", account_id=account.id, title="t", body="b", original_title="t", original_body="b",
-              reference={"title": "原帖", "source": source, "local": ["_refs/post1.jpg", "_refs/post2.jpg"]})
+              reference={"title": "原帖", "source": source, "local": ["_refs/post1.jpg", "_refs/post2.jpg"] if local else []})
     session.add(d)
     session.commit()
     session.add_all([DraftImage(draft_id=d.id, idx=k, prompt=f"第{k + 1}张") for k in range(n)])
@@ -113,7 +113,8 @@ def _draft(session, account, source="benchmark", n=3):
 
 
 async def test_template_drives_images(session, llm, account, monkeypatch):
-    """有模板：每张选页型、照该页型的样例做版式（自动挑的参考帖只管文案），先出封面再带封面出其余；写稿也知道有哪几种页。"""
+    """有模板、参考帖没拿到原图：每张选页型、照该页型的样例做版式，先出封面再带封面出其余；写稿也知道有哪几种页。
+    参考帖有原图（不管是自动挑的还是用户给的）就照原图：照爆款比照账号总结的模板像。"""
     from mediaflow.agents.context import load_context
 
     monkeypatch.setenv("IMAGE_API_KEY", "x")
@@ -122,7 +123,7 @@ async def test_template_drives_images(session, llm, account, monkeypatch):
     images_mod.set_provider_factory(lambda: fake)
     _template_on(session, account)
     assert "页型：封面（第一张）；清单页（清单）" in load_context(session, account.id).profile_text()
-    d = _draft(session, account)
+    d = _draft(session, account, local=False)
     llm.push("image", {"spec": "", "prompts": [{"idx": 1, "prompt": "封面p", "type": "封面"},
                                                {"idx": 2, "prompt": "清单p", "type": "清单"},
                                                {"idx": 3, "prompt": "细节p", "type": "实拍细节"}]})
@@ -136,13 +137,14 @@ async def test_template_drives_images(session, llm, account, monkeypatch):
     assert [i.ref_path for i in imgs] == ["_refs/cov.jpg", "_refs/list.jpg", ""]  # 样例图没了就不带版式图
     assert len(fake.refs[0]) == 1 and len(fake.refs[1]) == 2 and len(fake.refs[2]) == 1  # 封面先出，其余带上封面
 
-    # 用户自己给的参考帖：配图照它，不用模板
-    d2 = _draft(session, account, source="user", n=2)
-    await images_mod.generate_images(session, llm, d2.id)
-    session.refresh(d2)
-    imgs2 = session.exec(select(DraftImage).where(DraftImage.draft_id == d2.id).order_by(DraftImage.idx)).all()
-    assert d2.image_mold == "post" and [i.ref_path for i in imgs2] == ["_refs/post1.jpg", "_refs/post2.jpg"]
-    assert "账号配图模板" not in llm.prompts_of("image")[-1]
+    # 参考帖有原图（用户给的、自动挑的都一样）：配图照它，不用模板
+    for source in ("user", "benchmark"):
+        d2 = _draft(session, account, source=source, n=2)
+        await images_mod.generate_images(session, llm, d2.id)
+        session.refresh(d2)
+        imgs2 = session.exec(select(DraftImage).where(DraftImage.draft_id == d2.id).order_by(DraftImage.idx)).all()
+        assert d2.image_mold == "post" and [i.ref_path for i in imgs2] == ["_refs/post1.jpg", "_refs/post2.jpg"]
+        assert "账号配图模板" not in llm.prompts_of("image")[-1]
 
 
 async def test_review_redoes_bad_image(session, llm, account, vision, monkeypatch, client):

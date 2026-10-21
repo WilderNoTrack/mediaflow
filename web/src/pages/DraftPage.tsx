@@ -154,31 +154,45 @@ export function DraftPage() {
   );
 }
 
-/** 样板帖：这篇是样板帖就说明一下、能取消；还没有样板帖时提示打磨满意后定为样板；已有别的样板帖时能换成这篇 */
+/** 样板帖（账号选定的一篇爆款，每篇配图都照它一个风格）：
+ * 这篇照的就是样板 → 说明一下、能取消；这篇照着别的爆款做 → 喜欢这套图就把那篇定为（换成）样板；
+ * 这篇没照爆款做 → 老办法，把这篇自己当样板。 */
 function ExemplarBar({ d, dirty }: { d: DraftDetail; dirty: boolean }) {
   const { data: acc } = useAccount(d.account_id);
   const ex = useExemplar(d.account_id);
   if (!acc) return null;
-  const cur = (acc.exemplar ?? {}) as { draft_id?: string; title?: string };
-  if (cur.draft_id === d.id) return (
+  const cur = (acc.exemplar ?? {}) as { kind?: string; draft_id?: string; title?: string; url?: string };
+  const ref = (d.reference ?? {}) as Ref;
+  const fromPost = !!ref.title && (ref.local?.length ?? 0) > 0 && ref.source !== "exemplar";
+  const isCur = cur.kind === "post"
+    ? ref.source === "exemplar_post" || (!!ref.title && ref.title === cur.title)
+    : !!cur.draft_id && cur.draft_id === d.id;
+  if (isCur) return (
     <div className="space-y-1">
       <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
         <Star className="size-4 shrink-0 fill-amber-400 text-amber-500" />
-        <span className="flex-1"><b>这篇是样板帖</b>：以后每篇都照它的写法、配图做法和版式来。接着改它也行，后面的帖子照改好的版本。</span>
-        <Button size="xs" variant="ghost" loading={ex.isPending} onClick={() => confirm("取消样板帖？之后写稿按对标爆款和账号设定来。") && ex.mutate(null)}>取消样板</Button>
+        <span className="flex-1">{cur.kind === "post"
+          ? <>这篇照的是账号的<b>样板爆款</b>「{cur.title}」：每篇的配图都照它一个风格，文案按各自的选题写。</>
+          : <><b>这篇是样板帖</b>：以后每篇的配图都照它的做法和版式来。接着改它也行，后面的帖子照改好的版本。</>}</span>
+        <Button size="xs" variant="ghost" loading={ex.isPending} onClick={() => confirm("取消样板帖？之后每篇照各自选题的爆款做。") && ex.mutate(null)}>取消样板</Button>
       </div>
       <ErrorText error={ex.error} />
     </div>
   );
+  const has = !!(cur.kind === "post" || cur.draft_id);
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3 text-sm text-indigo-900">
         <Star className="size-4 shrink-0 text-indigo-500" />
-        <span className="flex-1">{cur.draft_id
-          ? <>账号的样板帖是<Link to={`/drafts/${cur.draft_id}`} className="mx-0.5 font-medium hover:underline">「{cur.title}」</Link>，这篇更满意的话可以换成它。</>
-          : <>把这篇改到满意，就<b>定为样板帖</b>：以后每篇都照它的写法、配图做法和版式来，对标的爆款只当选题和内容参考。</>}</span>
-        <Button size="xs" variant={cur.draft_id ? "outline" : "default"} disabled={dirty} title={dirty ? "先保存修改" : undefined}
-          loading={ex.isPending} onClick={() => ex.mutate(d.id)}><Star />{cur.draft_id ? "换成这篇" : "定为样板帖"}</Button>
+        <span className="flex-1">{fromPost
+          ? (has
+            ? <>账号的样板是「{cur.title}」。更喜欢这篇的图，可以把它照的「{ref.title}」换成样板。</>
+            : <>觉得这套图对味，就把它照的爆款「{ref.title}」<b>定为样板</b>：以后每篇的配图都照它一个风格，文案按各自的选题写。</>)
+          : (has
+            ? <>账号的样板是「{cur.title}」。这篇更满意的话可以换成这篇。</>
+            : <>这篇没照着爆款做。改到满意也可以<b>定为样板</b>：以后每篇的配图都照它的做法和版式来。</>)}</span>
+        <Button size="xs" variant={has ? "outline" : "default"} disabled={dirty} title={dirty ? "先保存修改" : undefined}
+          loading={ex.isPending} onClick={() => ex.mutate({ draft_id: d.id })}><Star />{has ? "换成样板" : "定为样板"}</Button>
       </div>
       <ErrorText error={ex.error} />
     </div>
@@ -222,13 +236,14 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
   });
   const busy = d.images.some((x) => x.status === "pending" || x.status === "running");
   const tpl = d.image_mold === "template"; // 配图照账号配图模板，参考帖只给文案
-  const ex = ref.source === "exemplar"; // 照账号的样板帖写：写法和配图都照它
+  const ex = ref.source === "exemplar"; // 照账号的样板帖（自己的一篇老样板）：配图照它的做法和版式
+  const sample = ref.source === "exemplar_post"; // 照账号的样板爆款：配图照它的原图，文案按这篇选题写
   return (
     <Card>
       <CardHead icon={<Link2 />} title="参考帖"
         action={!editing && <button className="cursor-pointer text-xs text-indigo-600 hover:underline" onClick={() => setEditing(true)}>{tpl ? "让配图照一篇" : ref.title ? "换配图照的那篇" : "指定一篇"}</button>} />
       <CardBody className="space-y-3">
-        {ref.title && <div className="text-[11px] font-medium text-muted-foreground">{ex ? "写法和配图都照账号的样板帖" : tpl ? "文案参考这篇，配图照账号的配图模板" : `配图统一照这篇${(ref.extra?.length ?? 0) > 0 ? "，文案也学它" : ""}`}</div>}
+        {ref.title && <div className="text-[11px] font-medium text-muted-foreground">{ex ? "配图照账号的样板帖" : sample ? "配图照账号的样板爆款" : tpl ? "文案参考这篇，配图照账号的配图模板" : "配图完全照这篇，文案借鉴它"}</div>}
         {ref.title ? (
           <div className="flex gap-3">
             {n > 0
@@ -241,7 +256,7 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
                 ? <a href={ref.url} target="_blank" rel="noreferrer" className="line-clamp-2 text-sm font-medium hover:text-indigo-600">{ref.title}<ExternalLink className="ml-1 inline size-3 text-muted-foreground" /></a>
                 : <div className="line-clamp-2 text-sm font-medium">{ref.title}</div>}
               <div className="mt-1 text-muted-foreground">{[ref.creator, ref.likes && `${ref.likes} 赞`, n > 0 && `${n} 张图`].filter(Boolean).join(" · ")}</div>
-              {ref.why && !ex && <div className="mt-1 text-muted-foreground">为什么选它：{ref.why}</div>}
+              {ref.why && !ex && !sample && <div className="mt-1 text-muted-foreground">为什么选它：{ref.why}</div>}
             </div>
           </div>
         ) : !tpl && (
@@ -254,14 +269,14 @@ function ReferenceCard({ d }: { d: DraftDetail }) {
           <p className="text-xs leading-relaxed text-muted-foreground">{n > 0 ? "配图一张对一张照样板帖的做法、版式和配色，内容换成这篇的。" : "样板帖还没有出好的图，配图按账号风格出。"}想让这篇照别的帖子出图，点右上角贴链接。</p>
         )}
         {!ex && !tpl && ref.title && n > 0 && !editing && !justSet && (
-          <p className="text-xs leading-relaxed text-muted-foreground">配图一张对一张照着它的版式、文字位置和配色重做，内容换成这篇的；整套用同一份视觉规范，翻起来是一套。</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">配图一张对一张照着{sample ? "样板爆款" : "它"}的原图重做（画风、版式、每张怎么做、字多字少），内容换成这篇的；文案只学它为什么火，按这篇选题写。{sample && "想让这篇照别的帖子出图，点右上角贴链接。"}</p>
         )}
         {!ex && !tpl && ref.title && n === 0 && (
           <p className="text-xs leading-relaxed text-muted-foreground">这篇的原图没拿到，配图按账号的配图风格统一出。</p>
         )}
         {(ref.extra?.length ?? 0) > 0 && (
           <div className="border-t pt-2.5">
-            <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">{ex ? "选题和内容还参考了（写法和配图仍照样板帖）" : "文案还参考了（只学标题和结构，不参与出图）"}</div>
+            <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">{ex || sample ? "内容还参考了（配图仍照样板）" : "文案还参考了（只借鉴，不参与出图）"}</div>
             <ul className="space-y-1.5">
               {ref.extra!.map((x, k) => (
                 <li key={k} className="text-xs">
@@ -385,7 +400,7 @@ function ImagesCard({ d, i, setI, onAsk }: { d: DraftDetail; i: number; setI: (i
                 <a href={cur.ref_url} target="_blank" rel="noreferrer" className="shrink-0 text-center" title={d.image_mold === "template" ? "这张照着账号配图模板里这种页的样例排版" : "这张照着参考帖的这张图做"}>
                   <img src={cur.ref_url} alt="" className="h-[64px] w-[48px] rounded-md border object-cover" />
                   <span className="mt-0.5 block text-[10px] text-muted-foreground">
-                    {d.image_mold === "template" ? "照模板样例" : `照着${(d.reference as Ref).source === "exemplar" ? "样板帖" : "原帖"}第 ${((d.reference as Ref).local ?? []).indexOf(cur.ref_url.replace("/files/images/", "")) + 1 || "?"} 张`}
+                    {d.image_mold === "template" ? "照模板样例" : `照着${(d.reference as Ref).source === "exemplar" ? "样板帖" : (d.reference as Ref).source === "exemplar_post" ? "样板爆款" : "原帖"}第 ${((d.reference as Ref).local ?? []).indexOf(cur.ref_url.replace("/files/images/", "")) + 1 || "?"} 张`}
                   </span>
                 </a>
               )}

@@ -618,8 +618,8 @@ async def generate_images(
             session.add(draft)
             session.commit()
     ex_local, ex_plan, ex_slot = _exemplar_slots(ref, targets)
-    # 账号有配图模板、参考帖又不是用户指定的：版式照模板，不按原图挑做法
-    look = _look_pages(ref) if not (visual_mod.has_template(account) and ref.get("source") != "user") else []
+    # 照着爆款做：有原图就照原图（账号的配图模板只在没有参考原图时才用）
+    look = _look_pages(ref)
     if look:  # 照参考帖：按看图模型读的原图做法挑（漫画、拼图让 AI 画整张，没字的实拍不排字…）
         n_local = len(ref.get("local") or [])
         for i in targets:
@@ -665,9 +665,8 @@ async def generate_images(
         local = ex_local if use_refs() and ai_targets else []
     else:
         local = [p for p in ref.get("local") or [] if (get_settings().images_dir / p).exists()] if use_refs() and ai_targets else []
-    # 版式照什么：样板帖 > 用户自己给的参考帖 > 账号配图模板 > 自动挑的参考帖（只管 AI 画的那几张）
-    tpl = account.visual if ai_targets and visual_mod.has_template(account) and not ex_local \
-        and not (local and ref.get("source") == "user") else None
+    # 版式照什么：这篇照的爆款（样板爆款 / 用户指定 / 自动挑的）或样板草稿的原图 > 账号配图模板（只管 AI 画的那几张）
+    tpl = account.visual if ai_targets and visual_mod.has_template(account) and not ex_local and not local else None
     slots = {i.idx: mold_slot(local, i.idx) for i in ai_targets} if local and not tpl else {}
     if tpl:
         draft.image_mold = "template"
@@ -677,7 +676,8 @@ async def generate_images(
         emit("image", f"照着样板帖「{ref.get('title', '')[:20]}」出图：一张对一张照它的做法、版式和配色", None)
     elif slots:
         draft.image_mold = "post"
-        emit("image", f"照着参考帖「{ref.get('title', '')[:20]}」的原图出图，一张对一张学版式，整套用同一份视觉规范", None)
+        emit("image", f"照着{'样板爆款' if ref.get('source') == 'exemplar_post' else '参考帖'}「{ref.get('title', '')[:20]}」"
+             "的原图出图，一张对一张学版式，整套用同一份视觉规范", None)
     else:
         draft.image_mold = ""
     if ex_slot:  # 照样板帖时每张的做法已经定了，不再说账号默认做法

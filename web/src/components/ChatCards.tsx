@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, CheckCircle2, ChevronDown, ChevronRight, FileText, ImageIcon, Loader2, Palette, PenLine, ScrollText, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, ChevronDown, ChevronRight, FileText, ImageIcon, Loader2, Palette, PenLine, ScrollText, Star, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, unwrap, type Account, type Job, type JobEvent } from "../api/client";
-import { isActive, useDrafts, useTopics, useWrite } from "../api/hooks";
+import { isActive, useDrafts, useExemplar, useTopics, useWrite } from "../api/hooks";
 import { cn } from "../lib/utils";
 import { ReportDialog } from "./BenchmarkPanel";
 import { NoteTile } from "./CreatorGallery";
@@ -333,11 +333,14 @@ export function TopicCards({ account, topics }: { account: Account; topics: { id
 
 export type FoundPost = { title: string; url: string; cover?: string; likes?: string; author?: string };
 
-/** 小媒找的对标帖子：像小红书首页一样排开，每篇都能「照这篇写」——起号时用来打磨第一篇（样板帖） */
+/** 小媒找的对标帖子：像小红书首页一样排开，每篇都能「照这篇写」，也能直接「定为样板」（之后每篇的配图都照它一个风格） */
 export function PostCards({ account, posts }: { account: Account; posts: FoundPost[] }) {
   const write = useWrite(account.id);
+  const ex = useExemplar(account.id);
   const qc = useQueryClient();
   const [started, setStarted] = useState("");
+  const [marking, setMarking] = useState("");
+  const cur = (account.exemplar ?? {}) as { kind?: string; title?: string };
   return (
     <div className="ml-10 space-y-2">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -350,10 +353,15 @@ export function PostCards({ account, posts }: { account: Account; posts: FoundPo
               })}>
               {started === p.url ? "已开始写" : <><PenLine />照这篇写</>}
             </Button>
+            {cur.kind === "post" && cur.title === p.title
+              ? <div className="flex items-center justify-center gap-1 text-[11px] text-amber-600"><Star className="size-3 fill-amber-400 text-amber-500" />账号的样板</div>
+              : <Button size="xs" variant="ghost" className="w-full text-muted-foreground" disabled={ex.isPending}
+                  loading={ex.isPending && marking === p.url}
+                  onClick={() => { setMarking(p.url); ex.mutate({ url: p.url }); }}><Star />定为样板</Button>}
           </div>
         ))}
       </div>
-      <ErrorText error={write.error} />
+      <ErrorText error={write.error || ex.error} />
     </div>
   );
 }

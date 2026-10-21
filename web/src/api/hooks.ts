@@ -40,12 +40,12 @@ export function useUpdateAccount(id: string) {
   });
 }
 
-/** 定 / 取消样板帖：以后每篇都照它的写法和配图来 */
+/** 定 / 取消样板帖（一篇爆款：传草稿就定成它照的那篇，或直接传爆款链接）：以后每篇的配图都照它一个风格 */
 export function useExemplar(id: string) {
   const inv = useInvalidateAccount(id);
   return useMutation({
-    mutationFn: (draftId: string | null) => draftId
-      ? unwrap(api.PUT("/api/accounts/{account_id}/exemplar", { params: { path: { account_id: id } }, body: { draft_id: draftId } }))
+    mutationFn: (to: { draft_id?: string; url?: string } | null) => to
+      ? unwrap(api.PUT("/api/accounts/{account_id}/exemplar", { params: { path: { account_id: id } }, body: { draft_id: to.draft_id ?? "", url: to.url ?? "" } }))
       : unwrap(api.DELETE("/api/accounts/{account_id}/exemplar", { params: { path: { account_id: id } } })),
     onSuccess: inv,
   });

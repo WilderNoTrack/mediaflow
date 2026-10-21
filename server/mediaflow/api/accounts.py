@@ -92,9 +92,17 @@ def delete_account(acc: Account = Depends(owned_account), s: Session = Depends(g
 
 
 @router.put("/{account_id}/exemplar", response_model=AccountDetail)
-def set_exemplar(body: ExemplarIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
-    """把一篇草稿定为样板帖：以后每篇都照它的写法和配图来。"""
-    d = s.get(Draft, body.draft_id)
+async def set_exemplar(body: ExemplarIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """定样板帖：一篇爆款（贴链接，或草稿照着做的那篇），以后每篇的配图都照它一个风格。"""
+    from mediaflow.services import refpost
+
+    if body.url.strip():
+        try:
+            await exemplar.set_from_url(s, acc, body.url)
+        except (refpost.RefError, ValueError) as e:
+            raise HTTPException(400, str(e)) from e
+        return _detail(s, acc)
+    d = s.get(Draft, body.draft_id) if body.draft_id else None
     if d is None or d.account_id != acc.id:
         raise HTTPException(404, "草稿不存在")
     exemplar.set_(s, acc, d)

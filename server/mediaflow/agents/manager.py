@@ -66,15 +66,15 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    find_topics 的结果也会以卡片列在对话里（每个都有「写这篇」按钮），不要逐条复述，挑 1-2 个说说为什么值得写即可。
 5. 工具结果里有失败或降级（比如热点来源没抓到），必须如实告诉用户，不能装作正常。
 6. 不要在聊天里写整篇文案，那是 write_post 的事。
-7. 参考帖和配图（如实说）：每篇写稿前会定参考帖——有样板帖就是样板帖（见【样板帖】）；
-   没有样板帖时：用户给的链接 > 选题来源的原帖 > 对标账号里结构最像的爆款 > 小红书上这个选题最热的图文。
-   文案可以同时学好几篇（主参考帖 + 一两篇文案参考），学标题公式和结构，不照抄句子；
-   配图只照主参考帖这一篇（一套图必须统一）：一张对一张把它的原图当模板，照着版式、文字位置重做，内容和文字换成本篇的，
-   整套用同一份视觉规范，重出某一张也沿用，保证翻起来是一套。草稿页能看到参考了哪几篇、配图照的是哪篇、每张对的是原帖哪张。
+7. 参考帖和配图（如实说）：每篇都对标一篇爆款帖子（不是对标账号）。照哪篇：用户这篇给的链接 > 样板帖（见【样板帖】）>
+   选题来源的原帖 > 对标账号里最像的爆款 > 小红书上这个选题最热的图文。
+   配图「完全照爆款」：先看懂原帖每张图是怎么做的（实拍 / 拼图 / 漫画 / 手写 / 卡片，字多字少），一张对一张把原图当模板重做，
+   内容和文字换成本篇的，整套用同一份视觉规范，重出某一张也沿用。文字没那么严：只学它为什么火（选题角度、钩子、信息密度），
+   句式、结构、篇幅按账号定位和本篇选题自己写，不照抄句子。草稿页能看到照的是哪篇、每张对的是原帖哪张。
    用户说「照着这篇/这几篇写」并给了链接，就 write_post 并把链接原样放进 reference_url（多个就都放进去，第一篇图文笔记当配图模板）；
    想给已有草稿换配图照的那篇，告诉他在草稿页「参考帖」里贴链接，再点全部重新出。没有对标、也没连小红书时找不到参考帖，就按账号的配图风格统一出。
    【账号配图模板】学完对标后会看对标账号的图，学出一套配图模板（整体视觉 + 几种页型，各有样例图，见下方账号状态 visual）。
-   有模板时每篇配图都照模板出（每张选一种页型、照样例版式），整个账号像同一个博主做的；参考帖只管文案，用户自己给了参考帖的那篇才照它出图。
+   只有这篇的参考帖没拿到原图时才照模板出；拿到了原图就照原图（照爆款比照账号总结的模板像得多）。
    用户想换配图风格：说的是「照这几篇的图来」就 learn_visual 带上链接；说的是具体要求（「封面别放人」「颜色换成莫兰迪」「加一种对比页」）用 update_visual；
    【配图不止 AI 画】账号状态里的 image_mode 是默认做法：ai 整张 AI 画 / mixed AI 画画面、字用代码排（字一定对）/
    card 代码排版的文字卡片（清单、步骤、对比、金句，不用生图额度）/ photo 去网上找真实图片当底图、代码叠字 / auto 每张自动挑。
@@ -93,23 +93,24 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    - 用户的要求是「以后每篇都这样」，除了改这篇，再 add_rule 记下来。
    - 说清改了哪几张、多久能好；理解不了的指代（比如没说哪篇、哪张）先问一句，别乱改。
 
-【起号：先看别人怎么做，再打磨一篇样板帖】（账号状态里 exemplar 还没有时按这个来）
+【起号：先看别人怎么做，再挑一篇爆款当样板】（账号状态里 exemplar 还没有时按这个来）
 1. 用户第一次说想做什么方向（比如「我想做穿搭攻略类的账号」）：先别急着问问题。同一步里 update_profile 存下主题，
    同时 find_benchmarks 找这个方向做得好的号、find_posts 找这个方向点赞高的图文——先去看看别人怎么做。
    拿到结果再问，问题要带着看到的东西（「这几个号里，你更想做成哪种感觉？」「点赞高的大多在讲xx，你想写给谁？」），用 ask_user 给选项；
    结果卡片已经在对话里了，不用逐个复述，点出一两个最值得看的就行。工具报错（比如没连小红书）如实说一句，照常问。
-2. 定位大致清楚（主题、写给谁、什么调调）后就开始打磨第一篇：从找到的帖子里挑 1-2 篇最贴合的推荐给用户（不合适就按新要求再 find_posts），
+2. 定位大致清楚（主题、写给谁、什么调调）后就开始写第一篇：从找到的帖子里挑 1-2 篇最贴合的推荐给用户（不合适就按新要求再 find_posts），
    用户点了「照这篇写」或说选哪篇，就 write_post 把那篇的链接放进 reference_url（不用传 hint 和 topic_id，选题会照着那篇来）。
-3. 写好后陪用户改（revise_post 改文案、edit_images 改图），直到用户满意。用户说「可以了」「就这样」「挺好的」时，
-   用 ask_user kind=confirm 问要不要定为样板帖（一句话说明：定了以后每篇都照它的写法和配图来），同意就 set_exemplar。
-4. 用户想先学整个号的打法（勾选对标账号「学习选中的」，或让你 clone_creator）照常做；学完还是建议先打磨一篇样板帖。
+3. 写好后陪用户改（revise_post 改文案、edit_images 改图）。用户觉得这套图对味（「可以了」「就这样」「挺好的」）时，
+   用 ask_user kind=confirm 问要不要把这篇照的那篇爆款定为样板（一句话说明：定了以后每篇的配图都照它一个风格，文字按每篇选题写），
+   同意就 set_exemplar（传这篇草稿，会自动定成它照的那篇爆款）。用户直接说「就拿这篇爆款当样板」并给了链接，set_exemplar 传 url。
+4. 用户想先学整个号的打法（勾选对标账号「学习选中的」，或让你 clone_creator）照常做；学完还是建议挑一篇爆款当样板。
 
-【样板帖】（账号状态里 exemplar 有值时）
-- 每篇写稿都以样板帖为主参考：标题写法、开头、结构、篇幅、语气照它，配图一张对一张照它的做法、版式和配色；
-  对标账号的爆款、选题来源的原帖只当选题和内容参考。
-- 用户另给链接（「这篇也参考一下 xxx」）照常放进 reference_url：只当文案参考，写法和配图仍照样板帖；
+【样板帖】（账号状态里 exemplar 有值时；kind=post 是一篇爆款，kind=draft 是用户自己的一篇老样板）
+- 样板帖就是账号选定的那篇爆款：之后每篇的配图都一张对一张照它的原图做，整个号一个风格；
+  文字只借鉴它的语气和钩子，按每篇的选题写；选题来源的原帖只当内容参考。
+- 用户这篇给了链接（「照这篇写 xxx」）：这篇就照那篇（配图也照它），不照样板；
   用户明确说这篇别照样板帖（比如想试个新风格），write_post 传 use_exemplar=false。
-- 用户说「以后照这篇来」「换这篇当样板」就 set_exemplar 那篇；「不要样板了」就 set_exemplar clear=true。
+- 用户说「以后都照这篇来」「换这篇当样板」：说的是草稿就 set_exemplar 传 draft_id，给的是爆款链接就传 url；「不要样板了」就 set_exemplar clear=true。
 
 【调研】用户想了解某个博主、某类爆款、某个话题在各平台的情况时，用 research_* 工具查真实数据。
 - 先宽后窄：research_search 看话题全貌，或 research_creators 先确认是哪位博主（重名时挑名字最吻合、粉丝最多的，拿不准就问用户），
@@ -260,11 +261,13 @@ TOOLS = [
                            "description": "在哪个平台找，默认 xiaohongshu；用户说「抖音上的」「微博上的」才换"},
           }),
     _tool("find_posts", "找对标帖子：按方向在小红书搜点赞高的图文笔记（带封面、点赞、作者、链接），以卡片展示给用户挑，"
-          "每篇都有「照这篇写」按钮。打磨样板帖前用它给用户找照着写的帖子。大约 10 秒", {
+          "每篇都有「照这篇写」和「定为样板」按钮。起号时用它给用户找照着做的爆款。大约 10 秒", {
               "query": {"type": "string", "description": "方向或选题，如「通勤穿搭公式」；不传用账号主题"},
           }),
-    _tool("set_exemplar", "把一篇草稿定为样板帖（以后每篇都照它的写法和配图来），或取消样板帖。用户对某篇满意、说「就按这篇的感觉来」时用", {
-        "draft_id": {"type": "string", "description": "不传就是用户正在看的那篇（没有就是最近一篇）"},
+    _tool("set_exemplar", "定样板帖：一篇爆款，以后每篇的配图都照它一个风格（文字按每篇选题写），或取消样板帖。"
+          "用户对某篇满意、说「以后都按这个感觉来」时用。传草稿就定成它照的那篇爆款；传 url 直接定那篇爆款。贴链接要读原图和看图，大约 20 秒", {
+        "draft_id": {"type": "string", "description": "不传 url 时用：不传就是用户正在看的那篇（没有就是最近一篇）"},
+        "url": {"type": "string", "description": "直接把这篇小红书爆款定为样板（用户给的链接原样传）"},
         "clear": {"type": "boolean", "description": "true = 取消样板帖"},
     }),
     _tool("ask_user", "问用户一个有常见答案的问题，或者请用户拍板一个提议：选项显示成按钮，用户点一下就行（也能自己打字）。"
@@ -360,8 +363,8 @@ class Toolbox:
         from mediaflow.services import exemplar
 
         ex = exemplar.info(self.s, self.acc)
-        return {"draft_id": ex["draft_id"], "title": ex["title"], "images": ex["images"]} if ex \
-            else "还没有样板帖（按【起号】先陪用户打磨一篇）"
+        return {k: ex[k] for k in ("kind", "title", "creator", "likes", "url", "draft_id", "images") if ex.get(k)} if ex \
+            else "还没有样板帖（按【起号】先挑一篇爆款照着写）"
 
     def _recent_state(self) -> dict:
         """最近的稿子、没用过的选题、上次找到的对标候选：聊得再久也指得上「刚才那篇」「第 2 个选题」「选第 1 个博主」。"""
@@ -578,16 +581,26 @@ class Toolbox:
         return {"ok": True, "query": q, "posts": posts,
                 "note": "卡片已经展示给用户，每篇都有「照这篇写」按钮；用户选了哪篇就 write_post 带上它的 url"}
 
-    async def t_set_exemplar(self, draft_id: str = "", clear: bool = False) -> dict:
-        from mediaflow.services import exemplar
+    async def t_set_exemplar(self, draft_id: str = "", clear: bool = False, url: str = "") -> dict:
+        from mediaflow.services import exemplar, refpost
 
         if clear:
             exemplar.clear(self.s, self.acc)
-            return {"ok": True, "cleared": True, "note": "已取消样板帖，之后写稿按对标爆款和账号设定来"}
-        d = self._draft(draft_id)
-        out = exemplar.set_(self.s, self.acc, d)
-        return {"ok": True, "exemplar": {"draft_id": d.id, "title": d.title, "images": out.get("images", 0)},
-                "note": "以后每篇都照这篇的写法和配图来" + ("" if out.get("images") else "（这篇还没有出好的图，配图先按账号风格出）")}
+            return {"ok": True, "cleared": True, "note": "已取消样板帖，之后每篇照各自选题的爆款做"}
+        if url.strip():
+            try:
+                out = await exemplar.set_from_url(self.s, self.acc, url)
+            except (refpost.RefError, ValueError) as e:
+                return {"ok": False, "error": str(e)}
+        else:
+            out = exemplar.set_(self.s, self.acc, self._draft(draft_id))
+        ex = {k: out[k] for k in ("kind", "title", "creator", "likes", "draft_id", "images") if out.get(k)}
+        if out.get("kind") == "post":
+            note = f"样板是爆款「{out['title']}」：以后每篇的配图都照它的 {out.get('images', 0)} 张原图一个风格，文字按每篇选题写"
+        else:
+            note = "这篇没照着爆款做（或原图没拿到），就把这篇自己当样板：以后配图照它的做法和版式" \
+                + ("" if out.get("images") else "（这篇还没有出好的图，配图先按账号风格出）")
+        return {"ok": True, "exemplar": ex, "note": note}
 
     async def t_set_auto(self, enabled: bool, frequency: str | None = None) -> dict:
         self.acc.auto_enabled = bool(enabled)

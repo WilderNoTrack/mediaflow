@@ -35,32 +35,46 @@ export function SettingsPanel({ account, busy }: { account: Account; busy: boole
   );
 }
 
-type ExemplarInfo = { draft_id?: string; title?: string; images?: number; cover?: string; at?: string };
+type ExemplarInfo = { kind?: string; draft_id?: string; title?: string; url?: string; creator?: string; likes?: string;
+  images?: number; cover?: string; at?: string };
 
-/** 样板帖：用户打磨定稿的一篇，之后每篇都照它的写法和配图 */
+/** 样板帖：账号选定的一篇爆款，之后每篇的配图都照它一个风格（文案按各自选题写）；能直接贴链接定 */
 function ExemplarCard({ account }: { account: Account }) {
   const ex = useExemplar(account.id);
   const cur = (account.exemplar ?? {}) as ExemplarInfo;
+  const [url, setUrl] = useState("");
+  const post = cur.kind === "post";
+  const has = post || !!cur.draft_id;
   return (
     <Card>
-      <CardHead icon={<Star />} title="样板帖" desc="你打磨满意的一篇；之后每篇都照它的写法、配图做法和版式来，对标爆款只当选题和内容参考" />
-      <CardBody>
-        {cur.draft_id ? (
+      <CardHead icon={<Star />} title="样板帖" desc="选定一篇爆款：之后每篇的配图都一张对一张照它的原图做，整个号一个风格；文案只学它为什么火，按各自的选题写" />
+      <CardBody className="space-y-3">
+        {has ? (
           <div className="flex items-center gap-3">
             {cur.cover
               ? <img src={`/files/images/${cur.cover}`} alt="" className="h-16 w-12 shrink-0 rounded-md border object-cover" />
               : <div className="flex h-16 w-12 shrink-0 items-center justify-center rounded-md bg-amber-50"><Star className="size-4 text-amber-500" /></div>}
             <div className="min-w-0 flex-1 text-sm">
-              <Link to={`/drafts/${cur.draft_id}`} className="line-clamp-2 font-medium hover:text-indigo-600">{cur.title}</Link>
-              <div className="mt-0.5 text-xs text-muted-foreground">{cur.images ? `${cur.images} 张图` : "还没有出好的图"}{cur.at ? ` · ${timeAgo(cur.at)}定的` : ""}</div>
+              {post && cur.url
+                ? <a href={cur.url} target="_blank" rel="noreferrer" className="line-clamp-2 font-medium hover:text-indigo-600">{cur.title}</a>
+                : <Link to={`/drafts/${cur.draft_id}`} className="line-clamp-2 font-medium hover:text-indigo-600">{cur.title}</Link>}
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                {[post ? cur.creator : "你自己的一篇", post && cur.likes && `${cur.likes} 赞`, cur.images ? `${cur.images} 张图` : "还没有出好的图",
+                  cur.at && `${timeAgo(cur.at)}定的`].filter(Boolean).join(" · ")}
+              </div>
             </div>
-            <Button size="xs" variant="ghost" loading={ex.isPending} onClick={() => confirm("取消样板帖？之后写稿按对标爆款和账号设定来。") && ex.mutate(null)}>取消</Button>
+            <Button size="xs" variant="ghost" loading={ex.isPending} onClick={() => confirm("取消样板帖？之后每篇照各自选题的爆款做。") && ex.mutate(null)}>取消</Button>
           </div>
         ) : (
           <p className="text-xs leading-relaxed text-muted-foreground">
-            还没有。先跟小媒说想做什么，它会找几篇同领域的爆款给你挑，照着写出第一篇；改到满意后在草稿页点「定为样板帖」，或者直接跟小媒说「就按这篇来」。
+            还没有。先跟小媒说想做什么，它会找几篇同领域的爆款给你挑：卡片上点「定为样板」，或者「照这篇写」出一篇看看效果、满意了在草稿页点「定为样板」。没定样板时，每篇照各自选题的爆款做。
           </p>
         )}
+        <div className="flex gap-2">
+          <Input placeholder={has ? "换一篇：贴小红书图文笔记链接" : "直接贴一篇小红书图文笔记链接"} value={url} onChange={(e) => setUrl(e.target.value)} />
+          <Button size="sm" variant="outline" disabled={!url.trim()} loading={ex.isPending}
+            onClick={() => ex.mutate({ url: url.trim() }, { onSuccess: () => setUrl("") })}>定为样板</Button>
+        </div>
         <ErrorText error={ex.error} />
       </CardBody>
     </Card>

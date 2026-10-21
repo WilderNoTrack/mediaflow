@@ -1,8 +1,11 @@
-"""样板帖：用户亲手打磨定稿的一篇。
+"""样板帖：账号选定的一篇爆款，整个号的图都照它一个风格。
 
-起号时先陪用户把第一篇打磨好（照着找来的对标帖子写、再按用户的话改），用户满意就定为样板帖。
-定了以后每篇都以它为主参考：文案的标题写法、开头、结构、篇幅、语气照它；配图一张对一张照它的做法、版式和配色。
-对标账号的爆款、用户另给的链接只当文案参考（选题角度、信息点），不再决定写法和配图。
+起号时找几篇同领域的爆款给用户挑，照着写出第一篇；用户觉得这套图对味，就把那篇爆款定为样板。
+定了以后每篇的配图都一张对一张照这篇爆款的原图做（画风、版式、每张的做法、字多字少），整个号一个风格；
+文字不用那么严：只学它为什么火（选题角度、钩子、信息密度），按账号定位和本篇选题自由写。
+用户这篇另外指定了要照的爆款（「照这篇写」），这篇就照指定的那篇；选题来源的原帖只当内容参考。
+
+老数据里样板帖是一篇自己的草稿（draft_id）：照旧能用，配图照那篇草稿的图做。
 """
 
 from __future__ import annotations
@@ -17,7 +20,18 @@ from mediaflow.domain.models import Account, Draft, DraftImage, ImageStatus, utc
 CREATOR = "你的样板帖"
 
 
+POST_KEYS = ("title", "url", "creator", "likes", "content", "tags", "local", "look", "cover")
+
+
+def _post(acc: Account | None) -> dict | None:
+    """样板是一篇爆款时返回那篇（含缓存的原图和读图结果）。"""
+    p = (acc.exemplar or {}).get("post") if acc else None
+    return p if isinstance(p, dict) and p.get("title") and p.get("local") else None
+
+
 def get(s: Session, acc: Account | None) -> Draft | None:
+    if _post(acc) is not None:
+        return None
     did = str((acc.exemplar or {}).get("draft_id") or "") if acc else ""
     d = s.get(Draft, did) if did else None
     return d if d is not None and d.account_id == acc.id else None
@@ -29,17 +43,61 @@ def _images(s: Session, draft_id: str) -> list[DraftImage]:
 
 def info(s: Session, acc: Account) -> dict:
     """给前端和小媒看的概况；样板帖被删了就当没有。"""
+    p = _post(acc)
+    at = (acc.exemplar or {}).get("at", "")
+    if p is not None:
+        return {"kind": "post", "title": p["title"], "url": p.get("url", ""), "creator": p.get("creator", ""),
+                "likes": p.get("likes", ""), "images": len(p["local"]), "cover": p["local"][0], "at": at,
+                "draft_id": str((acc.exemplar or {}).get("from_draft") or "")}
     d = get(s, acc)
     if d is None:
         return {}
     imgs = [i for i in _images(s, d.id) if i.status == ImageStatus.done and i.path]
-    return {"draft_id": d.id, "title": d.title, "at": (acc.exemplar or {}).get("at", ""),
+    return {"kind": "draft", "draft_id": d.id, "title": d.title, "at": at,
             "images": len(imgs), "cover": imgs[0].path if imgs else ""}
 
 
+def is_post(ref: dict | None) -> bool:
+    """这篇参考是不是别人的爆款（有缓存好的原图），能当样板。"""
+    ref = ref or {}
+    return bool(ref.get("title") and ref.get("local")) and ref.get("source") != "exemplar"
+
+
+def set_post(s: Session, acc: Account, ref: dict, *, from_draft: str = "") -> dict:
+    """把一篇爆款定为样板：之后每篇的配图都照它的原图做。"""
+    if not is_post(ref):
+        raise ValueError("这篇没拿到原图，当不了样板；换一篇图文笔记")
+    post = {k: ref[k] for k in POST_KEYS if ref.get(k)}
+    acc.exemplar = {"post": post, "title": post["title"], "at": utcnow().isoformat(),
+                    **({"from_draft": from_draft} if from_draft else {})}
+    acc.updated_at = utcnow()
+    s.add(acc)
+    s.commit()
+    return info(s, acc)
+
+
+async def set_from_url(s: Session, acc: Account, url: str) -> dict:
+    """贴一篇爆款链接定为样板：读出来、缓存原图、看懂每张图是怎么做的。链接用不了抛 refpost.RefError。"""
+    from mediaflow.services import refpost, visual
+
+    ref = await refpost.from_url(url)
+    if visual.get_vision_llm() is not None and ref.get("local"):
+        try:
+            look = await visual.read_post(ref)
+        except Exception:  # noqa: BLE001 - 读图失败不影响定样板，写稿时再读
+            look = None
+        if look:
+            ref["look"] = look
+    return set_post(s, acc, ref)
+
+
 def set_(s: Session, acc: Account, draft: Draft) -> dict:
+    """草稿页「定为样板」：这篇是照着某篇爆款做的，样板就是那篇爆款（图照原图做最像）；
+    这篇没照爆款写（或原图没拿到），才把这篇草稿自己当样板。"""
     if draft.account_id != acc.id:
         raise LookupError("这篇草稿不属于这个账号")
+    if is_post(draft.reference):
+        return set_post(s, acc, draft.reference, from_draft=draft.id)
     acc.exemplar = {"draft_id": draft.id, "title": draft.title, "at": utcnow().isoformat()}
     acc.updated_at = utcnow()
     s.add(acc)
@@ -57,7 +115,7 @@ def clear(s: Session, acc: Account) -> None:
 def forget_draft(s: Session, draft: Draft) -> None:
     """删草稿时：如果它是样板帖，账号就没有样板帖了。"""
     acc = s.get(Account, draft.account_id)
-    if acc is not None and (acc.exemplar or {}).get("draft_id") == draft.id:
+    if acc is not None and _post(acc) is None and (acc.exemplar or {}).get("draft_id") == draft.id:
         acc.exemplar = {}
         s.add(acc)
 
@@ -74,7 +132,11 @@ def _mold(img: DraftImage) -> str:
 
 
 def as_reference(s: Session, acc: Account | None) -> dict[str, Any] | None:
-    """样板帖 → 写稿用的主参考帖（和 refpost 的格式一样，多了 plan：每张图的做法、版式、配色）。没有样板帖返回 None。"""
+    """样板帖 → 写稿用的主参考帖。样板是爆款：就是那篇（source=exemplar_post，配图照原图、照读图结果挑做法）；
+    样板是自己的草稿：和 refpost 的格式一样，多了 plan（每张图的做法、版式、配色）。没有样板帖返回 None。"""
+    p = _post(acc)
+    if p is not None:
+        return {**p, "source": "exemplar_post", "why": "账号的样板爆款：每篇配图都照它一个风格"}
     d = get(s, acc)
     if d is None:
         return None

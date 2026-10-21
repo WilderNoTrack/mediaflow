@@ -114,13 +114,15 @@ async def test_reference_only_write_takes_topic_from_post(session, llm, account,
     assert t.title == got["title"] and t.source == "reference"
     assert d.reference["title"] == got["title"] and "别人的爆款：小个子通勤" in llm.prompts_of("writer")[0]
 
-    # 有样板帖后：给的链接只当文案参考；明说不照样板帖就不照
+    # 有样板帖后：这篇给了链接就照链接那篇（配图也照它）；没给就照样板；明说不照样板帖就不照
     ex = _polished(session, account)
     exemplar.set_(session, account, ex)
-    llm.push("writer", post(), post())
-    llm.push("eval", evaluation(8), evaluation(8))
+    llm.push("writer", post(), post(), post())
+    llm.push("eval", evaluation(8), evaluation(8), evaluation(8))
     d2 = await write_draft(session, llm, account.id, reference_url=got["url"], fetch=fake_fetch)
-    assert d2.reference["source"] == "exemplar" and d2.reference["extra"][0]["title"] == got["title"]
+    assert d2.reference["source"] == "user" and d2.reference["title"] == got["title"]
+    d4 = await write_draft(session, llm, account.id, hint="通勤鞋", fetch=fake_fetch)
+    assert d4.reference["source"] == "exemplar"
     d3 = await write_draft(session, llm, account.id, hint="试个新风格", use_exemplar=False, fetch=fake_fetch)
     assert (d3.reference or {}).get("source") != "exemplar"
 
@@ -179,9 +181,35 @@ async def test_reference_images_are_read_and_followed(session, llm, account, mon
     assert "原帖的图是这样做的" in p and "上下两格漫画" in p and "淡紫底" in p
     assert "第 1 张 ai；" in p  # 漫画那张只给 AI 画整张
 
-    # 定为样板帖后：样板每张带上原型的做法
+    # 老样板（自己的草稿）：样板每张带上原型的做法
     ex_ref = exemplar.refresh(session, {"source": "exemplar", "draft_id": d.id, "local": []})
     assert ex_ref["plan"][0]["look"].startswith("插画/漫画")
+
+    # 草稿页「定为样板」：这篇照着爆款做的，样板就是那篇爆款（原图 + 读图结果）
+    info = exemplar.set_(session, account, d)
+    assert info["kind"] == "post" and info["title"] == "会接话的重要性" and info["images"] == 3 and info["draft_id"] == d.id
+    session.add(Topic(user_id=account.user_id, account_id=account.id, title="怎么接领导的话", source="benchmark",
+                      reference={"title": "原爆款：接话技巧", "content": "原文内容", "creator": "某博主", "likes": "1万"}))
+    session.commit()
+    llm.push("writer", post(images=["两格漫画", "窗边实拍", "清单"]))
+    llm.push("eval", evaluation(8))
+    d2 = await write_draft(session, llm, account.id, fetch=fake_fetch)
+    assert d2.reference["source"] == "exemplar_post" and d2.reference["local"] == got["local"]
+    assert d2.reference["extra"][0]["title"] == "原爆款：接话技巧"  # 选题来源的原帖只当内容参考
+    w = llm.prompts_of("writer")[-1]
+    assert "账号的样板爆款" in w and "第 1 张：插画/漫画" in w and "不用照它的句式" in w and "样板爆款有 3 张图" in w
+    llm.push("image", {"spec": "淡紫底小和尚", "palette": "cream", "prompts": [
+        {"idx": 1, "mode": "card", "prompt": "两格漫画", "layout": {"title": "x"}},
+        {"idx": 2, "mode": "ai_text", "prompt": "窗边实拍", "layout": {"kind": "none"}},
+        {"idx": 3, "mode": "card", "layout": {"kind": "list", "title": "三句话", "items": ["一", "二"]}},
+    ]})
+    await images_mod.generate_images(session, llm, d2.id)
+    assert [i.made_by for i in _imgs(session, d2)] == ["ai", "photo", "card"]  # 照样板爆款的原图挑做法
+    assert session.get(Draft, d2.id).image_mold == "post"
+    # 删了那篇草稿，样板（那篇爆款）还在
+    exemplar.forget_draft(session, d)
+    session.commit()
+    assert exemplar.info(session, account)["kind"] == "post"
 
 
 async def test_manager_exemplar_tools(session, llm, account, client, monkeypatch):
@@ -233,3 +261,32 @@ def test_lone_bullet_before_question_is_dropped():
     assert _unbullet("看了几个号。\n\n- 你更想做成哪种？") == "看了几个号。\n\n你更想做成哪种？"
     keep = "两个方向：\n- 日常\n- 干货\n\n选哪个？"
     assert _unbullet(keep) == keep
+
+
+async def test_set_exemplar_from_post_link(session, llm, account, client, monkeypatch):
+    """直接贴一篇爆款链接定样板（卡片上的「定为样板」、跟小媒说「就拿这篇当样板」）。"""
+    root = get_settings().images_dir / "_refs"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "p0.jpg").write_bytes(_png("purple"))
+    (root / "p1.jpg").write_bytes(_png("green"))
+
+    async def from_url(url):
+        if "bad" in url:
+            raise refpost.RefError("这篇是视频笔记，没有图可以照着做，换一篇图文笔记")
+        return {"title": "爆款：7天通勤", "url": url, "creator": "某博主", "likes": "3万", "content": "原文",
+                "local": ["_refs/p0.jpg", "_refs/p1.jpg"], "source": "user", "extra": []}
+
+    monkeypatch.setattr(refpost, "from_url", from_url)
+    r = client.put(f"/api/accounts/{account.id}/exemplar", json={"url": "https://www.xiaohongshu.com/explore/x1"})
+    assert r.status_code == 200
+    ex = r.json()["exemplar"]
+    assert ex["kind"] == "post" and ex["title"] == "爆款：7天通勤" and ex["images"] == 2 and ex["cover"] == "_refs/p0.jpg"
+    assert client.put(f"/api/accounts/{account.id}/exemplar", json={"url": "https://bad"}).status_code == 400
+
+    tb = Toolbox(session, llm, account, None)
+    session.expire_all()
+    assert tb.snapshot()["exemplar"]["kind"] == "post"
+    r = await tb.call("set_exemplar", {"url": "https://bad"})
+    assert not r["ok"] and "视频" in r["error"]
+    r = await tb.call("set_exemplar", {"url": "https://www.xiaohongshu.com/explore/x2"})
+    assert r["ok"] and r["exemplar"]["kind"] == "post" and "配图都照它" in r["note"]

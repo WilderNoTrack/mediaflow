@@ -200,7 +200,7 @@ export interface paths {
         get?: never;
         /**
          * Set Exemplar
-         * @description 把一篇草稿定为样板帖：以后每篇都照它的写法和配图来。
+         * @description 定样板帖：一篇爆款（贴链接，或草稿照着做的那篇），以后每篇的配图都照它一个风格。
          */
         put: operations["set_exemplar_api_accounts__account_id__exemplar_put"];
         post?: never;
@@ -993,7 +993,7 @@ export interface components {
             keywords: string[];
             /**
              * Exemplar
-             * @description 样板帖：{draft_id, title, at, images, cover}；空 = 还没定
+             * @description 样板帖：{kind: post（一篇爆款）/ draft（自己的一篇，老数据）, title, url, creator, likes, draft_id, at, images, cover}；空 = 还没定
              * @default {}
              */
             exemplar: {
@@ -1111,7 +1111,7 @@ export interface components {
             keywords: string[];
             /**
              * Exemplar
-             * @description 样板帖：{draft_id, title, at, images, cover}；空 = 还没定
+             * @description 样板帖：{kind: post（一篇爆款）/ draft（自己的一篇，老数据）, title, url, creator, likes, draft_id, at, images, cover}；空 = 还没定
              * @default {}
              */
             exemplar: {
@@ -1534,8 +1534,18 @@ export interface components {
         DraftStatus: "pending_review" | "approved" | "exported" | "rejected";
         /** ExemplarIn */
         ExemplarIn: {
-            /** Draft Id */
+            /**
+             * Draft Id
+             * @description 把这篇草稿定为样板：它照着某篇爆款做的，样板就是那篇爆款
+             * @default
+             */
             draft_id: string;
+            /**
+             * Url
+             * @description 直接贴一篇爆款的链接定为样板
+             * @default
+             */
+            url: string;
         };
         /** FeedbackIn */
         FeedbackIn: {
