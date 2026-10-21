@@ -287,18 +287,18 @@ def _clean_look(raw: Any, n: int) -> dict | None:
         return None
     pages_out: list[dict] = []
     by_no = {}
-    for p in raw.get("pages") or []:
+    for pos, p in enumerate(raw.get("pages") or []):
         if not isinstance(p, dict):
             continue
         try:
-            k = int(str(p.get("no")).strip().lstrip("第").rstrip("张")) - 1
+            k = int(str(p.get("no")).strip().lstrip("第图").rstrip("张")) - 1
         except ValueError:
-            continue
+            k = pos  # 没写编号就按顺序
         if 0 <= k < n and k not in by_no:
-            kind = str(p.get("kind") or "").strip().lower()
+            kind = str(p.get("kind") or p.get("type") or "").strip().lower()
             text = str(p.get("text") or "").strip().lower()
             by_no[k] = {"kind": kind if kind in LOOK_KINDS else "", "text": text if text in ("none", "few", "many") else "",
-                        "desc": " ".join(str(p.get("desc") or "").split())[:160]}
+                        "desc": " ".join(str(p.get("desc") or p.get("description") or "").split())[:160]}
     for k in range(n):
         pages_out.append(by_no.get(k) or {"kind": "", "text": "", "desc": ""})
     spec = " ".join(str(raw.get("spec") or "").split())[:300]
