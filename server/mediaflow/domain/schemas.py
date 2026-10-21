@@ -56,6 +56,7 @@ class AccountOut(BaseModel):
     image_mode: str = "ai"
     topic_type: str
     keywords: list[str]
+    exemplar: dict = Field(default={}, description="样板帖：{draft_id, title, at, images, cover}；空 = 还没定")
     auto_enabled: bool
     auto_frequency: AutoFrequency
     last_auto_run_at: datetime | None
@@ -130,6 +131,10 @@ class AccountDetail(AccountOut):
     bench_candidates: dict = {}
     visual: dict = Field(default={}, description="账号配图模板：spec 整体视觉、pages 页型（type/desc/when/examples 样例图本地路径）、"
                                                  "tips、source 从哪学的、at")
+
+
+class ExemplarIn(BaseModel):
+    draft_id: str = Field(min_length=1, max_length=64)
 
 
 class RuleIn(BaseModel):

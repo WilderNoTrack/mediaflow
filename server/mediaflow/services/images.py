@@ -647,8 +647,8 @@ async def generate_images(
             if not (lay.get("title") or lay.get("items") or lay.get("left")):
                 lay = clean_layout(_fallback_layout(img, draft))
             if img.idx in ex_slot:  # 模型没说版式、文字位置的，照样板对应那张
-                same = ex_plan[ex_slot[img.idx]]
-                lay = {**{k: same[k] for k in ("kind", "position") if same.get(k)}, **lay}
+                same, said = ex_plan[ex_slot[img.idx]], plans[img.idx].get("layout") or {}
+                lay = clean_layout({**lay, **{k: same[k] for k in ("kind", "position") if same.get(k) and not said.get(k)}})
             img.layout = {**lay, "palette": pal}
     molds: dict[int, str] = {k: local[v] for k, v in slots.items() if final.get(k) in _NEEDS_AI}  # idx → 照着做版式的那张图
     for img in targets:

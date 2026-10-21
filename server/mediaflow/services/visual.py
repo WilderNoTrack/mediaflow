@@ -106,8 +106,9 @@ def context_line(visual: dict | None) -> str:
 def _posts_from_benchmarks(s: Session, acc: Account) -> list[dict]:
     from mediaflow.services import benchmark as bench
 
-    out = []
+    groups = []
     for b in bench.ready(s, acc.id):
+        out = []
         for x in b.samples or []:
             if x.get("kind") == "视频":
                 continue
@@ -115,8 +116,10 @@ def _posts_from_benchmarks(s: Session, acc: Account) -> list[dict]:
             if imgs:
                 out.append({"title": x.get("title", ""), "url": x.get("url", ""), "likes": x.get("likes", ""),
                             "creator": b.creator_name, "images": imgs})
-    out.sort(key=lambda p: (len(p["images"]) <= 1, -count_num(p.get("likes"))))  # 有全套图的、赞多的在前
-    return out
+        out.sort(key=lambda p: (len(p["images"]) <= 1, -count_num(p.get("likes"))))  # 有全套图的、赞多的在前
+        groups.append(out)
+    full = bench.interleave([[p for p in g if len(p["images"]) > 1] for g in groups])  # 几个对标轮流取，不只看一个人的
+    return full + bench.interleave([[p for p in g if len(p["images"]) <= 1] for g in groups])
 
 
 async def _posts_from_links(links: list[str]) -> list[dict]:

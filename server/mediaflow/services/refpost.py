@@ -128,15 +128,17 @@ async def _fill_images(ref: dict) -> dict:
 
 
 def _samples(session: Session, account_id: str) -> list[dict]:
+    from mediaflow.services.benchmark import interleave
+
     benches = session.exec(select(Benchmark).where(
         Benchmark.account_id == account_id, Benchmark.status == BenchmarkStatus.ready)).all()
-    out = []
+    groups = []
     for b in benches:
-        for x in b.samples or []:
-            if x.get("kind") != "视频" and (x.get("images") or x.get("cover")):
-                out.append({**{k: x[k] for k in KEEP if x.get(k)}, "creator": b.creator_name})
-    out.sort(key=lambda x: -count_num(x.get("likes")))
-    return out[:24]
+        out = [{**{k: x[k] for k in KEEP if x.get(k)}, "creator": b.creator_name}
+               for x in b.samples or [] if x.get("kind") != "视频" and (x.get("images") or x.get("cover"))]
+        out.sort(key=lambda x: -count_num(x.get("likes")))
+        groups.append(out)
+    return interleave(groups)[:24]  # 几个对标轮流取，不让赞多的那个号占满
 
 
 async def _choose(llm: LLM, topic: Topic, cands: list[dict], *, main_needed: bool = True) -> tuple[dict | None, list[dict], str]:

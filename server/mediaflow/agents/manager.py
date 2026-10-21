@@ -46,7 +46,7 @@ MEMORY_KEEP_TURNS = 10       # 压记忆时最近这几轮留着原样
 RESULT_CHARS = 1500          # 普通工具结果给模型看的长度上限
 RESEARCH_RESULT_CHARS = 4000  # 调研结果信息密度高，放宽
 HISTORY_TOOL_CHARS = 500      # 历史轮次里的工具结果只留摘要，控制上下文
-READ_ONLY = {"list_drafts", "get_draft", "find_benchmarks", "research_search", "research_creators", "research_creator_posts", "research_post"}
+READ_ONLY = {"list_drafts", "get_draft", "find_benchmarks", "find_posts", "research_search", "research_creators", "research_creator_posts", "research_post"}
 _locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像一个靠谱的运营搭子。
@@ -57,7 +57,7 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
 1. 边聊边记：听到新的定位信息（主题、受众、文案风格、配图风格、选题方向、关键词），马上调用 update_profile 写入，不要攒着。
    改设定、记规则、改模板都必须真的调用工具；只在回复里写「已记下」「我执行了…」不算数，设置不会保存。
 2. 用户说「以后都要…」「每篇都…」「不要再…」这类长期要求，用 add_rule 记成一条规则；要删就用 remove_rule（规则 ID 见下方账号状态）。
-3. 主动补全：定位里还空着的项，自然地问，一次只问一个。配图风格要问出具体的视觉感觉，尽量保留用户原话。
+3. 主动补全（还没有样板帖的新账号先按下面【起号】来）：定位里还空着的项，自然地问，一次只问一个。配图风格要问出具体的视觉感觉，尽量保留用户原话。
    有常见答案的问题（受众是谁、文案什么调调、配图什么感觉、多久发一篇）用 ask_user 给 3-4 个选项按钮，用户点一下就行，也能自己打字；
    你拟好一个具体方案想让用户拍板时（帮他起的定位、配图风格、选题），用 ask_user kind=confirm，选项如「就按这个定」「换一个」「我来改改」。
    用户点了同意就马上调用对应工具落实（update_profile / update_visual / write_post），不要再问一遍；点了「换一个」就换个方案再问；点了「我来改改」就问他想改哪里。
@@ -66,7 +66,8 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    find_topics 的结果也会以卡片列在对话里（每个都有「写这篇」按钮），不要逐条复述，挑 1-2 个说说为什么值得写即可。
 5. 工具结果里有失败或降级（比如热点来源没抓到），必须如实告诉用户，不能装作正常。
 6. 不要在聊天里写整篇文案，那是 write_post 的事。
-7. 参考帖和配图（如实说）：每篇写稿前会定参考帖——用户给的链接 > 选题来源的原帖 > 对标账号里结构最像的爆款 > 小红书上这个选题最热的图文。
+7. 参考帖和配图（如实说）：每篇写稿前会定参考帖——有样板帖就是样板帖（见【样板帖】）；
+   没有样板帖时：用户给的链接 > 选题来源的原帖 > 对标账号里结构最像的爆款 > 小红书上这个选题最热的图文。
    文案可以同时学好几篇（主参考帖 + 一两篇文案参考），学标题公式和结构，不照抄句子；
    配图只照主参考帖这一篇（一套图必须统一）：一张对一张把它的原图当模板，照着版式、文字位置重做，内容和文字换成本篇的，
    整套用同一份视觉规范，重出某一张也沿用，保证翻起来是一套。草稿页能看到参考了哪几篇、配图照的是哪篇、每张对的是原帖哪张。
@@ -91,6 +92,24 @@ SYSTEM_PROMPT = """你是「小媒」，MediaFlow 的小红书账号管家，像
    - 用户写新稿时就说了每张图要什么（「第一张放…第二张放…」），write_post 时用 image_plan 一张一条传进去。
    - 用户的要求是「以后每篇都这样」，除了改这篇，再 add_rule 记下来。
    - 说清改了哪几张、多久能好；理解不了的指代（比如没说哪篇、哪张）先问一句，别乱改。
+
+【起号：先看别人怎么做，再打磨一篇样板帖】（账号状态里 exemplar 还没有时按这个来）
+1. 用户第一次说想做什么方向（比如「我想做穿搭攻略类的账号」）：先别急着问问题。同一步里 update_profile 存下主题，
+   同时 find_benchmarks 找这个方向做得好的号、find_posts 找这个方向点赞高的图文——先去看看别人怎么做。
+   拿到结果再问，问题要带着看到的东西（「这几个号里，你更想做成哪种感觉？」「点赞高的大多在讲xx，你想写给谁？」），用 ask_user 给选项；
+   结果卡片已经在对话里了，不用逐个复述，点出一两个最值得看的就行。工具报错（比如没连小红书）如实说一句，照常问。
+2. 定位大致清楚（主题、写给谁、什么调调）后就开始打磨第一篇：从找到的帖子里挑 1-2 篇最贴合的推荐给用户（不合适就按新要求再 find_posts），
+   用户点了「照这篇写」或说选哪篇，就 write_post 把那篇的链接放进 reference_url（不用传 hint 和 topic_id，选题会照着那篇来）。
+3. 写好后陪用户改（revise_post 改文案、edit_images 改图），直到用户满意。用户说「可以了」「就这样」「挺好的」时，
+   用 ask_user kind=confirm 问要不要定为样板帖（一句话说明：定了以后每篇都照它的写法和配图来），同意就 set_exemplar。
+4. 用户想先学整个号的打法（勾选对标账号「学习选中的」，或让你 clone_creator）照常做；学完还是建议先打磨一篇样板帖。
+
+【样板帖】（账号状态里 exemplar 有值时）
+- 每篇写稿都以样板帖为主参考：标题写法、开头、结构、篇幅、语气照它，配图一张对一张照它的做法、版式和配色；
+  对标账号的爆款、选题来源的原帖只当选题和内容参考。
+- 用户另给链接（「这篇也参考一下 xxx」）照常放进 reference_url：只当文案参考，写法和配图仍照样板帖；
+  用户明确说这篇别照样板帖（比如想试个新风格），write_post 传 use_exemplar=false。
+- 用户说「以后照这篇来」「换这篇当样板」就 set_exemplar 那篇；「不要样板了」就 set_exemplar clear=true。
 
 【调研】用户想了解某个博主、某类爆款、某个话题在各平台的情况时，用 research_* 工具查真实数据。
 - 先宽后窄：research_search 看话题全貌，或 research_creators 先确认是哪位博主（重名时挑名字最吻合、粉丝最多的，拿不准就问用户），
@@ -181,6 +200,7 @@ TOOLS = [
         "reference_url": {"type": "string", "description": "可选：用户指定要照着写的小红书笔记链接，可以多篇（原样传，含分享文字也行，多个用换行隔开）；第一篇图文笔记当配图模板"},
         "image_plan": {"type": "array", "items": {"type": "string"},
                        "description": "可选：用户对每张图的要求，按顺序一张一条（第 1 张是封面），尽量保留用户原话；用户没说就不传"},
+        "use_exemplar": {"type": "boolean", "description": "默认 true：有样板帖就照它写。只有用户明确说这篇别照样板帖时才传 false"},
     }),
     _tool("get_draft", "看一篇草稿的详情：标题、正文、每张配图的编号/描述/状态、参考了哪些帖子。改之前先看", {
         "draft_id": {"type": "string", "description": "草稿 ID；不传就是用户正在看的那篇（没有就是最近一篇）"},
@@ -239,6 +259,14 @@ TOOLS = [
               "platform": {"type": "string", "enum": ["xiaohongshu", "douyin", "weibo"],
                            "description": "在哪个平台找，默认 xiaohongshu；用户说「抖音上的」「微博上的」才换"},
           }),
+    _tool("find_posts", "找对标帖子：按方向在小红书搜点赞高的图文笔记（带封面、点赞、作者、链接），以卡片展示给用户挑，"
+          "每篇都有「照这篇写」按钮。打磨样板帖前用它给用户找照着写的帖子。大约 10 秒", {
+              "query": {"type": "string", "description": "方向或选题，如「通勤穿搭公式」；不传用账号主题"},
+          }),
+    _tool("set_exemplar", "把一篇草稿定为样板帖（以后每篇都照它的写法和配图来），或取消样板帖。用户对某篇满意、说「就按这篇的感觉来」时用", {
+        "draft_id": {"type": "string", "description": "不传就是用户正在看的那篇（没有就是最近一篇）"},
+        "clear": {"type": "boolean", "description": "true = 取消样板帖"},
+    }),
     _tool("ask_user", "问用户一个有常见答案的问题，或者请用户拍板一个提议：选项显示成按钮，用户点一下就行（也能自己打字）。"
           "调用后这一轮对话就结束、等用户回答，所以要先把该做的工具调用做完（可以同一步一起发）", {
               "question": {"type": "string", "description": "要问的话，可以先半句说明为什么问；回复里不要再重复"},
@@ -323,9 +351,17 @@ class Toolbox:
             "visual": ({"spec": a.visual.get("spec", ""),
                         "pages": [f"{p['type']}：{p.get('when', '')}" for p in visual_pages(a.visual)],
                         "from": (a.visual.get("source") or {}).get("names", [])} if visual_pages(a.visual) else "还没有配图模板"),
+            "exemplar": self._exemplar_state(),
             **_bench_state(self.s, a.id),
             **self._recent_state(),
         }
+
+    def _exemplar_state(self) -> dict | str:
+        from mediaflow.services import exemplar
+
+        ex = exemplar.info(self.s, self.acc)
+        return {"draft_id": ex["draft_id"], "title": ex["title"], "images": ex["images"]} if ex \
+            else "还没有样板帖（按【起号】先陪用户打磨一篇）"
 
     def _recent_state(self) -> dict:
         """最近的稿子、没用过的选题、上次找到的对标候选：聊得再久也指得上「刚才那篇」「第 2 个选题」「选第 1 个博主」。"""
@@ -424,12 +460,13 @@ class Toolbox:
         return out
 
     async def t_write_post(self, topic_id: str = "", hint: str = "", reference_url: str = "",
-                           image_plan: list[str] | None = None) -> dict:
+                           image_plan: list[str] | None = None, use_exemplar: bool = True) -> dict:
         plan = [str(p).strip()[:300] for p in (image_plan or []) if str(p).strip()][:9]
         try:
             job = enqueue(self.s, JobKind.write_draft, user_id=self.acc.user_id, account_id=self.acc.id,
                           payload={"topic_id": topic_id or None, "hint": hint, "trigger": Trigger.chat.value,
-                                   "reference_url": reference_url.strip()[:3000], "image_plan": plan})
+                                   "reference_url": reference_url.strip()[:3000], "image_plan": plan,
+                                   "use_exemplar": use_exemplar is not False})
         except JobConflict as e:
             return _already(e, "上一篇还在写，这次没有另开一篇；它的进度见对话里的卡片，写完再说写下一篇")
         return {"ok": True, "job_id": job.id, "note": "已开始在后台写，1-3 分钟后在草稿里能看到"
@@ -518,6 +555,39 @@ class Toolbox:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "job_id": job.id, "added": [b.target for b in new],
                 "note": f"已开始拆解 {len(new)} 个账号，每个大约 1 分钟，好了在「对标」页看方案，账号定位和选题库会自动更新"}
+
+    async def t_find_posts(self, query: str = "") -> dict:
+        from mediaflow.research.types import count_num
+
+        q = (query or "").strip() or self.acc.theme or "、".join(self.acc.keywords[:2])
+        if not q:
+            return {"ok": False, "error": "还不知道账号做什么方向，先问用户一句"}
+        raw = await research.hot_authors_raw("xiaohongshu", q[:30])
+        seen: set[str] = set()
+        posts = []
+        for p in sorted(raw, key=lambda x: -count_num(x.get("likes"))):
+            if p.get("kind") == "视频" or not p.get("title") or not p.get("url") or p["url"] in seen:
+                continue
+            seen.add(p["url"])
+            posts.append({"no": len(posts) + 1, "title": p["title"], "author": p.get("name", ""), "likes": p.get("likes", ""),
+                          "cover": p.get("cover", ""), "url": p["url"]})
+            if len(posts) >= 8:
+                break
+        if not posts:
+            return {"ok": False, "query": q, "error": f"小红书上按「{q}」没搜到图文笔记，换个说法试试"}
+        return {"ok": True, "query": q, "posts": posts,
+                "note": "卡片已经展示给用户，每篇都有「照这篇写」按钮；用户选了哪篇就 write_post 带上它的 url"}
+
+    async def t_set_exemplar(self, draft_id: str = "", clear: bool = False) -> dict:
+        from mediaflow.services import exemplar
+
+        if clear:
+            exemplar.clear(self.s, self.acc)
+            return {"ok": True, "cleared": True, "note": "已取消样板帖，之后写稿按对标爆款和账号设定来"}
+        d = self._draft(draft_id)
+        out = exemplar.set_(self.s, self.acc, d)
+        return {"ok": True, "exemplar": {"draft_id": d.id, "title": d.title, "images": out.get("images", 0)},
+                "note": "以后每篇都照这篇的写法和配图来" + ("" if out.get("images") else "（这篇还没有出好的图，配图先按账号风格出）")}
 
     async def t_set_auto(self, enabled: bool, frequency: str | None = None) -> dict:
         self.acc.auto_enabled = bool(enabled)
@@ -674,6 +744,10 @@ def _tool_text(session: Session, m: ChatMessage, jobs: dict[str, Job]) -> str:
              **({"platform": r["platform"]} if r.get("platform") else {}), "candidates": [
             {"no": i + 1, **{k: c[k] for k in ("name", "url", "fans", "median_likes", "level") if c.get(k) not in (None, "")}}
             for i, c in enumerate(r.get("candidates") or [])]}
+        return _clip(r, 1500)
+    if name == "find_posts":
+        r = {"ok": r.get("ok"), **({"error": r["error"]} if r.get("error") else {}), "posts": [
+            {k: x[k] for k in ("no", "title", "url", "likes") if x.get(k)} for x in r.get("posts") or []]}
         return _clip(r, 1500)
     if name == "find_topics":
         r = {**{k: r[k] for k in _KEEP[name] if k in r},
@@ -865,6 +939,8 @@ async def _run_calls(box: Toolbox, calls: list, on_done: Callable[[int, dict, in
 
 def _for_model(name: str, result: dict) -> dict:
     """候选卡片里的头像、链接只给界面用，模型看精简版（链接留着，选中后要传给 clone_creator）。"""
+    if name == "find_posts" and result.get("posts"):
+        return {**result, "posts": [{k: x[k] for k in ("no", "title", "author", "likes", "url") if x.get(k)} for x in result["posts"]]}
     if name != "find_benchmarks" or not result.get("candidates"):
         return result
     keep = ("name", "url", "fans", "median_likes", "hit_rate", "per_week", "last_post", "level", "reason", "learn")
@@ -994,7 +1070,7 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
                     yield {"type": "step_end", "id": st["id"], "ok": st["ok"], "ms": ms, "error": st.get("error", "")}
                 results = await runner
                 for c, st, result in zip(calls, tool_steps, results):
-                    wide = c.name.startswith("research_") or c.name == "find_benchmarks"
+                    wide = c.name.startswith("research_") or c.name in ("find_benchmarks", "find_posts")
                     summary = _clip(_for_model(c.name, result), RESEARCH_RESULT_CHARS if wide else RESULT_CHARS)
                     m = _save(session, acc, ChatRole.tool, summary, tool_name=c.name,
                               payload={"args": c.arguments, "result": result})

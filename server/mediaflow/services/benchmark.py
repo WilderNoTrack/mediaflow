@@ -317,6 +317,14 @@ async def _analyze_one(s: Session, llm: LLM, b: Benchmark, acc: Account, emit: E
     s.commit()
 
 
+def interleave(groups: list[list[Any]]) -> list[Any]:
+    """几个对标各自排好序的列表轮流取：A1 B1 C1 A2 B2 C2…，免得赞多的那个号把别人挤没了。"""
+    out: list[Any] = []
+    for i in range(max((len(g) for g in groups), default=0)):
+        out.extend(g[i] for g in groups if i < len(g))
+    return out
+
+
 def _creator_line(b: Benchmark) -> str:
     info = {k: b.creator_info.get(k) for k in ("posts_read", "per_week", "median_likes", "hit_rate", "video_share")
             if b.creator_info.get(k) is not None}
@@ -431,12 +439,19 @@ def _apply(s: Session, benches: list[Benchmark], acc: Account, plan: dict, theme
         s.add(t)
     seen = list(s.exec(select(Topic.title).where(Topic.account_id == acc.id,
                                                  Topic.status == TopicStatus.used)).all())
-    topics = []
+    picked: dict[str, list[tuple[dict, Benchmark | None, dict]]] = {}
     for raw in plan.get("topics") or []:
+        if not isinstance(raw, dict):
+            continue
+        b, ref = _ref(benches, raw.get("ref"))
+        picked.setdefault(b.id if b else "", []).append((raw, b, ref))
+    # 几个对标的复刻选题轮流排（写稿按这个顺序用），不会连着好几篇都照同一个人
+    order = interleave([picked[b.id] for b in benches if b.id in picked]) + picked.get("", [])
+    topics = []
+    for raw, b, ref in order:
         title = str(raw.get("title", "")).strip()[:80]
         if not title or is_duplicate(title, seen):
             continue
-        b, ref = _ref(benches, raw.get("ref"))
         if ref and _norm(title) == _norm(str(ref.get("title", ""))):
             continue  # 模型偷懒原样照抄了对方标题（还是对方领域的），不能算复刻选题
         reference = {k: ref[k] for k in ("title", "likes", "content", "tags", "url", "cover", "images") if ref.get(k)}

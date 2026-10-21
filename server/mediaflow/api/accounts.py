@@ -11,10 +11,10 @@ from mediaflow.domain.models import (
 )
 from mediaflow.domain.schemas import (
     AccountDetail, AccountIn, AccountOut, AccountPatch, AccountSummary, BenchmarkIn, BenchmarkOut, CandidatesIn,
-    JobOut, NoteOut, RemoveBenchmarkOut, RuleIn, RuleOut, VisualLearnIn, VisualPatch,
+    ExemplarIn, JobOut, NoteOut, RemoveBenchmarkOut, RuleIn, RuleOut, VisualLearnIn, VisualPatch,
 )
 from mediaflow.llm.client import get_llm
-from mediaflow.services import bench_report
+from mediaflow.services import bench_report, exemplar
 from mediaflow.services import benchmark as bench
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -24,7 +24,7 @@ def _detail(s: Session, acc: Account) -> AccountDetail:
     rules = s.exec(select(Rule).where(Rule.account_id == acc.id, Rule.active == True)  # noqa: E712
                    .order_by(col(Rule.created_at))).all()
     notes = s.exec(select(Note).where(Note.account_id == acc.id).order_by(col(Note.created_at).desc())).all()
-    return AccountDetail(**acc.model_dump(), rules=[RuleOut(**r.model_dump()) for r in rules],
+    return AccountDetail(**{**acc.model_dump(), "exemplar": exemplar.info(s, acc)}, rules=[RuleOut(**r.model_dump()) for r in rules],
                          notes=[NoteOut(**n.model_dump()) for n in notes],
                          benchmarks=[BenchmarkOut(**b.model_dump()) for b in bench.listing(s, acc.id)])
 
@@ -89,6 +89,22 @@ def delete_account(acc: Account = Depends(owned_account), s: Session = Depends(g
         s.flush()
     s.delete(acc)
     s.commit()
+
+
+@router.put("/{account_id}/exemplar", response_model=AccountDetail)
+def set_exemplar(body: ExemplarIn, acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    """把一篇草稿定为样板帖：以后每篇都照它的写法和配图来。"""
+    d = s.get(Draft, body.draft_id)
+    if d is None or d.account_id != acc.id:
+        raise HTTPException(404, "草稿不存在")
+    exemplar.set_(s, acc, d)
+    return _detail(s, acc)
+
+
+@router.delete("/{account_id}/exemplar", response_model=AccountDetail)
+def clear_exemplar(acc: Account = Depends(owned_account), s: Session = Depends(get_session)):
+    exemplar.clear(s, acc)
+    return _detail(s, acc)
 
 
 @router.post("/{account_id}/rules", response_model=RuleOut, status_code=201)
