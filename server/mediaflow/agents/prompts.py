@@ -302,7 +302,7 @@ IMAGE_MODES_BLOCK = """
 每张除了 idx，还要给：
 - mode：从这张能选的做法里挑最合适的
 - layout（ai_text / card / photo 必须给）：代码排上去的字，一字不会错，所以要出现在图上的字都放这里，不要写进 prompt：
-  {{"kind": "cover 封面大字 / list 清单 / steps 步骤 / compare 对比 / quote 金句",
+  {{"kind": "cover 封面大字 / list 清单 / steps 步骤 / compare 对比 / quote 金句 / caption 照片上的小字标注（一两句短话，浅色小标签，不压暗照片）",
     "title": "大标题（封面 8-16 字）", "highlight": "标题里要高亮的 2-4 个字", "subtitle": "一句补充（可省略）",
     "tag": "左上角小标签 2-6 字（可省略）", "items": ["清单/步骤每条一句，10-22 字，3-6 条"],
     "left": {{"title": "对比左栏 2-5 字", "items": ["…"]}}, "right": {{"title": "…", "items": ["…"]}},
@@ -353,7 +353,9 @@ IMAGE_LOOK_BLOCK = """
 - spec 照「整套视觉」写：质感（实拍 / 插画 / 手写…）、配色、文字样式、角色形象都跟原帖一致，不要换成别的风格
 - 每张 prompt 照对应那张原图的做法写：原图是漫画就写同样的分格和同一个角色，是拼图就写同样的分格，是随手实拍就写手机随手拍的真实感、不要精修摆拍
 - 原图没字（none）的，这张也不加字：ai 的 prompt 写「画面里不要任何文字」，photo / ai_text 的 layout 给 {{"kind": "none"}}
-- 原图是照片上一两处小字标注（不是大标题）的，选 ai 让 AI 把小字标注按原图的样式一起画出来，不要套代码的大字封面或面板"""
+- 原图是照片上一两处小字标注（不是大标题、不是大面板）的，用 ai_text / photo 配 layout {{"kind": "caption", "title": "一句", "subtitle": "第二句（可省）", "position": "放在原图标注的位置"}}，
+  不要套 quote / list 这种大面板；画面里也不要画空白标签
+- 原图是大字封面的才用 cover；原图是清单、步骤卡片的才用 list / steps"""
 
 
 

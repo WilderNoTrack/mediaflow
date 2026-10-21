@@ -173,7 +173,8 @@ def _reference_block(ref: dict, *, planned: bool = False) -> str:
             + "</external_data>\n" + learn + "，内容必须换成本账号主题，不照抄任何句子。" + imgs)
 
 
-_KIND_LABEL = {"cover": "封面式（大标题）", "list": "清单", "steps": "步骤", "compare": "左右对比", "quote": "金句"}
+_KIND_LABEL = {"cover": "封面式（大标题）", "list": "清单", "steps": "步骤", "compare": "左右对比", "quote": "金句",
+               "caption": "照片小字标注", "none": "只要画面、不排字"}
 
 
 def _plan_desc(p: dict) -> str:

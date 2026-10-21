@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 W, H = 1080, 1440
 M = 92  # 左右留白
-KINDS = ("cover", "list", "steps", "compare", "quote")
+KINDS = ("cover", "list", "steps", "compare", "quote", "caption")
 
 
 class LayoutError(RuntimeError):
@@ -157,10 +157,14 @@ _NO_END = set("（(「『《【〈“‘")
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.%+\-/:'&]*[\u4e00-\u9fff]?|\s+|.", re.S)
 
 
+_PHONETIC = re.compile(r"\s?[/\[][^/\[\]\n]{1,40}[/\]]")
+
+
 @lru_cache(maxsize=4096)
 def _supported(ch: str) -> bool:
     """字体里有没有这个字（没有的话画出来是方框）：和一个肯定没有的字画出来比一比。"""
-    if ord(ch) < 0x2000 or 0x3000 <= ord(ch) <= 0x9FFF or 0xFF00 <= ord(ch) <= 0xFFEF:
+    # 拉丁字母（到 Latin Extended-B）、中日韩、全角肯定有；音标（ɪ ə ˈ）、特殊符号这些中文字体常常没有，要实际比一比
+    if ord(ch) < 0x250 or 0x3000 <= ord(ch) <= 0x9FFF or 0xFF00 <= ord(ch) <= 0xFFEF:
         return True
     f = font(40)
     try:
@@ -172,6 +176,8 @@ def _supported(ch: str) -> bool:
 def clean(text: object, limit: int = 120) -> str:
     """去掉表情符号和字体里没有的字，压掉多余空白（保留换行）。"""
     s = _EMOJI.sub("", str(text or ""))
+    # 音标里有字体没有的字（/rɪˈteɪn/）：整段音标去掉，免得剩下半截「/rten/」
+    s = _PHONETIC.sub(lambda m: "" if any(not _supported(c) for c in m.group(0)) else m.group(0), s)
     s = "\n".join(" ".join(line.split()) for line in s.replace("\r", "").split("\n"))
     s = "".join(ch for ch in s if ch == "\n" or _supported(ch))
     return s.strip()[:limit]
@@ -524,7 +530,7 @@ def card(lay: dict, palette_name: str | None = None) -> bytes:
     p = palette(palette_name or lay.get("palette"))
     img = Image.new("RGB", (W, H), p["bg"])
     _decor(img, p)
-    _render_kind(img, lay, p, (M, 120, W - M, H - 110))
+    _render_kind(img, {**lay, "kind": "cover"} if lay.get("kind") in ("caption", "none") else lay, p, (M, 120, W - M, H - 110))
     return _png(img)
 
 
@@ -555,6 +561,37 @@ def _gradient(img: Image.Image, position: str, strength: int = 190) -> None:
     img.paste(Image.new("RGB", (W, H), (12, 12, 14)), (0, 0), mask)
 
 
+def _caption(img: Image.Image, lay: dict, p: dict) -> Image.Image:
+    """纪实照片上的小字标注：一块浅色圆角小标签，一两行短句，不压暗照片（像博主随手在图上打的字）。"""
+    text = "\n".join(x for x in (clean(lay.get("title"), 60), clean(lay.get("subtitle"), 60)) if x)
+    if not text:
+        return img
+    f, lines, lh = fit(text.replace("\n", " "), W * 0.58, 220, max_size=46, min_size=32, max_lines=3, spacing=1.36)
+    if lay.get("subtitle") and len(lines) < 3:  # 两句分两行
+        f2, l1, _ = fit(clean(lay.get("title"), 60), W * 0.58, 120, max_size=f.size, min_size=32, max_lines=2)
+        _, l2, _ = fit(clean(lay.get("subtitle"), 60), W * 0.58, 120, max_size=f.size, min_size=32, max_lines=2)
+        if len(l1) + len(l2) <= 3:
+            f, lines = f2, l1 + l2
+    pad_x, pad_y = 30, 22
+    tw = max(f.getlength(x) for x in lines)
+    bw, bh = int(tw + pad_x * 2), int(lh * len(lines) + pad_y * 2 - (lh - f.size) * 0.6)
+    pos = str(lay.get("position") or "top").lower()
+    y0 = {"top": int(H * 0.12), "center": (H - bh) // 2}.get(pos, int(H * 0.86) - bh)
+    x0 = M if lay.get("align") != "right" else W - M - bw
+    layer = img.convert("RGBA")
+    sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sh).rounded_rectangle([x0, y0 + 6, x0 + bw, y0 + bh + 6], radius=14, fill=(0, 0, 0, 60))
+    layer = Image.alpha_composite(layer, sh.filter(ImageFilter.GaussianBlur(8)))
+    box = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(box)
+    d.rounded_rectangle([x0, y0, x0 + bw, y0 + bh], radius=14, fill=(*p["panel"], 238))
+    y = y0 + pad_y - _ink(f) * 0.6
+    for line in lines:
+        d.text((x0 + pad_x, y), line, font=f, fill=p["fg"])
+        y += lh
+    return Image.alpha_composite(layer, box)
+
+
 def overlay(base: bytes | Image.Image, lay: dict, palette_name: str | None = None) -> bytes:
     """给照片 / AI 画面叠字：封面大字用渐变压暗 + 白字；清单/步骤/对比/金句放在半透明面板里。没字就只裁成 3:4。"""
     p = palette(palette_name or lay.get("palette"))
@@ -562,8 +599,10 @@ def overlay(base: bytes | Image.Image, lay: dict, palette_name: str | None = Non
     kind = str(lay.get("kind") or "cover").strip().lower()
     has_text = any(clean(lay.get(k)) for k in ("title", "subtitle", "tag")) or _items(lay) \
         or isinstance(lay.get("left"), dict)
-    if not has_text:
+    if not has_text or kind == "none":
         return _png(img)
+    if kind == "caption":
+        return _png(_caption(img, lay, p))
     pos = str(lay.get("position") or ("top" if kind == "cover" else "bottom")).lower()
     pos = pos if pos in ("top", "center", "bottom") else "bottom"
     if kind not in ("list", "steps", "compare", "quote"):
