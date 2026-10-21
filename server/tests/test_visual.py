@@ -217,3 +217,13 @@ async def test_manager_visual_tools(client, session, llm, account, vision):
     r = client.post(f"/api/accounts/{account.id}/chat", json={"text": "照这篇的图来 https://www.xiaohongshu.com/explore/abc"})
     job = session.exec(select(Job).where(Job.kind == JobKind.learn_visual)).one()
     assert job.payload["links"] == ["https://www.xiaohongshu.com/explore/abc"]
+
+
+def test_image_note_tells_reviewer_images_follow_reference():
+    from mediaflow.agents.pipeline import _image_note
+
+    assert _image_note({}) == ""
+    assert _image_note({"title": "没拿到图的参考帖"}) == ""
+    note = _image_note({"title": "x", "local": ["a", "b"], "look": {"pages": [{"kind": "illustration"}, {"kind": "illustration"}]}})
+    assert "2 张原图" in note and "漫画" in note and "不算问题" in note
+    assert "样板帖" in _image_note({"title": "样板", "source": "exemplar", "plan": [{}, {}, {}]})

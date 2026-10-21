@@ -464,6 +464,29 @@ def _unchanged(a: Candidate, b: Candidate) -> bool:
     return (a.title, a.body, a.tags, a.image_prompts) == (b.title, b.body, b.tags, b.image_prompts)
 
 
+def _image_note(ref: dict | None) -> str:
+    """配图照参考帖/样板帖做时告诉主编：配图做法以它为准，和账号配图风格不一样不算问题（否则会被要求改回去）。"""
+    ref = ref or {}
+    if not ref.get("title"):
+        return ""
+    if ref.get("source") == "exemplar":
+        n = len(ref.get("plan") or [])
+        if not n:
+            return ""
+        return (f"\n（这篇配图照样板帖「{ref['title'][:24]}」的做法出 {n} 张，是用户定的；"
+                "配图的做法、张数以样板帖为准，和账号配图风格不一样不算问题，不要提改配图做法或张数）\n")
+    n = len(ref.get("local") or [])
+    if not n:
+        return ""
+    from mediaflow.services.visual import LOOK_KINDS
+
+    pages = (ref.get("look") or {}).get("pages") or []
+    kinds = [LOOK_KINDS.get(p.get("kind", ""), "") for p in pages]
+    common = max(set(k for k in kinds if k), key=kinds.count, default="")
+    return (f"\n（这篇配图照参考帖的 {n} 张原图一张对一张做" + (f"，原图以{common}为主" if common else "")
+            + "；配图的做法、张数以参考帖为准，和账号配图风格不一样不算问题，不要提改配图做法或张数）\n")
+
+
 def _locked_block(locked: list[str], title_locked: bool) -> str:
     lines = ([f"- 标题（用户改过）"] if title_locked else []) + [f"- {x}" for x in locked[:20]]
     return prompts.LOCKED_BLOCK.format(locked="\n".join(lines)) if lines else ""
@@ -479,7 +502,7 @@ def _change_why(item, entries: list[dict]) -> tuple[str, str]:
 
 async def _revise(llm: LLM, ctx: AccountContext, c: Candidate, feedback: str, *,
                   locked: list[str] | None = None, title_locked: bool = False,
-                  entries: list[dict] | None = None) -> Candidate:
+                  entries: list[dict] | None = None, image_note: str = "") -> Candidate:
     """在已有的一版上定点修改（find → replace），由代码落到原文上：没被点名的句子一个字不动，
     用户亲手改过的句子也不会被冲掉。模型要是回了整篇（老格式），也接得住。"""
     data = await complete_json(llm, [
@@ -487,7 +510,7 @@ async def _revise(llm: LLM, ctx: AccountContext, c: Candidate, feedback: str, *,
         {"role": "user", "content": prompts.REVISER_USER.format(
             profile=ctx.profile_text(), rules=ctx.rules_text(), title=c.title, body=c.body,
             body_len=body_len(c.body), length_req=_length_req(ctx), tags="、".join(c.tags),
-            images="\n".join(f"{i + 1}. {p}" for i, p in enumerate(c.image_prompts)) or "（无）",
+            images=("\n".join(f"{i + 1}. {p}" for i, p in enumerate(c.image_prompts)) or "（无）") + image_note,
             locked_block=_locked_block(locked or [], title_locked),
             feedback=feedback or "- 整体再打磨一遍：开头更抓人、信息更具体",
         )},
@@ -529,11 +552,13 @@ def _why_for(where: str, entries: list[dict] | None) -> str:
 
 
 async def _check(llm: LLM, ctx: AccountContext, c: Candidate, *, prev: Candidate | None = None,
-                 locked: list[str] | None = None, title_locked: bool = False, final: bool = False) -> bool:
+                 locked: list[str] | None = None, title_locked: bool = False, final: bool = False,
+                 image_note: str = "") -> bool:
     """硬检查 + AI 质检；prev 是上一版（复核模式：主编先核对上一轮的问题改好没有）。返回质检是否出错。"""
     c.issues = hard_check(c.title, c.body, c.tags, c.image_prompts, ctx.rules)
     try:
-        await _evaluate(llm, ctx, c, prev=prev, locked=locked or [], title_locked=title_locked, final=final)
+        await _evaluate(llm, ctx, c, prev=prev, locked=locked or [], title_locked=title_locked, final=final,
+                        image_note=image_note)
         return False
     except LLMError:
         logger.warning("质检失败", exc_info=True)
@@ -581,7 +606,8 @@ def _prev_block(prev: Candidate | None, final: bool = False) -> str:
 
 
 async def _evaluate(llm: LLM, ctx: AccountContext, c: Candidate, *, prev: Candidate | None = None,
-                    locked: list[str] | None = None, title_locked: bool = False, final: bool = False) -> None:
+                    locked: list[str] | None = None, title_locked: bool = False, final: bool = False,
+                    image_note: str = "") -> None:
     data = await complete_json(llm, [
         {"role": "system", "content": prompts.EVALUATOR_SYSTEM},
         {"role": "user", "content": prompts.EVALUATOR_USER.format(
@@ -591,7 +617,7 @@ async def _evaluate(llm: LLM, ctx: AccountContext, c: Candidate, *, prev: Candid
             body=c.body,
             body_len=body_len(c.body),
             tags="、".join(c.tags),
-            images="\n".join(f"{i + 1}. {p}" for i, p in enumerate(c.image_prompts)) or "（无）",
+            images=("\n".join(f"{i + 1}. {p}" for i, p in enumerate(c.image_prompts)) or "（无）") + image_note,
             locked_block=_locked_block(locked or [], title_locked), review_block=_prev_block(prev, final),
         )},
     ], temperature=0.2)
@@ -691,7 +717,8 @@ async def write_draft(
     plan = [p.strip() for p in image_plan or [] if p.strip()][:9]
     c = await _generate(llm, ctx, topic, hint, "", ref, plan)
     await _enforce(llm, ctx, c, emit)
-    if await _check(llm, ctx, c):
+    img_note = _image_note(ref)
+    if await _check(llm, ctx, c, image_note=img_note):
         eval_failed = True
         emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
     candidates.append(c)
@@ -708,7 +735,7 @@ async def write_draft(
         emit("write", f"按 AI 的 {len(entries)} 条意见自动改第 {attempt - 1} 轮…",
              {"attempt": attempt, "feedback": [e["text"][:200] for e in entries]})
         try:
-            c = await _revise(llm, ctx, base, _feedback_for(base), entries=entries)
+            c = await _revise(llm, ctx, base, _feedback_for(base), entries=entries, image_note=img_note)
         except LLMError as e:
             emit("warning", f"第 {attempt} 版生成失败（{e}），使用已有的最好版本", None)
             break
@@ -716,7 +743,7 @@ async def write_draft(
         if _unchanged(c, base):
             emit("warning", "这一轮编辑没找到能改的地方，用已有的最好版本", None)
             break
-        if await _check(llm, ctx, c, prev=base, final=attempt == MAX_ATTEMPTS):
+        if await _check(llm, ctx, c, prev=base, final=attempt == MAX_ATTEMPTS, image_note=img_note):
             eval_failed = True
             emit("warning", "质检服务出错，这一版没有经过 AI 质检", None)
         candidates.append(c)
@@ -776,9 +803,10 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
                     note=str((draft.evaluation or {}).get("editor_note") or ""))
     locked = user_sentences(draft.original_body, draft.body)
     title_locked = draft.title != draft.original_title
+    note_img = _image_note(draft.reference)
     if note.strip() or cur.score is None or cur.evaluation.get("checked") != _sig(cur.title, cur.body):
         # 用户改过稿子或提了新要求：先按现在的版本重新质检，意见才对得上（用户改过的句子不挑措辞）
-        await _check(llm, ctx, cur, locked=locked, title_locked=title_locked)
+        await _check(llm, ctx, cur, locked=locked, title_locked=title_locked, image_note=note_img)
     history = list((draft.evaluation or {}).get("history") or [])
     if not history and cur.score is not None:  # 老稿子没有记录：把改之前的版本记上，分数变化才看得出来
         history = [{"attempt": draft.attempts, "score": cur.score, "problems": len(cur.issues)}]
@@ -792,7 +820,7 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
         base.attempted = True
         try:
             c = await _revise(llm, ctx, base, _feedback_for(base, note), entries=entries,
-                              locked=locked, title_locked=title_locked)
+                              locked=locked, title_locked=title_locked, image_note=note_img)
         except LLMError as e:
             if tried:
                 emit("warning", f"这一轮没改成（{e}），用已经改好的版本", None)
@@ -802,7 +830,8 @@ async def revise_draft(session: Session, llm: LLM, draft_id: str, *, note: str =
         if _unchanged(c, base):
             emit("warning", "这一轮编辑没找到能改的地方，停下来", None)
             break
-        await _check(llm, ctx, c, prev=base, locked=locked, title_locked=title_locked, final=r == rounds - 1)
+        await _check(llm, ctx, c, prev=base, locked=locked, title_locked=title_locked, final=r == rounds - 1,
+                     image_note=note_img)
         tried.append(c)
         emit("review", f"改第 {r + 1} 轮：{c.score if c.score is not None else '未评分'} 分" + _problems(c),
              {"attempt": start + r, "score": c.score, "issues": c.issues, "evaluation": c.evaluation, **_version(c, base)})

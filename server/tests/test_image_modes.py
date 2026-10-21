@@ -41,12 +41,28 @@ def test_layout_kinds_render():
     assert _size(layout.overlay(_photo(), {})) == (1080, 1440)  # 没字就只裁成 3:4
 
 
+def test_caption_and_none_keep_photo():
+    """纪实照片的小字标注只占一小块、不压暗；none 一个字都不加。"""
+    base = _photo(color=(200, 180, 160))
+    plain = Image.open(io.BytesIO(layout.overlay(base, {"kind": "none", "title": "不该出现"}))).convert("RGB")
+    assert plain.getpixel((540, 720)) == Image.open(io.BytesIO(layout.overlay(base, {}))).convert("RGB").getpixel((540, 720))
+    cap = Image.open(io.BytesIO(layout.overlay(base, {"kind": "caption", "title": "房租1800 采光一般",
+                                                      "position": "top"}))).convert("RGB")
+    assert cap.size == (1080, 1440)
+    assert cap.getpixel((540, 1300)) == plain.getpixel((540, 1300))  # 下面的照片原样露着
+    changed = sum(1 for x in range(0, 1080, 20) for y in range(0, 1440, 20) if cap.getpixel((x, y)) != plain.getpixel((x, y)))
+    assert changed < 0.2 * (54 * 72)
+    assert _size(layout.card({"kind": "caption", "title": "小标注"}, None)) == (1080, 1440)
+
+
 def test_wrap_rules():
     f = layout.font(60)
     lines = layout.wrap("你好，世界！这是一个测试，看看标点会不会出现在行首。", f, 300)
     assert all(line[0] not in "，。！？、" for line in lines)
     assert "".join(lines) == "你好，世界！这是一个测试，看看标点会不会出现在行首。"
     assert layout.clean("好物🎉分享✨") == "好物分享"
+    assert layout.clean("retain /rɪˈteɪn/ 保持") == "retain 保持"  # 音标画不出来就整段去掉，不剩半截
+    assert layout.clean("3/4 的人") == "3/4 的人"
     f2, lines2, _ = layout.fit("一个很长很长的标题" * 6, 600, 300, max_size=120, min_size=40, max_lines=3)
     assert len(lines2) <= 3 and f2.size >= 40
 
