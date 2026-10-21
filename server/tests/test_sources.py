@@ -231,11 +231,12 @@ async def test_douyin_search_with_cookie(mock_http, creds):
     assert structure_error(parse_qs(urlsplit(url).query)["a_bogus"][0]) is None
 
 
-async def test_douyin_antispam_is_reported(mock_http, creds):
+@pytest.mark.parametrize("nil", ["antispam_check", "verify_check"])
+async def test_douyin_antispam_is_reported(mock_http, creds, nil):
     routes, _ = mock_http
     creds["douyin_cookie"] = "sessionid=abc"
     routes["https://www.douyin.com/aweme/"] = {"status_code": 0, "data": [],
-                                               "search_nil_info": {"search_nil_type": "antispam_check"}}
+                                               "search_nil_info": {"search_nil_type": nil}}
     with pytest.raises(RuntimeError, match="风控"):
         await platforms.DouyinSource().fetch("穿搭", 5)
 

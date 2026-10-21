@@ -60,8 +60,8 @@ async def api(c: httpx.AsyncClient, path: str, params: dict, cookie: str,
     if data.get("status_code") not in (0, None):
         msg = data.get("status_msg") or data.get("status_code")
         raise RuntimeError(f"抖音：{msg}（Cookie 可能过期）")
-    if (data.get("search_nil_info") or {}).get("search_nil_type") == "antispam_check":
-        raise RuntimeError("抖音触发了风控校验，稍后再试，或在浏览器里打开抖音搜一次后重新复制 Cookie")
+    if (data.get("search_nil_info") or {}).get("search_nil_type") in ("antispam_check", "verify_check"):
+        raise RuntimeError("抖音搜索触发风控、要求人机验证：在浏览器里打开抖音搜一次、过掉验证，稍后再试（必要时重新复制 Cookie）")
     return data
 
 
