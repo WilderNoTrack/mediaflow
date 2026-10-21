@@ -359,15 +359,24 @@ export function ReportDialog({ account, onClose }: { account: Account; onClose: 
   );
 }
 
+/** 几个对标各自的爆款轮流排（A1 B1 C1 A2…），不会被赞最多的那个号占满 */
+function interleave<T>(groups: T[][]): T[] {
+  const out: T[] = [];
+  for (let i = 0; i < Math.max(0, ...groups.map((g) => g.length)); i++) groups.forEach((g) => { if (i < g.length) out.push(g[i]); });
+  return out;
+}
+
 function Hits({ benches }: { benches: Benchmark[] }) {
-  const hits = uniqNotes(benches.flatMap((b) => b.samples as Dict[])).slice(0, 12).map((x) => ({
-    title: str(x.title), url: str(x.url), cover: str(x.cover), kind: str(x.kind), date: str(x.date),
-    likes: x.likes ? str(x.likes) : "",
-  }));
+  const many = benches.length > 1;
+  const hits = uniqNotes(interleave(benches.map((b) => (b.samples as Dict[]).map((x): Dict => ({ ...x, by: b.creator_name })))))
+    .slice(0, 12).map((x) => ({
+      title: str(x.title), url: str(x.url), cover: str(x.cover), kind: str(x.kind), date: str(x.date),
+      likes: x.likes ? str(x.likes) : "", author: many ? str(x.by) : "",
+    }));
   if (!hits.length) return null;
   return (
     <Card>
-      <CardHead icon={<Flame />} title={benches.length > 1 ? "TA 们的爆款" : "TA 的爆款"} desc="复刻选题就是照着这些来的，点开能看原帖" />
+      <CardHead icon={<Flame />} title={benches.length > 1 ? "TA 们的爆款" : "TA 的爆款"} desc={many ? "每个对标轮流取几篇，复刻选题就是照着这些来的，点开能看原帖" : "复刻选题就是照着这些来的，点开能看原帖"} />
       <CardBody className="pt-4"><NoteGrid notes={hits} className="sm:grid-cols-4 lg:grid-cols-6" /></CardBody>
     </Card>
   );

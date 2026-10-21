@@ -40,6 +40,17 @@ export function useUpdateAccount(id: string) {
   });
 }
 
+/** 定 / 取消样板帖：以后每篇都照它的写法和配图来 */
+export function useExemplar(id: string) {
+  const inv = useInvalidateAccount(id);
+  return useMutation({
+    mutationFn: (draftId: string | null) => draftId
+      ? unwrap(api.PUT("/api/accounts/{account_id}/exemplar", { params: { path: { account_id: id } }, body: { draft_id: draftId } }))
+      : unwrap(api.DELETE("/api/accounts/{account_id}/exemplar", { params: { path: { account_id: id } } })),
+    onSuccess: inv,
+  });
+}
+
 export function useDeleteAccount() {
   const qc = useQueryClient();
   return useMutation({
@@ -224,7 +235,7 @@ export function useWrite(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: Partial<S["WriteIn"]>) =>
-      unwrap(api.POST("/api/accounts/{account_id}/write", { params: { path: { account_id: id } }, body: { hint: "", from_chat: false, reference_url: "", image_plan: [], ...body } })),
+      unwrap(api.POST("/api/accounts/{account_id}/write", { params: { path: { account_id: id } }, body: { hint: "", from_chat: false, reference_url: "", image_plan: [], use_exemplar: true, ...body } })),
     onSettled: () => qc.invalidateQueries({ queryKey: ["jobs", id] }),
   });
 }

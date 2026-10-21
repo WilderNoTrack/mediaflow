@@ -6,6 +6,7 @@ import { api, unwrap, type Account, type Job, type JobEvent } from "../api/clien
 import { isActive, useDrafts, useTopics, useWrite } from "../api/hooks";
 import { cn } from "../lib/utils";
 import { ReportDialog } from "./BenchmarkPanel";
+import { NoteTile } from "./CreatorGallery";
 import { Badge, Button, ErrorText } from "./ui";
 
 function useJob(jobId?: string) {
@@ -322,6 +323,33 @@ export function TopicCards({ account, topics }: { account: Account; topics: { id
                 <PenLine />写这篇
               </Button>
             )}
+          </div>
+        ))}
+      </div>
+      <ErrorText error={write.error} />
+    </div>
+  );
+}
+
+export type FoundPost = { title: string; url: string; cover?: string; likes?: string; author?: string };
+
+/** 小媒找的对标帖子：像小红书首页一样排开，每篇都能「照这篇写」——起号时用来打磨第一篇（样板帖） */
+export function PostCards({ account, posts }: { account: Account; posts: FoundPost[] }) {
+  const write = useWrite(account.id);
+  const qc = useQueryClient();
+  const [started, setStarted] = useState("");
+  return (
+    <div className="ml-10 space-y-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {posts.map((p, i) => (
+          <div key={p.url} className="flex min-w-0 flex-col gap-1.5">
+            <NoteTile n={{ title: p.title, url: p.url, cover: p.cover, likes: p.likes ?? "", author: p.author }} i={i} />
+            <Button size="xs" variant={started === p.url ? "ghost" : "outline"} className="w-full" disabled={write.isPending || !!started}
+              onClick={() => write.mutate({ reference_url: p.url, from_chat: true }, {
+                onSuccess: () => { setStarted(p.url); qc.invalidateQueries({ queryKey: ["chat", account.id] }); },
+              })}>
+              {started === p.url ? "已开始写" : <><PenLine />照这篇写</>}
+            </Button>
           </div>
         ))}
       </div>

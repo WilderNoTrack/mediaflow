@@ -47,7 +47,7 @@ export const IMAGE_MODES: { value: ImageMode; label: string; ai?: boolean }[] = 
 ];
 export const imageModeLabel = (m?: string) => IMAGE_MODES.find((x) => x.value === m)?.label ?? "";
 export type ImageLayout = S["ImageLayout"];
-export type NoteCard = { title: string; likes: string; url: string; cover?: string; kind?: string; date?: string };
+export type NoteCard = { title: string; likes: string; url: string; cover?: string; kind?: string; date?: string; author?: string };
 export type JobEvent = { at: string; stage: string; message: string; data: Record<string, unknown> };
 
 export class ApiError extends Error {

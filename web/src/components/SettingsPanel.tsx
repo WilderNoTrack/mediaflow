@@ -1,8 +1,9 @@
-import { Bot, BookOpen, Image as ImageIcon, ListChecks, Play, Plus, Target, Trash2 } from "lucide-react";
+import { Bot, BookOpen, Image as ImageIcon, ListChecks, Play, Plus, Star, Target, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import type { Account, AccountImageMode, S } from "../api/client";
 import { ACCOUNT_IMAGE_MODES } from "../api/client";
-import { useNotes, useRules, useSystem, useUpdateAccount, useWrite } from "../api/hooks";
+import { useExemplar, useNotes, useRules, useSystem, useUpdateAccount, useWrite } from "../api/hooks";
 import { cn, FREQ_LABEL, timeAgo } from "../lib/utils";
 import { Badge, Button, Card, CardBody, CardHead, ErrorText, Input, Label, Switch, Textarea } from "./ui";
 import { VisualCard } from "./VisualCard";
@@ -24,12 +25,45 @@ export function SettingsPanel({ account, busy }: { account: Account; busy: boole
         这里的内容都可以直接跟右边的小媒说，它会帮你改好；也可以在这里手动改。
       </p>
       <ProfileCard account={account} />
+      <ExemplarCard account={account} />
       <ImageModeCard account={account} />
       <VisualCard account={account} />
       <RulesCard account={account} />
       <NotesCard account={account} />
       <AutoCard account={account} busy={busy} />
     </div>
+  );
+}
+
+type ExemplarInfo = { draft_id?: string; title?: string; images?: number; cover?: string; at?: string };
+
+/** 样板帖：用户打磨定稿的一篇，之后每篇都照它的写法和配图 */
+function ExemplarCard({ account }: { account: Account }) {
+  const ex = useExemplar(account.id);
+  const cur = (account.exemplar ?? {}) as ExemplarInfo;
+  return (
+    <Card>
+      <CardHead icon={<Star />} title="样板帖" desc="你打磨满意的一篇；之后每篇都照它的写法、配图做法和版式来，对标爆款只当选题和内容参考" />
+      <CardBody>
+        {cur.draft_id ? (
+          <div className="flex items-center gap-3">
+            {cur.cover
+              ? <img src={`/files/images/${cur.cover}`} alt="" className="h-16 w-12 shrink-0 rounded-md border object-cover" />
+              : <div className="flex h-16 w-12 shrink-0 items-center justify-center rounded-md bg-amber-50"><Star className="size-4 text-amber-500" /></div>}
+            <div className="min-w-0 flex-1 text-sm">
+              <Link to={`/drafts/${cur.draft_id}`} className="line-clamp-2 font-medium hover:text-indigo-600">{cur.title}</Link>
+              <div className="mt-0.5 text-xs text-muted-foreground">{cur.images ? `${cur.images} 张图` : "还没有出好的图"}{cur.at ? ` · ${timeAgo(cur.at)}定的` : ""}</div>
+            </div>
+            <Button size="xs" variant="ghost" loading={ex.isPending} onClick={() => confirm("取消样板帖？之后写稿按对标爆款和账号设定来。") && ex.mutate(null)}>取消</Button>
+          </div>
+        ) : (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            还没有。先跟小媒说想做什么，它会找几篇同领域的爆款给你挑，照着写出第一篇；改到满意后在草稿页点「定为样板帖」，或者直接跟小媒说「就按这篇来」。
+          </p>
+        )}
+        <ErrorText error={ex.error} />
+      </CardBody>
+    </Card>
   );
 }
 

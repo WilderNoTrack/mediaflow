@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Account, Candidate, ChatMessage } from "../api/client";
 import { type ChatStep, useChat, useLiveChat, usePendingChat, useSendChat } from "../api/hooks";
 import { CandidatePicker } from "./CandidatePicker";
-import { ChatJobCard, TopicCards } from "./ChatCards";
+import { ChatJobCard, PostCards, TopicCards, type FoundPost } from "./ChatCards";
 import { Markdown } from "./Markdown";
 import { cn } from "../lib/utils";
 import { Button, ErrorText, Logo, Spinner, Textarea } from "./ui";
@@ -29,6 +29,8 @@ const TOOL_META: Record<string, { icon: string; label: string }> = {
   revise_post: { icon: "✍️", label: "改文案" },
   learn_visual: { icon: "🎨", label: "学配图模板" },
   update_visual: { icon: "🎨", label: "改配图模板" },
+  find_posts: { icon: "🔖", label: "找对标帖子" },
+  set_exemplar: { icon: "⭐", label: "定样板帖" },
 };
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -67,14 +69,17 @@ function toolSummary(m: ChatMessage) {
       `现在共 ${result.total ?? "?"} 张`].filter(Boolean).join("，");
   }
   if (m.tool_name === "find_benchmarks" && Array.isArray(result.candidates)) return `${result.candidates.length} 个，在下面勾选`;
+  if (m.tool_name === "find_posts" && Array.isArray(result.posts)) return `${result.posts.length} 篇，点「照这篇写」就开始写`;
+  if (m.tool_name === "set_exemplar") return result.cleared ? "已取消样板帖" : `《${String((result.exemplar as { title?: string })?.title ?? "")}》`;
   if (m.tool_name === "clone_creator") return `${Array.isArray(result.added) ? result.added.length : 1} 个，进度见下方`;
   return "";
 }
 
 /** 根据账号状态给几个可以直接点的开场问题 */
 function suggestions(a: Account): string[] {
-  if (!a.theme) return ["我是宝妈，想分享带娃省钱经验", "帮我想想账号定位", "帮我找几个做得好的同类账号"];
-  if (!a.benchmarks.length) return ["今天写一篇", "帮我找几个同领域的对标账号", "找几个这周能写的选题", "最近写得怎么样？"];
+  if (!a.theme) return ["我想做穿搭攻略类的账号", "我是宝妈，想分享带娃省钱经验", "帮我找几个做得好的同类账号"];
+  // 还没有样板帖：先找一篇别人的爆款照着写，打磨好了定为样板
+  if (!a.exemplar) return ["帮我找几篇能照着写的爆款", a.benchmarks.length ? "再找几个对标账号" : "帮我找几个同领域的对标账号", "今天写一篇", "样板帖是什么？"];
   return ["今天写一篇", "找几个这周能写的选题", "最近写得怎么样？", "再找几个对标账号"];
 }
 
@@ -302,8 +307,9 @@ function ToolGroup({ items }: { items: ChatMessage[] }) {
 
 /** 工具结果对应的卡片：对标候选、任务进度、选题 */
 function ToolCard({ account, m }: { account: Account; m: ChatMessage }) {
-  const r = (m.payload?.result ?? {}) as { ok?: boolean; candidates?: Candidate[]; job_id?: string; draft_id?: string; topics?: { id: string; title: string; angle?: string }[] };
+  const r = (m.payload?.result ?? {}) as { ok?: boolean; candidates?: Candidate[]; job_id?: string; draft_id?: string; topics?: { id: string; title: string; angle?: string }[]; posts?: FoundPost[] };
   if (!r.ok) return null;
+  if (m.tool_name === "find_posts" && r.posts?.length) return <PostCards account={account} posts={r.posts} />;
   if (m.tool_name === "find_benchmarks" && r.candidates) return <CandidatePicker account={account} candidates={r.candidates} compact />;
   if (["write_post", "clone_creator", "revise_post", "edit_images", "learn_visual"].includes(m.tool_name) && r.job_id)
     return <ChatJobCard account={account} jobId={r.job_id} draftId={r.draft_id} />;

@@ -55,8 +55,11 @@ export function NoteTile({ n, i = 0, small }: { n: NoteCard; i?: number; small?:
       </div>
       <div className={cn("space-y-1", small ? "p-1.5" : "p-2")}>
         {n.cover && !broken && <div className={cn("line-clamp-2 leading-snug", small ? "text-[11px]" : "text-xs font-medium")}>{n.title}</div>}
-        {n.likes && (
-          <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground"><Heart className="size-3" />{n.likes}</div>
+        {(n.likes || n.author) && (
+          <div className="flex items-center justify-between gap-1 text-[11px] text-muted-foreground">
+            {n.author && <span className="truncate">{n.author}</span>}
+            {n.likes && <span className="flex shrink-0 items-center gap-0.5"><Heart className="size-3" />{n.likes}</span>}
+          </div>
         )}
       </div>
     </a>

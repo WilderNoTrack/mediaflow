@@ -190,6 +190,27 @@ export interface paths {
         patch: operations["update_account_api_accounts__account_id__patch"];
         trace?: never;
     };
+    "/api/accounts/{account_id}/exemplar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Exemplar
+         * @description 把一篇草稿定为样板帖：以后每篇都照它的写法和配图来。
+         */
+        put: operations["set_exemplar_api_accounts__account_id__exemplar_put"];
+        post?: never;
+        /** Clear Exemplar */
+        delete: operations["clear_exemplar_api_accounts__account_id__exemplar_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/rules": {
         parameters: {
             query?: never;
@@ -970,6 +991,14 @@ export interface components {
             topic_type: string;
             /** Keywords */
             keywords: string[];
+            /**
+             * Exemplar
+             * @description 样板帖：{draft_id, title, at, images, cover}；空 = 还没定
+             * @default {}
+             */
+            exemplar: {
+                [key: string]: unknown;
+            };
             /** Auto Enabled */
             auto_enabled: boolean;
             auto_frequency: components["schemas"]["AutoFrequency"];
@@ -1080,6 +1109,14 @@ export interface components {
             topic_type: string;
             /** Keywords */
             keywords: string[];
+            /**
+             * Exemplar
+             * @description 样板帖：{draft_id, title, at, images, cover}；空 = 还没定
+             * @default {}
+             */
+            exemplar: {
+                [key: string]: unknown;
+            };
             /** Auto Enabled */
             auto_enabled: boolean;
             auto_frequency: components["schemas"]["AutoFrequency"];
@@ -1495,6 +1532,11 @@ export interface components {
          * @enum {string}
          */
         DraftStatus: "pending_review" | "approved" | "exported" | "rejected";
+        /** ExemplarIn */
+        ExemplarIn: {
+            /** Draft Id */
+            draft_id: string;
+        };
         /** FeedbackIn */
         FeedbackIn: {
             /** Rating */
@@ -2339,10 +2381,16 @@ export interface components {
             image_plan: string[];
             /**
              * Reference Url
-             * @description 照着这些小红书笔记写（可以多个链接/分享文字，第一篇图文笔记当配图模板；不填就自动挑）
+             * @description 照着这些小红书笔记写（可以多个链接/分享文字，第一篇图文笔记当配图模板；不填就自动挑）。账号有样板帖时这些只当文案参考，写法和配图仍照样板帖
              * @default
              */
             reference_url: string;
+            /**
+             * Use Exemplar
+             * @description 照账号的样板帖写（有样板帖时）；false 时这篇不照样板帖
+             * @default true
+             */
+            use_exemplar: boolean;
         };
     };
     responses: never;
@@ -2723,6 +2771,72 @@ export interface operations {
                 "application/json": components["schemas"]["AccountPatch"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_exemplar_api_accounts__account_id__exemplar_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExemplarIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_exemplar_api_accounts__account_id__exemplar_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
