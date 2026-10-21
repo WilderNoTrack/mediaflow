@@ -1,0 +1,110 @@
+import { LogOut, ShieldCheck, Sparkles, UserRound, Users } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useAdminUnlock, useChangePassword, useLogout, useMe } from "../api/hooks";
+import { cn } from "../lib/utils";
+import { Button, ErrorText, Input, Label, Modal } from "./ui";
+import { UsersDialog } from "./UsersDialog";
+
+/** 在线版右上角：我是谁、今天还能写几篇、改密码、退出；管理员多一个「成员管理」。本地版不显示。 */
+export function UserMenu() {
+  const { data: me } = useMe();
+  const logout = useLogout();
+  const [open, setOpen] = useState(false);
+  const [users, setUsers] = useState(false);
+  const [pw, setPw] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", off);
+    return () => document.removeEventListener("mousedown", off);
+  }, [open]);
+  if (me?.auth === "demo") return <DemoBadge />;
+  if (!me || me.auth !== "password") return null;
+  const lim = me.limits as { writes?: number };
+  const used = me.usage as { writes?: number };
+  return (
+    <div className="relative" ref={box}>
+      <Button variant="outline" size="sm" onClick={() => setOpen(!open)}><UserRound /><span className="hidden max-w-24 truncate sm:inline">{me.name}</span></Button>
+      {open && (
+        <>
+                    <div className="absolute right-0 z-50 mt-2 w-56 rounded-xl border bg-card p-1.5 text-sm shadow-xl">
+            <div className="px-3 py-2">
+              <div className="font-medium">{me.name}</div>
+              <div className="text-xs text-muted-foreground">
+                {me.username}{me.is_admin ? " · 管理员" : lim.writes ? ` · 今天还能写 ${Math.max(0, lim.writes - (used.writes ?? 0))} 篇` : ""}
+              </div>
+            </div>
+            {me.is_admin && <Item onClick={() => { setUsers(true); setOpen(false); }}><Users />成员管理</Item>}
+            <Item onClick={() => { setPw(true); setOpen(false); }}><UserRound />改密码</Item>
+            <Item onClick={() => logout.mutate()} className="text-red-600"><LogOut />退出登录</Item>
+          </div>
+        </>
+      )}
+      {users && <UsersDialog onClose={() => setUsers(false)} />}
+      {pw && <PasswordDialog onClose={() => setPw(false)} />}
+    </div>
+  );
+}
+
+/** 演示版：不用登录、大家共用一份数据。右上角只显示全站今天还剩多少；管理员多一个退出管理。 */
+function DemoBadge() {
+  const { data: me } = useMe();
+  const { lock } = useAdminUnlock();
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", off);
+    return () => document.removeEventListener("mousedown", off);
+  }, [open]);
+  if (!me) return null;
+  const lim = me.limits as { writes?: number; chats?: number };
+  const used = me.usage as { writes?: number; chats?: number };
+  const left = (k: "writes" | "chats") => (lim[k] ? Math.max(0, lim[k]! - (used[k] ?? 0)) : null);
+  return (
+    <div className="relative" ref={box}>
+      <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>
+        {me.is_admin ? <ShieldCheck className="text-emerald-600" /> : <Sparkles className="text-indigo-500" />}
+        <span className="hidden sm:inline">{me.is_admin ? "管理员" : "演示版"}</span>
+      </Button>
+      {open && (
+        <div className="absolute right-0 z-50 mt-2 w-64 rounded-xl border bg-card p-1.5 text-sm shadow-xl">
+          <div className="space-y-1 px-3 py-2 text-xs text-muted-foreground">
+            <div className="text-sm font-medium text-foreground">演示版</div>
+            <p>不用注册，大家看到的是同一份账号和草稿，请不要放隐私信息。</p>
+            {left("writes") != null && <p>今天全站还能写 <b className="text-foreground">{left("writes")}</b> 篇{left("chats") != null && <>、聊 <b className="text-foreground">{left("chats")}</b> 句</>}</p>}
+          </div>
+          {me.is_admin && <Item onClick={() => { lock.mutate(); setOpen(false); }} className="text-red-600"><LogOut />退出管理员</Item>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Item({ onClick, className, children }: { onClick: () => void; className?: string; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} className={cn("flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-muted [&_svg]:size-4", className)}>{children}</button>
+  );
+}
+
+function PasswordDialog({ onClose }: { onClose: () => void }) {
+  const change = useChangePassword();
+  const [oldPw, setOld] = useState("");
+  const [newPw, setNew] = useState("");
+  return (
+    <Modal onClose={onClose}>
+      <form className="space-y-4 p-5" onSubmit={(e) => { e.preventDefault(); change.mutate({ old_password: oldPw, new_password: newPw }, { onSuccess: onClose }); }}>
+        <div className="font-semibold">改密码</div>
+        <div><Label>原密码</Label><Input type="password" autoComplete="current-password" value={oldPw} onChange={(e) => setOld(e.target.value)} /></div>
+        <div><Label hint="至少 8 位">新密码</Label><Input type="password" autoComplete="new-password" value={newPw} onChange={(e) => setNew(e.target.value)} /></div>
+        <ErrorText error={change.error} />
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>取消</Button>
+          <Button type="submit" variant="gradient" loading={change.isPending} disabled={!oldPw || newPw.length < 8}>保存</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}

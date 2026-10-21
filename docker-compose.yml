@@ -1,0 +1,35 @@
+# 在线版：app（MediaFlow）+ caddy（自动 HTTPS 反向代理）
+# 用法：cp deploy/online.env.example deploy/online.env，改好里面的值，然后 docker compose up -d --build
+services:
+  app:
+    build:
+      context: .
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:20-alpine}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    image: mediaflow:latest
+    restart: unless-stopped
+    env_file: deploy/online.env
+    volumes:
+      - ./data:/data
+    # 没域名/没备案时先用 http://服务器IP:8765 测试：把下面两行取消注释
+    # ports:
+    #   - "8765:8765"
+
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    restart: unless-stopped
+    env_file: deploy/online.env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

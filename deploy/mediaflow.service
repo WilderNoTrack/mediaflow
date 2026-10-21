@@ -1,0 +1,23 @@
+# 不用 Docker 时的 systemd 服务。放到 /etc/systemd/system/mediaflow.service
+# 假设：代码在 /opt/mediaflow，虚拟环境 /opt/mediaflow/server/.venv，配置 /etc/mediaflow/mediaflow.env，数据 /var/lib/mediaflow
+[Unit]
+Description=MediaFlow 在线版
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mediaflow
+Group=mediaflow
+WorkingDirectory=/opt/mediaflow/server
+EnvironmentFile=/etc/mediaflow/mediaflow.env
+Environment=MEDIAFLOW_DATA_DIR=/var/lib/mediaflow
+Environment=MEDIAFLOW_OPEN_BROWSER=false
+Environment=TZ=Asia/Shanghai
+Environment=PYTHONUNBUFFERED=1
+# 只听本机，由 nginx / Caddy 反代出去；只能一个进程（任务队列在进程里）
+ExecStart=/opt/mediaflow/server/.venv/bin/mediaflow --no-browser --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
