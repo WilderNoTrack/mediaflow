@@ -155,3 +155,11 @@ def test_benchmark_topics_and_hits_alternate(session, account):
     assert applied["topics"] == ["选题甲", "选题丁", "选题乙", "选题戊", "选题丙"]
     names = [x["creator"] for x in refpost._samples(session, account.id)[:4]]
     assert names == ["大号A", "小号B", "大号A", "小号B"]
+
+
+def test_lone_bullet_before_question_is_dropped():
+    from mediaflow.agents.manager import _unbullet
+
+    assert _unbullet("看了几个号。\n\n- 你更想做成哪种？") == "看了几个号。\n\n你更想做成哪种？"
+    keep = "两个方向：\n- 日常\n- 干货\n\n选哪个？"
+    assert _unbullet(keep) == keep

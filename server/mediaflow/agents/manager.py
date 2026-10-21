@@ -874,6 +874,15 @@ def _sanitize(reply: str) -> str:
     return "\n\n".join(keep).strip()
 
 
+def _unbullet(reply: str) -> str:
+    """模型常在问题前面加个「- 」，整段只有这一条孤零零的列表项，看着像格式坏了：去掉记号。"""
+    lines = reply.split("\n")
+    marks = [i for i, ln in enumerate(lines) if re.match(r"\s*[-*•]\s+\S", ln)]
+    if len(marks) == 1 and marks[0] >= len(lines) - 3:
+        lines[marks[0]] = re.sub(r"^\s*[-*•]\s+", "", lines[marks[0]])
+    return "\n".join(lines)
+
+
 def _same_words(lead: str, q: str) -> bool:
     """调 ask_user 前说的话和问题差不多（模型常把方案说一遍、问题里又说一遍）：只留问题，不重复。"""
     from difflib import SequenceMatcher
@@ -1082,7 +1091,7 @@ async def chat_events(session: Session, llm: LLM, account_id: str, text: str, *,
                 # 问用户：同一步的其他操作做完后这一轮就结束，问题当回复，选项存进消息给界面画按钮
                 q, ask = _ask(asks[0].arguments if not asks[0].error else {})
                 lead = _sanitize(lead)
-                reply = (q if not lead or _same_words(lead, q) else lead if q in lead else f"{lead}\n\n{q}") or "你看怎么定？"
+                reply = _unbullet(q if not lead or _same_words(lead, q) else lead if q in lead else f"{lead}\n\n{q}") or "你看怎么定？"
                 break
         else:
             # 步数用完：不再给工具，让模型基于已做的操作给用户一个交代（类似 Agents SDK 的 max_turns 收尾）
