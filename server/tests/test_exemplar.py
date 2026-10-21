@@ -14,7 +14,7 @@ from mediaflow.research import service as research
 from mediaflow.services import benchmark as bench
 from mediaflow.services import exemplar, layout, refpost
 from mediaflow.services import images as images_mod
-from tests.fakes import FakeImages, evaluation, fake_fetch, post
+from tests.fakes import FakeImages, FakeLLM, evaluation, fake_fetch, post
 
 
 def _png(color: str) -> bytes:
@@ -123,6 +123,65 @@ async def test_reference_only_write_takes_topic_from_post(session, llm, account,
     assert d2.reference["source"] == "exemplar" and d2.reference["extra"][0]["title"] == got["title"]
     d3 = await write_draft(session, llm, account.id, hint="试个新风格", use_exemplar=False, fetch=fake_fetch)
     assert (d3.reference or {}).get("source") != "exemplar"
+
+
+@pytest.mark.skipif(not layout.available(), reason="没有中文字体")
+async def test_reference_images_are_read_and_followed(session, llm, account, monkeypatch):
+    """照别人的帖子写：先看懂每张原图怎么做的（漫画 / 没字的实拍 / 文字卡片），写稿和出图都照着挑做法。"""
+    from mediaflow.llm import client as llm_client
+
+    root = get_settings().images_dir / "_refs"
+    root.mkdir(parents=True, exist_ok=True)
+    for i, c in enumerate(["purple", "green", "white"]):
+        (root / f"o{i}.jpg").write_bytes(_png(c))
+    got = {"title": "会接话的重要性", "url": "https://www.xiaohongshu.com/explore/abc", "content": "原文", "source": "user",
+           "why": "你指定的参考帖", "extra": [], "local": [f"_refs/o{i}.jpg" for i in range(3)]}
+
+    async def from_links(text):
+        return dict(got)
+
+    monkeypatch.setattr(refpost, "from_links", from_links)
+    vision = FakeLLM()
+    llm_client.set_vision_llm(vision)
+    vision.push("look", {"spec": "淡紫底、橙色袈裟的Q版小和尚、黑色粗体字", "pages": [
+        {"no": 1, "kind": "illustration", "text": "few", "desc": "上下两格漫画，每格顶部一行黑字"},
+        {"no": 2, "kind": "photo", "text": "none", "desc": "窗边实拍，没有字"},
+        {"no": 3, "kind": "card", "text": "many", "desc": "白底清单卡片"},
+        {"no": 9, "kind": "x"}]})
+    monkeypatch.setenv("IMAGE_API_KEY", "x")
+    get_settings.cache_clear()
+    fake = FakeImages()
+    images_mod.set_provider_factory(lambda: fake)
+    account.image_mode = "auto"
+    session.add(account)
+    session.commit()
+
+    llm.push("writer", post(images=["两格漫画：「同事夸你」", "窗边实拍", "清单：「三句话」"]))
+    llm.push("eval", evaluation(8))
+    d = await write_draft(session, llm, account.id, reference_url=got["url"], fetch=fake_fetch)
+    look = d.reference["look"]
+    assert [p["kind"] for p in look["pages"]] == ["illustration", "photo", "card"] and "小和尚" in look["spec"]
+    w = llm.prompts_of("writer")[0]
+    assert "原帖每张图是这样做的" in w and "第 1 张：插画/漫画，字少：上下两格漫画" in w and "第 2 张：实拍照片，没字" in w
+
+    llm_client.set_vision_llm(None)  # 出图这步不测自检
+    # 模型想把漫画做成卡片、实拍用 AI 画面排字：漫画只能 AI 画整张，实拍只能找图 / AI 画，给 none 就不排字
+    llm.push("image", {"spec": "淡紫底小和尚", "palette": "cream", "prompts": [
+        {"idx": 1, "mode": "card", "prompt": "两格漫画", "layout": {"title": "同事夸你"}},
+        {"idx": 2, "mode": "ai_text", "prompt": "窗边实拍", "layout": {"kind": "none"}},
+        {"idx": 3, "mode": "card", "layout": {"kind": "list", "title": "三句话", "items": ["一", "二", "三"]}},
+    ]})
+    res = await images_mod.generate_images(session, llm, d.id)
+    imgs = _imgs(session, d)
+    assert res["done"] == 3 and [i.made_by for i in imgs] == ["ai", "photo", "card"]  # 实拍不给 ai_text：找真实照片
+    assert imgs[1].layout["kind"] == "none" and imgs[2].layout["kind"] == "list"
+    p = llm.prompts_of("image")[-1]
+    assert "原帖的图是这样做的" in p and "上下两格漫画" in p and "淡紫底" in p
+    assert "第 1 张 ai；" in p  # 漫画那张只给 AI 画整张
+
+    # 定为样板帖后：样板每张带上原型的做法
+    ex_ref = exemplar.refresh(session, {"source": "exemplar", "draft_id": d.id, "local": []})
+    assert ex_ref["plan"][0]["look"].startswith("插画/漫画")
 
 
 async def test_manager_exemplar_tools(session, llm, account, client, monkeypatch):

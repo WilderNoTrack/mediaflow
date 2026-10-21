@@ -158,6 +158,14 @@ def _reference_block(ref: dict, *, planned: bool = False) -> str:
     imgs = (f"\n\n【配图要和主参考帖一个模子】主参考帖有 {n} 张图，image_prompts 也写 {n} 张，第 i 张对应它的第 i 张"
             "（封面对封面，内页对内页）：出图时会把那张原图当模板，照着它的版式、文字位置、配色和装饰重做，整套用同一份视觉规范，"
             "所以每张只写清「这一张放本篇的什么内容、图上写哪几个字」，信息量和原图那张相当。") if n > 1 and not planned else ""
+    look = ref.get("look") or {}
+    if look.get("pages") and not planned:
+        from mediaflow.services.visual import look_line
+
+        imgs += ("\n原帖每张图是这样做的（照着写每张的描述：原图是漫画就写同样的分格和角色、是拼图就写怎么分格、"
+                 "是随手实拍就写真实场景；原图没字就别安排字，字多就多安排，字少就少安排）：\n"
+                 + (f"整套：{look['spec']}\n" if look.get("spec") else "")
+                 + "\n".join(f"第 {i + 1} 张：{look_line(p)}" for i, p in enumerate(look["pages"]) if look_line(p)))
     learn = ("学它们共同的标题公式、开头钩子、结构节奏和信息密度（以主参考帖为主）" if len(posts) > 1
              else "学它的标题公式、开头钩子、结构节奏和信息密度")
     return ("\n\n" + prompts.UNTRUSTED_NOTICE + "\n<external_data>\n"
@@ -176,7 +184,8 @@ def _plan_desc(p: dict) -> str:
         parts.append(f"{_KIND_LABEL[p['kind']]}版式")
     if p.get("page_type"):
         parts.append(f"页型「{p['page_type']}」")
-    return "，".join(parts) + (f"；样板这张放的是：{p['prompt']}" if p.get("prompt") else "")
+    return "，".join(parts) + (f"（原型：{p['look']}）" if p.get("look") else "") \
+        + (f"；样板这张放的是：{p['prompt']}" if p.get("prompt") else "")
 
 
 def _exemplar_block(ref: dict, *, planned: bool = False) -> str:
@@ -306,9 +315,27 @@ async def _announce(ref: dict, why_none: str, emit: Emit) -> dict:
               "images": n,
               "extra": [x.get("title", "") for x in extra],
               "extra_posts": [{k: x.get(k) for k in ("title", "url", "creator", "likes")} for x in extra]})
+        if n and not ref.get("look"):
+            ref = await _look(ref, emit)
     else:
         emit("warning", f"{why_none}，这篇按账号的配图风格出图；想照着某篇做，在草稿页贴它的链接", None)
     return ref
+
+
+async def _look(ref: dict, emit: Emit) -> dict:
+    """看懂原帖的每张图是怎么做的（实拍 / 拼图 / 漫画 / 手写…），写稿时配图描述照着写、出图时照着挑做法。"""
+    from mediaflow.services import visual
+
+    if visual.get_vision_llm() is None:
+        return ref
+    emit("reference", f"在看原帖的 {len(ref.get('local') or [])} 张图是怎么做的…", None)
+    look = await visual.read_post(ref)
+    if not look:
+        return ref
+    kinds = [visual.LOOK_KINDS.get(p["kind"], "") for p in look["pages"]]
+    common = max(set(k for k in kinds if k), key=kinds.count, default="")
+    emit("reference", f"原帖的图：{common or '混合'}为主" + (f"，{look['spec'][:40]}" if look.get("spec") else ""), None)
+    return {**ref, "look": look}
 
 
 def _length_req(ctx: AccountContext) -> str:

@@ -98,7 +98,23 @@ def refresh(s: Session, ref: dict[str, Any]) -> dict[str, Any]:
     return {**ref, "local": local, "plan": plan, "image_spec": d.image_spec or ref.get("image_spec") or ""}
 
 
+def _src_look(pages: list[dict], local: list[str], idx: int) -> str:
+    """样板这张当初照的是原帖哪张、那张是什么做法。"""
+    from mediaflow.services.images import mold_slot
+    from mediaflow.services.visual import look_line
+
+    if not pages or not local:
+        return ""
+    k = mold_slot(local, idx)
+    return look_line(pages[k]) if k < len(pages) else ""
+
+
 def _image_parts(s: Session, d: Draft) -> tuple[list[str], list[dict]]:
+    # 样板这篇当初照着别人的帖子做过：每张原型是什么做法（漫画 / 拼图 / 实拍…）也带上，后面照样板做时更像
+    src = d.reference or {}
+    src_look = [p for p in ((src.get("look") or {}).get("pages") or []) if isinstance(p, dict)] \
+        if src.get("source") != "exemplar" else []
+    src_local = src.get("local") or []
     local, plan = [], []
     for img in _images(s, d.id):
         if img.status != ImageStatus.done or not img.path:
@@ -111,5 +127,6 @@ def _image_parts(s: Session, d: Draft) -> tuple[list[str], list[dict]]:
         plan.append({k: v for k, v in {
             "made_by": img.made_by or "ai", "kind": lay.get("kind", ""), "palette": lay.get("palette", ""),
             "position": lay.get("position", ""), "page_type": img.page_type, "prompt": img.prompt[:160],
+            "look": _src_look(src_look, src_local, img.idx),
         }.items() if v})
     return local, plan

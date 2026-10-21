@@ -356,6 +356,17 @@ _DOING = {"ai": "出图中", "ai_text": "AI 画画面中", "card": "排版中", 
 LAYOUT_KEYS = ("kind", "title", "subtitle", "tag", "items", "left", "right", "highlight", "position", "footer", "palette")
 
 
+# 照参考帖出图：原图是哪种做法，这张优先用哪几种（和账号允许的取交集；用户单独指定了做法的不管）
+LOOK_MODES = {"photo": ["photo", "ai"], "photo_text": ["ai_text", "ai", "photo"], "collage": ["ai"],
+              "illustration": ["ai"], "text_note": ["ai", "card"], "card": ["card", "ai_text"], "screenshot": ["ai", "card"]}
+
+
+def look_options(opts: list[str], page: dict | None) -> list[str]:
+    want = LOOK_MODES.get(str((page or {}).get("kind") or ""), [])
+    picked = [m for m in want if m in opts]
+    return picked or opts
+
+
 def account_mode(account: Account | None) -> str:
     m = (getattr(account, "image_mode", "") or "ai") if account else "ai"
     return m if m in ACCOUNT_MODES else "ai"
@@ -389,6 +400,9 @@ def clean_layout(raw: dict | None) -> dict:
     raw = raw if isinstance(raw, dict) else {}
     out: dict = {}
     kind = str(raw.get("kind") or "").strip().lower()
+    if kind == "none":  # 照着没字的原图：这张不排字
+        pal = str(raw.get("palette") or "").lower()
+        return {"kind": "none", **({"palette": pal} if pal in layout_mod.PALETTES else {})}
     out["kind"] = kind if kind in layout_mod.KINDS else "cover"
     for k in ("title", "subtitle", "tag", "highlight", "footer"):
         if str(raw.get(k) or "").strip():
@@ -458,7 +472,7 @@ async def _expand_set(llm: LLM, image_style: str, draft: Draft, images: list[Dra
                     ref_title=str(ref.get("title", ""))[:30],
                     pairs="；".join(f"第 {i.idx + 1} 张照{'样板' if ref.get('source') == 'exemplar' else '原帖'}第 {molds[i.idx] + 1} 张"
                                    for i in targets if i.idx in molds),
-                ) + ex_hint if molds else ex_hint,
+                ) + _look_block(ref, molds, targets) + ex_hint if molds else ex_hint,
                 template_block=visual_mod.template_block(template) if template else "",
                 type_field=', "type": "页型"' if template else "",
                 modes_block=modes_block,
@@ -492,6 +506,25 @@ async def _expand_set(llm: LLM, image_style: str, draft: Draft, images: list[Dra
     return spec[:600], out, pal if pal in layout_mod.PALETTES else ""
 
 
+def _look_pages(ref: dict) -> list[dict]:
+    if ref.get("source") == "exemplar":
+        return []
+    return [p for p in ((ref.get("look") or {}).get("pages") or []) if isinstance(p, dict)]
+
+
+def _look_block(ref: dict, molds: dict[int, int], targets: list[DraftImage]) -> str:
+    """看图模型读过原帖的图：把每张原图的做法写给出图的模型（它自己看不到图）。"""
+    pages = _look_pages(ref)
+    if not pages:
+        return ""
+    rows = [f"第 {i.idx + 1} 张对应的原图（第 {molds[i.idx] + 1} 张）：{visual_mod.look_line(pages[molds[i.idx]])}"
+            for i in targets if i.idx in molds and molds[i.idx] < len(pages) and visual_mod.look_line(pages[molds[i.idx]])]
+    if not rows:
+        return ""
+    return prompts.IMAGE_LOOK_BLOCK.format(spec=(ref.get("look") or {}).get("spec") or "（没读出来，按每张原图的做法）",
+                                           pages="\n".join(rows))
+
+
 def _final_prompt(prompt: str, spec: str, *, mold: bool, anchor: int | None, no_text: bool = False) -> str:
     """每张发给生图模型的提示词：先说附的参考图各是什么，再是这张的内容，最后是整套统一的规范。"""
     head = []
@@ -513,7 +546,10 @@ def rerender(img: DraftImage, changes: dict) -> None:
     if img.made_by not in ("card", "photo", "ai_text") or img.status != ImageStatus.done:
         raise layout_mod.LayoutError(f"第 {img.idx + 1} 张的字是 AI 直接画在画面里的，没法直接改字；"
                                      "把这张换成「AI 画面 + 代码排字」或「排版卡片」重出一次，以后就能直接改")
-    lay = clean_layout({**(img.layout or {}), **{k: v for k, v in (changes or {}).items() if k in LAYOUT_KEYS and v is not None}})
+    merged = {**(img.layout or {}), **{k: v for k, v in (changes or {}).items() if k in LAYOUT_KEYS and v is not None}}
+    if merged.get("kind") == "none" and any(merged.get(k) for k in ("title", "subtitle", "tag", "items")):
+        merged["kind"] = "list" if merged.get("items") else "cover"  # 原来没字的图要加字：按封面 / 清单排
+    lay = clean_layout(merged)
     images_dir = get_settings().images_dir
     base = None
     if img.made_by != "card":
@@ -546,7 +582,8 @@ def _exemplar_hint(plan: list[dict], slot: dict[int, int], targets: list[DraftIm
             continue
         p = plan[slot[i.idx]]
         kind = f"，layout.kind 用 {p['kind']}" if p.get("kind") else ""
-        rows.append(f"第 {i.idx + 1} 张照样板第 {slot[i.idx] + 1} 张：{MODE_LABEL.get(p.get('made_by') or 'ai', 'AI 画')}{kind}")
+        how = f"（这张的原型：{p['look']}）" if p.get("look") else ""
+        rows.append(f"第 {i.idx + 1} 张照样板第 {slot[i.idx] + 1} 张：{MODE_LABEL.get(p.get('made_by') or 'ai', 'AI 画')}{kind}{how}")
     return ("\n【照样板帖做】每张的做法和版式跟样板对应那张一样，信息量也相当，只换内容和字：" + "；".join(rows)) if rows else ""
 
 
@@ -578,6 +615,14 @@ async def generate_images(
             session.add(draft)
             session.commit()
     ex_local, ex_plan, ex_slot = _exemplar_slots(ref, targets)
+    # 账号有配图模板、参考帖又不是用户指定的：版式照模板，不按原图挑做法
+    look = _look_pages(ref) if not (visual_mod.has_template(account) and ref.get("source") != "user") else []
+    if look:  # 照参考帖：按看图模型读的原图做法挑（漫画、拼图让 AI 画整张，没字的实拍不排字…）
+        n_local = len(ref.get("local") or [])
+        for i in targets:
+            if not i.mode and n_local:
+                k = mold_slot(ref.get("local") or [], i.idx)
+                opts[i.idx] = look_options(opts[i.idx], look[k] if k < len(look) else None)
     for i in targets:  # 照样板帖：每张的做法跟样板对应那张一样（账号设定允许、用户没单独指定时）
         want = ex_plan[ex_slot[i.idx]].get("made_by") if i.idx in ex_slot and not i.mode else None
         if want in opts[i.idx]:
@@ -656,6 +701,9 @@ async def generate_images(
         final[img.idx] = m if m in o else o[0]
         if final[img.idx] != "ai":
             lay = clean_layout(plans[img.idx].get("layout"))
+            if lay.get("kind") == "none" and final[img.idx] in ("ai_text", "photo"):
+                img.layout = {"kind": "none", "palette": pal}  # 原图没字：只要画面
+                continue
             if not (lay.get("title") or lay.get("items") or lay.get("left")):
                 lay = clean_layout(_fallback_layout(img, draft))
             if img.idx in ex_slot:  # 模型没说版式、文字位置的，照样板对应那张

@@ -278,6 +278,63 @@ async def learn(s: Session, account_id: str, *, links: list[str] | None = None, 
     return {"pages": [p["type"] for p in tpl["pages"]], "images": len(seen), "spec": tpl["spec"]}
 
 
+LOOK_KINDS = {"photo": "实拍照片", "photo_text": "照片叠字", "collage": "拼图", "illustration": "插画/漫画",
+              "text_note": "手写笔记", "card": "文字卡片", "screenshot": "截图"}
+
+
+def _clean_look(raw: Any, n: int) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    pages_out: list[dict] = []
+    by_no = {}
+    for p in raw.get("pages") or []:
+        if not isinstance(p, dict):
+            continue
+        try:
+            k = int(str(p.get("no")).strip().lstrip("第").rstrip("张")) - 1
+        except ValueError:
+            continue
+        if 0 <= k < n and k not in by_no:
+            kind = str(p.get("kind") or "").strip().lower()
+            text = str(p.get("text") or "").strip().lower()
+            by_no[k] = {"kind": kind if kind in LOOK_KINDS else "", "text": text if text in ("none", "few", "many") else "",
+                        "desc": " ".join(str(p.get("desc") or "").split())[:160]}
+    for k in range(n):
+        pages_out.append(by_no.get(k) or {"kind": "", "text": "", "desc": ""})
+    spec = " ".join(str(raw.get("spec") or "").split())[:300]
+    if not spec and not any(p["kind"] for p in pages_out):
+        return None
+    return {"spec": spec, "pages": pages_out}
+
+
+async def read_post(ref: dict, *, vision: LLM | None = None) -> dict | None:
+    """看懂一篇参考帖的图（每张是实拍 / 拼图 / 漫画 / 手写… 字在哪、什么样），写稿和出图照着复刻。
+    看不了图、没有原图或模型出错都返回 None，不影响写稿。"""
+    local = [r for r in ref.get("local") or [] if r]
+    vllm = vision or get_vision_llm()
+    if vllm is None or not local:
+        return None
+    seen = [u for r in local if (u := _vision_uri(r))]
+    if len(seen) != len(local):  # 有的图读不出来：编号会对不上，不看了
+        return None
+    content: list[dict] = [{"type": "text", "text": prompts.LOOK_USER.format(title=str(ref.get("title") or "")[:40], n=len(seen))}]
+    content += [image_part(u) for u in seen]
+    try:
+        raw = await complete_json(vllm, [{"role": "system", "content": prompts.LOOK_SYSTEM},
+                                         {"role": "user", "content": content}], temperature=0.2)
+    except (LLMError, ValueError) as e:
+        logger.warning("看参考帖的图失败：%s", e)
+        return None
+    return _clean_look(raw, len(seen))
+
+
+def look_line(page: dict) -> str:
+    """一张原图的做法，给写手和出图看：「拼图，字少：……」。"""
+    head = "，".join(x for x in (LOOK_KINDS.get(page.get("kind") or "", ""),
+                                {"none": "没字", "few": "字少", "many": "字多"}.get(page.get("text") or "", "")) if x)
+    return f"{head}：{page.get('desc') or ''}".strip("：") if head else str(page.get("desc") or "")
+
+
 async def learn_quietly(s: Session, account_id: str, emit: Emit = _noop) -> None:
     """学完对标后顺手学配图模板：看不了图就跳过，失败不影响对标结果。"""
     if get_vision_llm() is None:

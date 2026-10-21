@@ -86,10 +86,15 @@ async def set_reference(body: ReferenceIn, d: Draft = Depends(owned_draft), s: S
     """换配图照着的那篇参考帖：读这篇笔记、缓存原图。之后点「全部重新出」就照着它一张对一张出图（文案不动）。"""
     from mediaflow.services import refpost
 
+    from mediaflow.services import visual
+
     try:
         ref = await refpost.from_url(body.url)
     except refpost.RefError as e:
         raise HTTPException(400, str(e)) from e
+    look = await visual.read_post(ref)  # 看懂每张原图怎么做的，出图时照着挑做法
+    if look:
+        ref["look"] = look
     d.reference = {**ref, "extra": (d.reference or {}).get("extra") or []}  # 文案参考不动，只换配图照的那篇
     d.image_spec = ""  # 换了模板，下次出图重新定统一规范
     for i in _images(s, d.id):
