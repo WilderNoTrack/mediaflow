@@ -78,6 +78,27 @@ def as_reference(s: Session, acc: Account | None) -> dict[str, Any] | None:
     d = get(s, acc)
     if d is None:
         return None
+    local, plan = _image_parts(s, d)
+    return {"title": d.title, "content": d.body, "tags": list(d.tags or []), "creator": CREATOR,
+            "source": "exemplar", "why": "账号的样板帖：后面每篇都照它的写法和配图来", "draft_id": d.id,
+            "local": local, "plan": plan, "image_spec": d.image_spec or ""}
+
+
+def refresh(s: Session, ref: dict[str, Any]) -> dict[str, Any]:
+    """出图前按样板帖现在的图更新参考：写这篇时样板的图还没出好、或者后来又改过图，都照最新的来。
+    样板那篇已经删了就保持原样。"""
+    if ref.get("source") != "exemplar" or not ref.get("draft_id"):
+        return ref
+    d = s.get(Draft, str(ref["draft_id"]))
+    if d is None:
+        return ref
+    local, plan = _image_parts(s, d)
+    if not local:
+        return ref
+    return {**ref, "local": local, "plan": plan, "image_spec": d.image_spec or ref.get("image_spec") or ""}
+
+
+def _image_parts(s: Session, d: Draft) -> tuple[list[str], list[dict]]:
     local, plan = [], []
     for img in _images(s, d.id):
         if img.status != ImageStatus.done or not img.path:
@@ -91,6 +112,4 @@ def as_reference(s: Session, acc: Account | None) -> dict[str, Any] | None:
             "made_by": img.made_by or "ai", "kind": lay.get("kind", ""), "palette": lay.get("palette", ""),
             "position": lay.get("position", ""), "page_type": img.page_type, "prompt": img.prompt[:160],
         }.items() if v})
-    return {"title": d.title, "content": d.body, "tags": list(d.tags or []), "creator": CREATOR,
-            "source": "exemplar", "why": "账号的样板帖：后面每篇都照它的写法和配图来", "draft_id": d.id,
-            "local": local, "plan": plan, "image_spec": d.image_spec or ""}
+    return local, plan

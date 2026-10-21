@@ -88,6 +88,17 @@ async def test_exemplar_drives_writing_and_images(session, llm, account, client,
     assert "照样板帖做" in llm.prompts_of("image")[-1]
 
 
+def test_exemplar_images_refreshed_at_image_time(session, account):
+    """写这篇时样板的图还没出好（或后来改过）：出图前按样板现在的图来。"""
+    ex = _polished(session, account)
+    stale = {"title": ex.title, "source": "exemplar", "draft_id": ex.id, "local": [], "plan": [], "image_spec": ""}
+    fresh = exemplar.refresh(session, stale)
+    assert len(fresh["local"]) == 3 and [p["made_by"] for p in fresh["plan"]] == ["card", "ai", "card"]
+    assert fresh["image_spec"] == "薄荷绿底、圆润黑体、同一个短发女生"
+    assert exemplar.refresh(session, {**stale, "draft_id": "gone"})["local"] == []  # 样板删了：保持原样
+    assert exemplar.refresh(session, {"source": "user", "local": []}) == {"source": "user", "local": []}
+
+
 async def test_reference_only_write_takes_topic_from_post(session, llm, account, monkeypatch):
     got = {"title": "别人的爆款：小个子通勤", "url": "https://www.xiaohongshu.com/explore/abc", "content": "原文",
            "source": "user", "why": "你指定的参考帖", "extra": []}

@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import asyncio
 import base64
 import logging
@@ -568,6 +570,14 @@ async def generate_images(
     acc_mode = account_mode(account)
     opts = {i.idx: mode_options(i.mode, acc_mode, has_ai) for i in targets}
     ref = draft.reference or {}
+    if ref.get("source") == "exemplar":
+        from mediaflow.services import exemplar
+
+        fresh = exemplar.refresh(session, ref)
+        if fresh != ref:  # 存回去：草稿页的「照着样板帖第 N 张」也跟着对上
+            draft.reference = ref = fresh
+            session.add(draft)
+            session.commit()
     ex_local, ex_plan, ex_slot = _exemplar_slots(ref, targets)
     for i in targets:  # 照样板帖：每张的做法跟样板对应那张一样（账号设定允许、用户没单独指定时）
         want = ex_plan[ex_slot[i.idx]].get("made_by") if i.idx in ex_slot and not i.mode else None
@@ -623,7 +633,10 @@ async def generate_images(
         emit("image", f"照着参考帖「{ref.get('title', '')[:20]}」的原图出图，一张对一张学版式，整套用同一份视觉规范", None)
     else:
         draft.image_mold = ""
-    if acc_mode != "ai" or any(i.mode for i in targets):
+    if ex_slot:  # 照样板帖时每张的做法已经定了，不再说账号默认做法
+        cnt = Counter(MODE_LABEL.get(opts[i.idx][0], "自动") if len(opts[i.idx]) == 1 else "自动挑" for i in targets)
+        emit("image", "这套图的做法照样板帖：" + "、".join(f"{k} {n} 张" for k, n in cnt.items()), None)
+    elif acc_mode != "ai" or any(i.mode for i in targets):
         emit("image", "这套图的做法：" + "；".join(sorted({ACCOUNT_MODES[acc_mode]} | {MODE_LABEL[i.mode] for i in targets if i.mode})), None)
     tset = {i.id for i in targets}
     done_others = [i for i in images if i.id not in tset and i.status == ImageStatus.done and i.path]
